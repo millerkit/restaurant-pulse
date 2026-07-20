@@ -15,6 +15,11 @@ CREATE TABLE accounts (
   name            TEXT NOT NULL,          -- QBO account name, e.g. "Payroll:BOH Wages"
   category        TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other')),
   subcategory     TEXT,                   -- optional finer bucket, e.g. "BOH", "FOH", "Food", "Beverage"
+  -- Only meaningful for category='opex': rent/insurance/loan interest are
+  -- 'fixed' (not controllable month to month, so not worth benchmarking);
+  -- marketing/repairs/supplies/admin are 'variable' (the actionable slice,
+  -- benchmarked as 'opex_variable' in category_benchmarks). NULL elsewhere.
+  cost_behavior   TEXT CHECK (cost_behavior IN ('fixed', 'variable')),
   is_active       INTEGER NOT NULL DEFAULT 1
 );
 
@@ -45,6 +50,24 @@ CREATE TABLE budget_targets (
   UNIQUE (year, month, category)
 );
 
+-- Configurable red/green thresholds for cost-ratio categories (COGS%,
+-- labor% of revenue), used by the P&L tab to color a period's actual
+-- ratio. Separate from budget_targets, which is dollar amounts by month —
+-- this is percentages, and doesn't vary by month/year, just by category.
+--
+-- 'prime_cost' (COGS% + labor% combined) gets its own row rather than being
+-- derived from the cogs/labor rows added together — restaurants benchmark
+-- prime cost against its own industry-standard target (~60-65%), which
+-- isn't just the sum of the two individual targets.
+CREATE TABLE category_benchmarks (
+  id            INTEGER PRIMARY KEY,
+  category      TEXT NOT NULL UNIQUE CHECK (category IN ('cogs', 'labor', 'prime_cost', 'opex_variable')),
+  target_pct    REAL NOT NULL,   -- e.g. 0.30 for 30% of revenue
+  warning_pct   REAL NOT NULL,   -- above this: warning
+  serious_pct   REAL NOT NULL,   -- above this: serious
+  critical_pct  REAL NOT NULL    -- above this: critical
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.
@@ -72,3 +95,42 @@ CREATE TABLE sync_runs (
 --   WHERE dli.date BETWEEN date('now', 'start of month') AND date('now');
 --
 -- Budget pace: compare actual-to-date against (monthly target * day-of-month / days-in-month).
+--
+-- P&L tab — weekly/monthly/yearly rollup with COGS%/labor% status color:
+--   SELECT a.category,
+--     SUM(dli.amount) AS total,
+--     SUM(dli.amount) / (SELECT SUM(amount) FROM daily_line_items dli2
+--       JOIN accounts a2 ON a2.id = dli2.account_id
+--       WHERE a2.category = 'revenue' AND dli2.date BETWEEN ? AND ?) AS pct_of_revenue
+--   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+--   WHERE dli.date BETWEEN ? AND ? GROUP BY a.category;
+--   -- compare pct_of_revenue against category_benchmarks to pick a status color
+--
+-- P&L drill-down — labor by subcategory within a period (e.g. isolate
+-- overtime once it has its own accounts row, category='labor', subcategory='Overtime'):
+--   SELECT a.subcategory, SUM(dli.amount)
+--   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+--   WHERE a.category = 'labor' AND dli.date BETWEEN ? AND ?
+--   GROUP BY a.subcategory ORDER BY SUM(dli.amount) DESC;
+--
+-- Revenue shortfall drill-down — which days within the period underperformed
+-- vs. the same weekday last week/month/year (reuses the existing daily
+-- comparison logic, just applied to every day in the period instead of one):
+--   SELECT dli.date, SUM(dli.amount) AS actual
+--   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+--   WHERE a.category = 'revenue' AND dli.date BETWEEN ? AND ?
+--   GROUP BY dli.date ORDER BY dli.date;
+--
+-- Opex drill-down — fixed vs. variable subtotals (only the variable subtotal
+-- gets compared against category_benchmarks; fixed costs aren't controllable
+-- month to month, so benchmarking them isn't actionable), plus the
+-- subcategory breakdown within variable to find what's driving it:
+--   SELECT a.cost_behavior, SUM(dli.amount)
+--   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+--   WHERE a.category = 'opex' AND dli.date BETWEEN ? AND ?
+--   GROUP BY a.cost_behavior;
+--
+--   SELECT a.subcategory, SUM(dli.amount)
+--   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+--   WHERE a.category = 'opex' AND a.cost_behavior = 'variable' AND dli.date BETWEEN ? AND ?
+--   GROUP BY a.subcategory ORDER BY SUM(dli.amount) DESC;

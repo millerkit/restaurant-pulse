@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Main &amp; Vine — P&amp;L</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface:     #fcfcfb;
+    --surface-alt: #f2f1ed;
+    --ink:         #0b0b0b;
+    --ink-2:       #52514e;
+    --ink-3:       #898781;
+    --hair:        #e1e0d9;
+    --border:      rgba(11,11,11,0.10);
+    --accent:      #2a78d6;
+    --accent-wash: rgba(42,120,214,0.10);
+    --good:        #0ca30c;
+    --good-wash:   rgba(12,163,12,0.10);
+    --warning:     #b8860b;
+    --warning-wash:rgba(250,178,25,0.16);
+    --serious:     #c1592f;
+    --serious-wash:rgba(236,131,90,0.16);
+    --critical:    #d03b3b;
+    --critical-wash:rgba(208,59,59,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface:     #1a1a19;
+      --surface-alt: #222221;
+      --ink:         #ffffff;
+      --ink-2:       #c3c2b7;
+      --ink-3:       #898781;
+      --hair:        #2c2c2a;
+      --border:      rgba(255,255,255,0.10);
+      --accent:      #3987e5;
+      --accent-wash: rgba(57,135,229,0.14);
+      --good:        #1fc21f;
+      --good-wash:   rgba(31,194,31,0.14);
+      --warning:     #fab219;
+      --warning-wash:rgba(250,178,25,0.16);
+      --serious:     #ec835a;
+      --serious-wash:rgba(236,131,90,0.14);
+      --critical:    #e35a5a;
+      --critical-wash:rgba(227,90,90,0.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --surface-alt: #222221;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --ink-3:       #898781;
+    --hair:        #2c2c2a;
+    --border:      rgba(255,255,255,0.10);
+    --accent:      #3987e5;
+    --accent-wash: rgba(57,135,229,0.14);
+    --good:        #1fc21f;
+    --good-wash:   rgba(31,194,31,0.14);
+    --warning:     #fab219;
+    --warning-wash:rgba(250,178,25,0.16);
+    --serious:     #ec835a;
+    --serious-wash:rgba(236,131,90,0.14);
+    --critical:    #e35a5a;
+    --critical-wash:rgba(227,90,90,0.14);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 20px 20px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  /* ---------- top-level tab nav ---------- */
+  .tabnav {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .tabnav a {
+    display: inline-block;
+    padding: 8px 4px;
+    margin-bottom: -1px;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    color: var(--ink-3);
+    border-bottom: 2px solid transparent;
+  }
+  .tabnav a + a { margin-left: 18px; }
+  .tabnav a.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--hair);
+    padding-bottom: 16px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  header .sub {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  .as-of {
+    text-align: right;
+    font-size: 12px;
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+  .as-of strong { color: var(--ink-2); font-weight: 600; }
+  .sample-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin-top: 6px;
+  }
+
+  /* ---------- section shell ---------- */
+  section { display: flex; flex-direction: column; gap: 10px; }
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .section-note {
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  /* ---------- status chips (shared vocabulary with dashboard) ---------- */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 3px 9px 3px 7px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .chip.good      { color: var(--good);     background: var(--good-wash); }
+  .chip.good .dot      { background: var(--good); }
+  .chip.warning   { color: var(--warning);  background: var(--warning-wash); }
+  .chip.warning .dot   { background: var(--warning); }
+  .chip.serious   { color: var(--serious);  background: var(--serious-wash); }
+  .chip.serious .dot   { background: var(--serious); }
+  .chip.critical  { color: var(--critical); background: var(--critical-wash); }
+  .chip.critical .dot  { background: var(--critical); }
+
+  /* ---------- period pill selector (drill-down sections) ---------- */
+  .period-tabs { display: flex; gap: 6px; }
+  .period-tab {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 11px;
+    border-radius: 100px;
+    border: 1px solid var(--hair);
+    color: var(--ink-3);
+  }
+  .period-tab.active {
+    background: var(--accent-wash);
+    color: var(--accent);
+    border-color: transparent;
+  }
+
+  /* ---------- P&L statement table ---------- */
+  .pl-table-card {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    padding: 4px 4px;
+    overflow-x: auto;
+  }
+  table.pl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 620px;
+  }
+  .pl-table caption { display: none; }
+  .pl-table th, .pl-table td {
+    padding: 12px 16px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .pl-table th:first-child, .pl-table td:first-child {
+    text-align: left;
+    white-space: normal;
+  }
+  .pl-table thead th {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--hair);
+  }
+  .pl-table thead th .range {
+    display: block;
+    font-weight: 500;
+    color: var(--ink-3);
+    font-size: 10px;
+    margin-top: 2px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .pl-table tbody th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .pl-table tbody th .hint { font-weight: 500; color: var(--ink-3); font-size: 11px; }
+  .pl-table tbody tr { border-bottom: 1px solid var(--hair); }
+  .pl-table tbody tr:last-child { border-bottom: none; }
+  .pl-table tbody tr.subtotal th,
+  .pl-table tbody tr.subtotal td { background: var(--surface-alt); }
+  .pl-table tbody tr.total th,
+  .pl-table tbody tr.total td { border-top: 1px solid var(--hair); padding-top: 14px; }
+  .pl-table .amount { font-weight: 600; }
+  .pl-table .pct { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
+  /* Never color-alone: a checkmark marks "within benchmark", a triangle
+     marks any degree of "above benchmark" — the shape distinction survives
+     grayscale and colorblindness; color is reinforcement, not the only signal. */
+  .pl-table .pct.good::before { content: "✓ "; }
+  .pl-table .pct.warning::before,
+  .pl-table .pct.serious::before,
+  .pl-table .pct.critical::before { content: "▲ "; }
+  .pl-table .pct.good { color: var(--good); }
+  .pl-table .pct.warning { color: var(--warning); }
+  .pl-table .pct.serious { color: var(--serious); }
+  .pl-table .pct.critical { color: var(--critical); }
+  .pl-table .net-figure.good { color: var(--good); }
+  .pl-table .net-figure.critical { color: var(--critical); }
+  .pl-table .net-figure { font-weight: 700; font-size: 14px; }
+
+  /* ---------- ranked drill-down list ---------- */
+  .drill-card {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    padding: 16px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .drill-card .callout {
+    font-size: 12.5px;
+    color: var(--ink-2);
+    background: var(--surface-alt);
+    border-radius: 10px;
+    padding: 10px 12px;
+    line-height: 1.5;
+  }
+  .rank-list { display: flex; flex-direction: column; gap: 12px; }
+  .rank-group-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding-top: 6px;
+    border-top: 1px solid var(--hair);
+  }
+  .rank-group-head:first-child { padding-top: 0; border-top: none; }
+  .rank-group-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+  }
+  .rank-group-label .rank-group-note {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-top: 2px;
+  }
+  .rank-group-total {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .rank-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 100px;
+    align-items: center;
+    gap: 12px;
+  }
+  .rank-row .label { font-size: 13px; font-weight: 600; }
+  .rank-row .label .flag {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+  .rank-row .label .flag.serious { color: var(--serious); }
+  .rank-track {
+    position: relative;
+    height: 9px;
+    border-radius: 5px;
+    background: var(--surface-alt);
+  }
+  .rank-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; }
+  .rank-fill.neutral { background: var(--ink-3); opacity: 0.5; }
+  .rank-fill.serious { background: var(--serious); }
+  .rank-fill.critical { background: var(--critical); }
+  .rank-value { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .rank-value .sub { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); }
+
+  .day-row {
+    display: grid;
+    grid-template-columns: 130px 1fr 110px 80px;
+    align-items: center;
+    gap: 12px;
+  }
+  .day-row .date { font-size: 13px; font-weight: 600; }
+  .day-row .date .sub { display: block; font-size: 11px; color: var(--ink-3); font-weight: 500; }
+  .day-row .amounts { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .day-row .amounts strong { color: var(--ink); font-weight: 700; }
+
+  /* ---------- legend / footer ---------- */
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-top: 4px;
+  }
+  footer {
+    border-top: 1px solid var(--hair);
+    padding-top: 14px;
+    font-size: 11px;
+    color: var(--ink-3);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  @media (max-width: 760px) {
+    .rank-row { grid-template-columns: 100px 1fr 84px; }
+    .day-row { grid-template-columns: 1fr; row-gap: 4px; }
+    .day-row .amounts { order: 3; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav class="tabnav">
+    <a href="dashboard-mockup.html">Dashboard</a>
+    <a href="pl-mockup.html" class="active">P&amp;L</a>
+  </nav>
+
+  <header>
+    <div>
+      <h1>Main &amp; Vine — P&amp;L</h1>
+      <div class="sub">Week, month, and year to date &middot; reporting through last night's close (Thu, Jul 16)</div>
+    </div>
+    <div class="as-of">
+      Last synced from QuickBooks: <strong>today, 3:04 AM</strong><br>
+      <span class="sample-tag">Sample data — for review</span>
+    </div>
+  </header>
+
+  <!-- High-level P&L, three periods side by side -->
+  <section>
+    <div class="section-head">
+      <div class="section-label">Profit &amp; Loss</div>
+      <div class="section-note">COGS%, labor%, and prime cost colored against configurable benchmarks — see legend below</div>
+    </div>
+
+    <div class="pl-table-card">
+      <table class="pl-table">
+        <caption>Profit and loss summary for this week, this month, and this year to date</caption>
+        <thead>
+          <tr>
+            <th scope="col">Line item</th>
+            <th scope="col">This Week<span class="range">Jul 13–16 (4 days)</span></th>
+            <th scope="col">This Month<span class="range">Jul 1–16 (16 days)</span></th>
+            <th scope="col">This Year<span class="range">Jan 1–Jul 16</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Revenue</th>
+            <td class="amount">$31,800</td>
+            <td class="amount">$118,400</td>
+            <td class="amount">$1,612,000</td>
+          </tr>
+          <tr>
+            <th scope="row">COGS</th>
+            <td><span class="amount">$10,600</span><span class="pct critical">33.3% of rev.</span></td>
+            <td><span class="amount">$39,200</span><span class="pct critical">33.1% of rev.</span></td>
+            <td><span class="amount">$480,400</span><span class="pct good">29.8% of rev.</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Labor</th>
+            <td><span class="amount">$9,950</span><span class="pct good">31.3% of rev.</span></td>
+            <td><span class="amount">$37,200</span><span class="pct good">31.4% of rev.</span></td>
+            <td><span class="amount">$498,100</span><span class="pct good">30.9% of rev.</span></td>
+          </tr>
+          <tr class="subtotal">
+            <th scope="row">Prime cost <span class="hint">(COGS + labor)</span></th>
+            <td><span class="amount">$20,550</span><span class="pct serious">64.6% of rev.</span></td>
+            <td><span class="amount">$76,400</span><span class="pct serious">64.5% of rev.</span></td>
+            <td><span class="amount">$978,500</span><span class="pct good">60.7% of rev.</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Operating expenses <span class="hint">(see drill-down)</span></th>
+            <td class="amount">$4,200</td>
+            <td class="amount">$32,700</td>
+            <td class="amount">$572,300</td>
+          </tr>
+          <tr class="total">
+            <th scope="row">Net income</th>
+            <td><span class="net-figure good">+$7,050</span></td>
+            <td><span class="net-figure good">+$9,300</span></td>
+            <td><span class="net-figure good">+$61,200</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Drill-down: what's driving labor cost -->
+  <section>
+    <div class="section-head">
+      <div class="section-label">Labor Drill-Down — What's Driving the Cost</div>
+      <div class="period-tabs">
+        <span class="period-tab">Week</span>
+        <span class="period-tab active">Month</span>
+        <span class="period-tab">Year</span>
+      </div>
+    </div>
+
+    <div class="drill-card">
+      <div class="callout">
+        Labor is on target overall this month (31.4%), but <strong>overtime is up sharply</strong> —
+        $3,800 this month vs. $2,050 over the same 16 days last month, nearly doubling its share
+        of total labor spend. Worth a look even though the top-line number is green.
+      </div>
+      <div class="rank-list">
+        <div class="rank-row">
+          <div class="label">FOH wages</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 36.0%;"></div></div>
+          <div class="rank-value">$13,400<span class="sub">36.0% of labor</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">BOH wages</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 32.5%;"></div></div>
+          <div class="rank-value">$12,100<span class="sub">32.5% of labor</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Management</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 15.1%;"></div></div>
+          <div class="rank-value">$5,600<span class="sub">15.1% of labor</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Overtime<span class="flag serious">▲ nearly 2× last month</span></div>
+          <div class="rank-track"><div class="rank-fill serious" style="width: 10.2%;"></div></div>
+          <div class="rank-value">$3,800<span class="sub">10.2% of labor</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Benefits &amp; payroll tax</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 6.2%;"></div></div>
+          <div class="rank-value">$2,300<span class="sub">6.2% of labor</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Drill-down: what's driving opex -->
+  <section>
+    <div class="section-head">
+      <div class="section-label">Opex Drill-Down — What's Driving the Cost</div>
+      <div class="period-tabs">
+        <span class="period-tab">Week</span>
+        <span class="period-tab active">Month</span>
+        <span class="period-tab">Year</span>
+      </div>
+    </div>
+
+    <div class="drill-card">
+      <div class="callout">
+        Variable/discretionary opex is running above target this month (11.3% vs. 8–10%) — driven mostly by
+        <strong>Repairs &amp; maintenance</strong> ($2,900 vs. $900 same period last month), likely the walk-in
+        cooler repair. Fixed costs (rent, insurance, loan interest — $19,300, 16.3% of revenue) are steady and
+        excluded from this benchmark since they aren't controllable month to month.
+      </div>
+      <div class="rank-list">
+        <div class="rank-group-head">
+          <span class="rank-group-label">Fixed<span class="rank-group-note">not benchmarked</span></span>
+          <span class="rank-group-total">$19,300 &middot; 16.3% of rev.</span>
+        </div>
+        <div class="rank-row">
+          <div class="label">Rent</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 72.5%;"></div></div>
+          <div class="rank-value">$14,000<span class="sub">72.5% of fixed</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Insurance</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 16.6%;"></div></div>
+          <div class="rank-value">$3,200<span class="sub">16.6% of fixed</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Loan interest</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 10.9%;"></div></div>
+          <div class="rank-value">$2,100<span class="sub">10.9% of fixed</span></div>
+        </div>
+
+        <div class="rank-group-head">
+          <span class="rank-group-label">Variable / discretionary</span>
+          <span class="rank-group-total">
+            $13,400 &middot; 11.3% of rev.
+            <span class="chip serious"><span class="dot"></span>Off target</span>
+          </span>
+        </div>
+        <div class="rank-row">
+          <div class="label">Marketing</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 35.8%;"></div></div>
+          <div class="rank-value">$4,800<span class="sub">35.8% of variable</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Repairs &amp; maintenance<span class="flag serious">▲ vs. $900 same period last month</span></div>
+          <div class="rank-track"><div class="rank-fill serious" style="width: 21.6%;"></div></div>
+          <div class="rank-value">$2,900<span class="sub">21.6% of variable</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Supplies</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 19.4%;"></div></div>
+          <div class="rank-value">$2,600<span class="sub">19.4% of variable</span></div>
+        </div>
+        <div class="rank-row">
+          <div class="label">Admin &amp; software</div>
+          <div class="rank-track"><div class="rank-fill neutral" style="width: 23.1%;"></div></div>
+          <div class="rank-value">$3,100<span class="sub">23.1% of variable</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Drill-down: where revenue fell short -->
+  <section>
+    <div class="section-head">
+      <div class="section-label">Revenue Drill-Down — Where It Fell Short</div>
+      <div class="period-tabs">
+        <span class="period-tab">Week</span>
+        <span class="period-tab active">Month</span>
+        <span class="period-tab">Year</span>
+      </div>
+    </div>
+
+    <div class="drill-card">
+      <div class="callout">
+        11 of 16 days this month met or beat their same-weekday comparison. The shortfall is
+        <strong>concentrated in 3 days</strong> below, not spread evenly across the month —
+        combined, they account for $4,900 of the gap to budget pace.
+      </div>
+      <div class="rank-list">
+        <div class="day-row">
+          <div class="date">Mon, Jul 13<span class="sub">vs. Mon, Jul 6</span></div>
+          <div class="rank-track"><div class="rank-fill critical" style="width: 86%;"></div></div>
+          <div class="amounts"><strong>$6,200</strong> vs. $7,900</div>
+          <div class="chip critical"><span class="dot"></span>▼ 21.5%</div>
+        </div>
+        <div class="day-row">
+          <div class="date">Wed, Jul 8<span class="sub">vs. Wed, Jul 1</span></div>
+          <div class="rank-track"><div class="rank-fill serious" style="width: 72%;"></div></div>
+          <div class="amounts"><strong>$7,100</strong> vs. $8,650</div>
+          <div class="chip serious"><span class="dot"></span>▼ 17.9%</div>
+        </div>
+        <div class="day-row">
+          <div class="date">Sun, Jul 12<span class="sub">vs. Sun, Jun 21<sup>*</sup></span></div>
+          <div class="rank-track"><div class="rank-fill serious" style="width: 58%;"></div></div>
+          <div class="amounts"><strong>$9,300</strong> vs. $10,750</div>
+          <div class="chip serious"><span class="dot"></span>▼ 13.5%</div>
+        </div>
+      </div>
+      <div class="section-note">* same weekday-position last month (3rd Sunday), not a fixed day-count offset</div>
+    </div>
+  </section>
+
+  <div class="legend">
+    <span class="chip good"><span class="dot"></span>Within benchmark</span>
+    <span class="chip warning"><span class="dot"></span>Watch</span>
+    <span class="chip serious"><span class="dot"></span>Off benchmark</span>
+    <span class="chip critical"><span class="dot"></span>Over benchmark</span>
+  </div>
+
+  <footer>
+    <span>Data source: QuickBooks Online, synced nightly &middot; figures shown are illustrative sample data</span>
+    <span>Main &amp; Vine Performance Dashboard — v0 mockup</span>
+  </footer>
+
+</div>
+</body>
+</html>

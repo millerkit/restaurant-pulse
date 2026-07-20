@@ -229,7 +229,7 @@
   .compare-card .vs-label { font-size: 12px; color: var(--ink-3); }
 
   /* ---------- pace meters (COGS / labor) ---------- */
-  .meter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .meter-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
   .meter-card {
     background: var(--surface);
     border: 1px solid var(--hair);
@@ -243,6 +243,7 @@
     margin-bottom: 10px;
   }
   .meter-head .name { font-size: 14px; font-weight: 700; }
+  .meter-head .name .hint { font-size: 11px; font-weight: 500; color: var(--ink-3); }
   .meter-head .value {
     font-size: 18px;
     font-weight: 700;
@@ -366,10 +367,34 @@
     .hero-row, .meter-row { grid-template-columns: 1fr; }
     .compare-row { grid-template-columns: 1fr 1fr; }
   }
+
+  /* ---------- top-level tab nav ---------- */
+  .tabnav {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .tabnav a {
+    display: inline-block;
+    padding: 8px 4px;
+    margin-bottom: -1px;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    color: var(--ink-3);
+    border-bottom: 2px solid transparent;
+  }
+  .tabnav a + a { margin-left: 18px; }
+  .tabnav a.active { color: var(--ink); border-bottom-color: var(--accent); }
 </style>
 </head>
 <body>
 <div class="wrap">
+
+  <nav class="tabnav">
+    <a href="dashboard-mockup.html" class="active">Dashboard</a>
+    <a href="pl-mockup.html">P&amp;L</a>
+  </nav>
 
   <header>
     <div>
@@ -464,6 +489,21 @@
         <div class="meter-foot">
           <span>Target: 30–33% of revenue</span>
           <span class="chip good"><span class="dot"></span>On target</span>
+        </div>
+      </div>
+      <div class="meter-card" title="Target band 58%–62% of revenue (COGS + labor combined). Actual is above the top of the band.">
+        <div class="meter-head">
+          <span class="name">Prime Cost <span class="hint">COGS + labor</span></span>
+          <span class="value" style="color: var(--serious);">64.5%</span>
+        </div>
+        <div class="meter-track">
+          <div class="meter-band" style="left: 58%; width: 4%;"></div>
+          <div class="meter-marker" style="left: 64.5%; background: var(--serious);"></div>
+        </div>
+        <div class="meter-scale"><span>0%</span><span>40%</span><span>80%</span></div>
+        <div class="meter-foot">
+          <span>Target: 58–62% of revenue</span>
+          <span class="chip serious"><span class="dot"></span>Off target</span>
         </div>
       </div>
     </div>
