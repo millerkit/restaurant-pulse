@@ -128,6 +128,8 @@ header .sub {
   line-height: 1.5;
 }
 .as-of strong { color: var(--ink-2); font-weight: 600; }
+.as-of .chip { margin-bottom: 6px; }
+.as-of .sync-line { line-height: 1.5; }
 .sample-tag {
   display: inline-block;
   font-size: 10px;

@@ -2,6 +2,11 @@
 import site from '~/config/site.json'
 useHead({ title: `${site.restaurantName} — P&L` })
 
+// Shaped like a sync_runs row so this collapses into a real useDb() query
+// later without changing the template logic — see schema.sql.
+const lastSync = { status: 'success' as 'success' | 'error', finishedAt: 'today, 3:04 AM', dataThroughDate: 'Jul 16' }
+const syncFailed = computed(() => lastSync.status === 'error')
+
 // Sample data shaped the way it'll eventually come from useDb() — each row
 // carries what it needs to compute its own flagged state, rather than a
 // bare hardcoded boolean, so the "nothing unusual" collapse is driven by
@@ -66,7 +71,11 @@ function pctOfOpexGroup(row: OpexRow) {
         <div class="sub">Week, month, and year to date &middot; reporting through last night's close (Thu, Jul 16)</div>
       </div>
       <div class="as-of">
-        Last synced from QuickBooks: <strong>today, 3:04 AM</strong><br>
+        <span :class="['chip', syncFailed ? 'critical' : 'good']"><span class="dot"></span>{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
+        <div class="sync-line">
+          <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
+          <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
+        </div>
         <span class="sample-tag">Sample data — for review</span>
       </div>
     </header>
