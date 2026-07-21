@@ -29,7 +29,7 @@ const syncFailed = computed(() => lastSync.status === 'error')
     <section>
       <div class="section-label">Where We Stand</div>
       <div class="hero-row">
-        <div class="hero-card">
+        <div class="hero-card anchor">
           <div class="hero-top">
             <span class="period">This Month (Jul 1–16)</span>
             <span class="chip serious"><span class="dot"></span>Behind pace</span>
@@ -109,7 +109,7 @@ const syncFailed = computed(() => lastSync.status === 'error')
             <span class="chip good"><span class="dot"></span>On target</span>
           </div>
         </div>
-        <div class="meter-card" title="Target band 58%–62% of revenue (COGS + labor combined). Actual is above the top of the band.">
+        <div class="meter-card anchor" title="Target band 58%–62% of revenue (COGS + labor combined). Actual is above the top of the band.">
           <div class="meter-head">
             <span class="name">Prime Cost <span class="hint">COGS + labor</span></span>
             <span class="value" style="color: var(--serious);">64.5%</span>
@@ -184,12 +184,14 @@ const syncFailed = computed(() => lastSync.status === 'error')
 .hero-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
+.hero-card.anchor { background: var(--accent-wash); border-color: transparent; }
 .hero-card .hero-top {
   display: flex;
   justify-content: space-between;
@@ -215,7 +217,8 @@ const syncFailed = computed(() => lastSync.status === 'error')
 .compare-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 16px 16px 14px;
   display: flex;
   flex-direction: column;
@@ -252,9 +255,11 @@ const syncFailed = computed(() => lastSync.status === 'error')
 .meter-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 16px 18px 18px;
 }
+.meter-card.anchor { background: var(--accent-wash); border-color: transparent; }
 .meter-head {
   display: flex;
   justify-content: space-between;
@@ -309,7 +314,8 @@ const syncFailed = computed(() => lastSync.status === 'error')
 .runway-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 16px 18px 18px;
   display: flex;
   flex-direction: column;

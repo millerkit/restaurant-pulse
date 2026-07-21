@@ -289,7 +289,8 @@ function pctOfOpexGroup(row: OpexRow) {
 .pl-table-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 4px 4px;
   overflow-x: auto;
 }
@@ -365,7 +366,8 @@ table.pl-table {
 .drill-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
   padding: 16px 18px 18px;
   display: flex;
   flex-direction: column;
