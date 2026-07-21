@@ -6,6 +6,14 @@ useHead({ title: `${site.restaurantName} — Daily Performance` })
 // later without changing the template logic — see schema.sql.
 const lastSync = { status: 'success' as 'success' | 'error', finishedAt: 'today, 3:04 AM', dataThroughDate: 'Jul 16' }
 const syncFailed = computed(() => lastSync.status === 'error')
+
+// Guest-economics stats from Toast POS, derived from the same last-night
+// revenue figure shown above so the two can't drift out of sync.
+const lastNightRevenue = 8420
+const lastNightCovers = 178
+const lastNightLaborHours = 58.0
+const avgCheck = computed(() => lastNightRevenue / lastNightCovers)
+const salesPerLaborHour = computed(() => lastNightRevenue / lastNightLaborHours)
 </script>
 
 <template>
@@ -27,7 +35,7 @@ const syncFailed = computed(() => lastSync.status === 'error')
 
     <!-- Are we in the red or black, and are we on pace? -->
     <section>
-      <div class="section-label">Where We Stand</div>
+      <div class="section-label">Net Income</div>
       <div class="hero-row">
         <div class="hero-card anchor">
           <div class="hero-top">
@@ -48,13 +56,13 @@ const syncFailed = computed(() => lastSync.status === 'error')
       </div>
     </section>
 
-    <!-- How did we do last night vs. history? -->
+    <!-- How did we do last night? -->
     <section>
-      <div class="section-label">Last Night vs. History — Same Weekday</div>
+      <div class="section-label">Last Night</div>
       <div class="compare-row">
         <div class="compare-card anchor">
           <div class="date-label">Thu, Jul 16 (last night)</div>
-          <div class="amount">$8,420</div>
+          <div class="amount">${{ lastNightRevenue.toLocaleString() }}</div>
           <div class="vs-label">Total revenue</div>
         </div>
         <div class="compare-card">
@@ -63,14 +71,26 @@ const syncFailed = computed(() => lastSync.status === 'error')
           <div class="vs-label">Last week &middot; $7,890</div>
         </div>
         <div class="compare-card">
-          <div class="date-label">vs. Thu, Jun 18</div>
-          <div class="delta down">▼ 8.0%</div>
-          <div class="vs-label">Last month, same position &middot; $9,150</div>
-        </div>
-        <div class="compare-card">
           <div class="date-label">vs. Thu, Jul 17 2025</div>
           <div class="delta up">▲ 10.8%</div>
           <div class="vs-label">Last year, same position &middot; $7,600</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="compare-card">
+          <div class="date-label">Covers</div>
+          <div class="amount">{{ lastNightCovers }}</div>
+          <div class="vs-label">Guests served, Thu, Jul 16</div>
+        </div>
+        <div class="compare-card">
+          <div class="date-label">Average Check</div>
+          <div class="amount">${{ avgCheck.toFixed(2) }}</div>
+          <div class="vs-label">${{ lastNightRevenue.toLocaleString() }} &middot; {{ lastNightCovers }} covers</div>
+        </div>
+        <div class="compare-card anchor">
+          <div class="date-label">Sales / Labor Hour</div>
+          <div class="amount">${{ salesPerLaborHour.toFixed(2) }}</div>
+          <div class="vs-label">{{ lastNightLaborHours.toFixed(1) }} labor hours worked</div>
         </div>
       </div>
     </section>
@@ -211,7 +231,7 @@ const syncFailed = computed(() => lastSync.status === 'error')
 /* ---------- comparison strip ---------- */
 .compare-row {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr 1fr;
+  grid-template-columns: 1.2fr 1fr 1fr;
   gap: 12px;
 }
 .compare-card {
@@ -249,6 +269,14 @@ const syncFailed = computed(() => lastSync.status === 'error')
 .delta.up { color: var(--good); }
 .delta.down { color: var(--critical); }
 .compare-card .vs-label { font-size: 12px; color: var(--ink-3); }
+
+/* ---------- guest-economics row (covers / avg check / sales per labor hour) ---------- */
+.stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
 
 /* ---------- pace meters (COGS / labor / prime cost) ---------- */
 .meter-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
@@ -378,6 +406,6 @@ const syncFailed = computed(() => lastSync.status === 'error')
 
 @media (max-width: 760px) {
   .hero-row, .meter-row { grid-template-columns: 1fr; }
-  .compare-row { grid-template-columns: 1fr 1fr; }
+  .compare-row, .stat-row { grid-template-columns: 1fr 1fr; }
 }
 </style>
