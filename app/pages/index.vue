@@ -1,12 +1,13 @@
 <script setup lang="ts">
-useHead({ title: 'Main & Vine — Daily Performance' })
+import site from '~/config/site.json'
+useHead({ title: `${site.restaurantName} — Daily Performance` })
 </script>
 
 <template>
   <div>
     <header>
       <div>
-        <h1>Main &amp; Vine — Daily Performance</h1>
+        <h1>{{ site.restaurantName }} — Daily Performance</h1>
         <div class="sub">Friday, July 17, 2026 &middot; reporting through last night's close</div>
       </div>
       <div class="as-of">
@@ -163,7 +164,7 @@ useHead({ title: 'Main & Vine — Daily Performance' })
 
     <footer>
       <span>Data source: QuickBooks Online, synced nightly &middot; figures shown are illustrative sample data</span>
-      <span>Main &amp; Vine Performance Dashboard — v0 mockup</span>
+      <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
     </footer>
   </div>
 </template>

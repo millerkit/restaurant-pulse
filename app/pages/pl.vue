@@ -1,5 +1,6 @@
 <script setup lang="ts">
-useHead({ title: 'Main & Vine — P&L' })
+import site from '~/config/site.json'
+useHead({ title: `${site.restaurantName} — P&L` })
 
 // Sample data shaped the way it'll eventually come from useDb() — each row
 // carries what it needs to compute its own flagged state, rather than a
@@ -61,7 +62,7 @@ function pctOfOpexGroup(row: OpexRow) {
   <div>
     <header>
       <div>
-        <h1>Main &amp; Vine — P&amp;L</h1>
+        <h1>{{ site.restaurantName }} — P&amp;L</h1>
         <div class="sub">Week, month, and year to date &middot; reporting through last night's close (Thu, Jul 16)</div>
       </div>
       <div class="as-of">
@@ -253,7 +254,7 @@ function pctOfOpexGroup(row: OpexRow) {
 
     <footer>
       <span>Data source: QuickBooks Online, synced nightly &middot; figures shown are illustrative sample data</span>
-      <span>Main &amp; Vine Performance Dashboard — v0 mockup</span>
+      <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
     </footer>
   </div>
 </template>
