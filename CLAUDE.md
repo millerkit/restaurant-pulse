@@ -332,10 +332,45 @@ changed the shape of this feature significantly:
   keep the QBO budget sane, not a substitute for MarginEdge's operational
   COGS tracking.
 
-See [`app/pages/budget.vue`](app/pages/budget.vue) for the three sections
-(Budget Pace, Overspending, Edit Monthly Budget) and
-[`server/api/budget/`](server/api/budget/) for the four routes
-(`targets.get`, `targets.post`, `copy-actuals.post`, `export.get`).
+**Split into two tabs 2026-07-22** (same day, after the user pointed out it
+was confusing to have a Month/Year pace toggle at the top of the page while
+Edit Monthly Budget below it was always month-scoped): Budget Pace and
+Overspending are now [`app/pages/budget/index.vue`](app/pages/budget/index.vue)
+(route `/budget`), and Edit Monthly Budget is
+[`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) (route
+`/budget/edit`), each its own top-level tab in
+[`app/layouts/default.vue`](app/layouts/default.vue). Shared types/constants
+and the `budget_targets` fetch live in
+[`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) so
+both pages load their own copy of the year's data independently — there's no
+cross-page live state, since a full sync would mostly show meaningless
+numbers (there's no pace to compute for a future month with no actuals yet).
+The one exception: the Edit Budget page shows a "live preview" mini pace
+card, recomputed from the in-progress *unsaved* edits, but only while
+editing the current as-of month specifically — the one case where "does
+this edit change our pace" has a real answer.
+
+See [`server/api/budget/`](server/api/budget/) for the four routes
+(`targets.get`, `targets.post`, `copy-actuals.post`, `export.get`) both pages
+share.
+
+**Edit Budget's account rows render as an indented tree, matching the COA
+layout QBO's own budget UI/export uses** (added 2026-07-22, after the user
+pointed at a QBO budget screenshot showing indentation and asked whether
+that was a reason to keep budgets in QBO rather than this app). It isn't:
+QBO's Budget API (`BudgetDetail`: `budgetDate`, `amount`, `accountRef`,
+`customerRef`, `classRef`, `departmentRef` — confirmed via Intuit's SDK
+reference) returns a flat list with no hierarchy field of its own: QBO's UI
+renders the indented tree by joining each `BudgetDetail.accountRef` against
+the separate `Account` entity's own parent/sub-account relationship,
+exactly the technique this app already uses via `accounts.parent_account_id`
+(see above). Since that data is already imported, [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue)
+sorts each category's accounts by `account_number` (which already matches
+parent-before-children chart-of-accounts order — verified against the real
+import, no separate tree-building pass needed) and indents each row by
+walking the `parent_account_id` chain. On budget *write* access: still
+unconfirmed either way (see "QBO 'sync' means export-for-reimport" above) —
+this doesn't change that.
 
 ## Running it
 
@@ -383,9 +418,11 @@ See [`app/pages/budget.vue`](app/pages/budget.vue) for the three sections
 - [`design/pl-mockup.html`](design/pl-mockup.html) — tentatively approved P&L tab mockup (reference only)
 - [`app/pages/index.vue`](app/pages/index.vue) — the real Dashboard page
 - [`app/pages/pl.vue`](app/pages/pl.vue) — the real P&L page
-- [`app/pages/budget.vue`](app/pages/budget.vue) — the real Budget page
+- [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending (route `/budget`)
+- [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
+- [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
 - [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav
-- [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all three pages
+- [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
 - [`server/utils/db.ts`](server/utils/db.ts) — `useDb()` helper for server routes/API endpoints
 - [`server/api/budget/`](server/api/budget/) — budget read/write, copy-actuals, and QBO export routes
 - [`scripts/init-db.mjs`](scripts/init-db.mjs) — creates the SQLite file from `schema.sql`
