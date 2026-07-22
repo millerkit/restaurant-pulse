@@ -1,7 +1,7 @@
 # Generated as a template — replace `app` with a globally-unique name and
 # `primary_region` with whichever Fly region is closest to you (see
 # `fly platform regions`). Both get set for real when you run `fly launch`.
-app = "restaurant-performance-app"
+app = "restaurant-pulse"
 primary_region = "sjc"
 
 [build]

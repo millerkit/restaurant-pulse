@@ -1,4 +1,4 @@
-# Restaurant Performance Dashboard
+# Restaurant Pulse
 
 **Status: Nuxt scaffold in place as of 2026-07-20.** Both approved mockups are
 now real pages with static sample data (matching the mockups exactly) backed

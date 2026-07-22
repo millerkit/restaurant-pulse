@@ -4,6 +4,7 @@
 // there.
 const AUTHORIZE_URL = 'https://appcenter.intuit.com/connect/oauth2'
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
+const REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke'
 const SCOPE = 'com.intuit.quickbooks.accounting'
 
 export function qboApiBase(environment: string) {
@@ -92,6 +93,32 @@ export function saveTokens(realmId: string, tokens: TokenResponse) {
 export function loadTokens(): QboTokenRow | undefined {
   const db = useDb()
   return db.prepare('SELECT * FROM qbo_tokens WHERE id = 1').get() as QboTokenRow | undefined
+}
+
+export function clearTokens() {
+  const db = useDb()
+  db.prepare('DELETE FROM qbo_tokens WHERE id = 1').run()
+}
+
+// Revoking either token invalidates both, per Intuit's docs. Best-effort:
+// callers should still clear the local row even if this fails (e.g. the
+// user already revoked access from within QuickBooks), so a stale token
+// never lingers in qbo_tokens either way.
+export async function revokeToken(clientId: string, clientSecret: string, token: string) {
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
+  const res = await fetch(REVOKE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ token })
+  })
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}))
+    throw new Error(`QBO token revoke failed: ${res.status} ${JSON.stringify(json)}`)
+  }
 }
 
 // Returns a valid access token for the connected company, transparently
