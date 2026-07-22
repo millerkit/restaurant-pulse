@@ -1,0 +1,14 @@
+node_modules
+.output
+.nuxt
+.nitro
+.cache
+.git
+.idea
+.DS_Store
+data
+*.sqlite
+*.sqlite3
+.env
+.env.*
+design

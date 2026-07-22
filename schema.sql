@@ -9,18 +9,43 @@
 -- the dashboard groups by. This mapping is what makes "which labor category
 -- is costing us too much" possible later without a schema change — just add
 -- more granular accounts under category = 'labor'.
+--
+-- account_number/parent_account_id reconstruct the real QBO chart of
+-- accounts hierarchy (e.g. 6000 Labor -> 6010 BOH Wages -> 6012 Garde
+-- Manger Cook), needed so a budget can be exported back into QBO's own
+-- account-level Excel template and re-imported. qbo_account_id is
+-- nullable because accounts seeded from that Excel template (see
+-- scripts/import-budget-xlsx.mjs) don't carry QBO's internal object ID —
+-- only a real QBO Account sync (not yet built) can fill that in, matched
+-- by account_number.
 CREATE TABLE accounts (
-  id              INTEGER PRIMARY KEY,
-  qbo_account_id  TEXT NOT NULL UNIQUE,   -- QuickBooks Online Account.Id
-  name            TEXT NOT NULL,          -- QBO account name, e.g. "Payroll:BOH Wages"
-  category        TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other')),
-  subcategory     TEXT,                   -- optional finer bucket, e.g. "BOH", "FOH", "Food", "Beverage"
+  id                 INTEGER PRIMARY KEY,
+  qbo_account_id     TEXT UNIQUE,            -- QuickBooks Online Account.Id, filled in once the real account sync exists
+  account_number     TEXT,                   -- QBO account number, e.g. "6012" (some built-in QBO accounts have none)
+  parent_account_id  INTEGER REFERENCES accounts(id),  -- reconstructs the COA's sub-account nesting
+  name               TEXT NOT NULL,          -- QBO account name, e.g. "Garde Manger Cook"
+  category           TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other')),
+  subcategory        TEXT,                   -- optional finer bucket, e.g. "BOH", "FOH", "Food", "Beverage"
   -- Only meaningful for category='opex': rent/insurance/loan interest are
   -- 'fixed' (not controllable month to month, so not worth benchmarking);
   -- marketing/repairs/supplies/admin are 'variable' (the actionable slice,
   -- benchmarked as 'opex_variable' in category_benchmarks). NULL elsewhere.
-  cost_behavior   TEXT CHECK (cost_behavior IN ('fixed', 'variable')),
-  is_active       INTEGER NOT NULL DEFAULT 1
+  cost_behavior      TEXT CHECK (cost_behavior IN ('fixed', 'variable')),
+  -- Only meaningful for category='labor': marks an owner-operator's own
+  -- salary (added 2026-07-22 — this restaurant's Executive Chef and
+  -- Business Manager are the two owners), as distinct from a hired
+  -- market-rate role like General Manager. Deliberately NOT modeled as
+  -- cost_behavior='fixed' — owner comp is controllable (you set your own
+  -- pay), unlike rent/insurance, so it isn't "fixed" in that sense; this is
+  -- a separate concern (is this compensation representative of what a
+  -- hired-staff industry benchmark assumes, or does it include an
+  -- ownership premium the benchmark was never built to include) and gets
+  -- its own flag rather than overloading cost_behavior's meaning. Owner
+  -- comp still counts toward total labor $ and net income — this only
+  -- controls whether it's included in the labor % shown against the
+  -- benchmark. 0/1 boolean, defaults to 0 (not owner compensation).
+  is_owner_compensation INTEGER NOT NULL DEFAULT 0,
+  is_active          INTEGER NOT NULL DEFAULT 1
 );
 
 -- One row per (date, account) with the day's amount, pulled from QBO's
@@ -37,17 +62,26 @@ CREATE TABLE daily_line_items (
 CREATE INDEX idx_daily_line_items_date ON daily_line_items(date);
 CREATE INDEX idx_daily_line_items_account ON daily_line_items(account_id);
 
--- Budget targets, entered manually (CSV import or a simple form) since QBO's
--- Budget object doesn't cleanly cover restaurant-style category budgets.
--- One row per (year, month, category) — enough to derive both a monthly
--- target and a day-by-day expected pace (straight-line by default).
+-- Budget targets, one row per (year, month, account) — matches how QBO's
+-- own budget object actually works (per-account, not per-category), which
+-- is what makes an export -> re-import round trip with QBO possible. The
+-- app's macro Budget tab rolls these up through accounts.category at query
+-- time (same pattern as the category_benchmarks queries below), the same
+-- way "which labor category" drill-downs already roll up daily_line_items.
+--
+-- There is deliberately no 'net_income' row here — QBO has no real "Net
+-- Income" account (see the Total Net Income row in a QBO budget export,
+-- which is a computed subtotal, not an account), so budgeted net income is
+-- always derived as revenue - cogs - labor - opex (+/- other), never
+-- entered directly, so it can't drift out of sync with the category budgets
+-- it's made of.
 CREATE TABLE budget_targets (
-  id        INTEGER PRIMARY KEY,
-  year      INTEGER NOT NULL,
-  month     INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
-  category  TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other', 'net_income')),
-  amount    REAL NOT NULL,
-  UNIQUE (year, month, category)
+  id          INTEGER PRIMARY KEY,
+  year        INTEGER NOT NULL,
+  month       INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+  account_id  INTEGER NOT NULL REFERENCES accounts(id),
+  amount      REAL NOT NULL,
+  UNIQUE (year, month, account_id)
 );
 
 -- Configurable red/green thresholds for cost-ratio categories (COGS%,
@@ -66,6 +100,21 @@ CREATE TABLE category_benchmarks (
   warning_pct   REAL NOT NULL,   -- above this: warning
   serious_pct   REAL NOT NULL,   -- above this: serious
   critical_pct  REAL NOT NULL    -- above this: critical
+);
+
+-- Holds the QBO OAuth tokens for the one connected company. Single-row
+-- table (id is always 1) since this app is scoped to one restaurant, per
+-- CLAUDE.md. Separate from budget_targets/category_benchmarks-style config
+-- because tokens rotate on every refresh and expire, so this is live
+-- credential state, not settings.
+CREATE TABLE qbo_tokens (
+  id                        INTEGER PRIMARY KEY CHECK (id = 1),
+  realm_id                  TEXT NOT NULL,   -- QBO company ID returned by the OAuth callback
+  access_token              TEXT NOT NULL,
+  refresh_token             TEXT NOT NULL,
+  access_token_expires_at   TEXT NOT NULL,   -- ISO 8601
+  refresh_token_expires_at  TEXT NOT NULL,   -- ISO 8601 (refresh tokens are single-use and rotate)
+  updated_at                TEXT NOT NULL
 );
 
 -- Tracks each nightly sync run against the QBO Reports API, so the
@@ -95,6 +144,12 @@ CREATE TABLE sync_runs (
 --   WHERE dli.date BETWEEN date('now', 'start of month') AND date('now');
 --
 -- Budget pace: compare actual-to-date against (monthly target * day-of-month / days-in-month).
+--
+-- Budget tab — macro category budget for a month, rolled up from
+-- account-level budget_targets rows:
+--   SELECT a.category, SUM(bt.amount) AS budgeted
+--   FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+--   WHERE bt.year = ? AND bt.month = ? GROUP BY a.category;
 --
 -- P&L tab — weekly/monthly/yearly rollup with COGS%/labor% status color:
 --   SELECT a.category,
