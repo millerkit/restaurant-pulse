@@ -457,12 +457,15 @@ not just by reading the code, surfaced a real bug:
   Contact/Privacy/Terms links to the shared layout so it's reachable from
   every tab.
 
-## Cloudflare Access — 2026-07-23
+## Cloudflare Access — 2026-07-23, live in production
 
 Prompted by the security questionnaire's "does your app use multi-factor
 authentication?" (answered "No" — the deployed app only had one shared
 Basic Auth password). Per-person login was already a standing to-do (the
-user found the shared password annoying) — this closes both at once.
+user found the shared password annoying) — this closes both at once. Fully
+rolled out and verified: kmiller logged in via `pulse.urbanhearth.net`
+with a real one-time-PIN email and landed in the app with no Basic Auth
+prompt; the raw `restaurant-pulse.fly.dev` backstop still works.
 
 **Design**: `server/middleware/auth.ts` now branches on the request's
 `Host` header. The custom domain (`pulse.urbanhearth.net`, carved out from
@@ -515,6 +518,28 @@ an existing zone, isolated from the site's own root/www/MX records:
    `CLOUDFLARE_ACCESS_TEAM_DOMAIN`, and `CLOUDFLARE_ACCESS_AUD` as Fly
    secrets (`fly secrets set ...`), matching how `BASIC_AUTH_USER` etc. are
    already deployed.
+
+**Real bug hit during rollout, worth remembering**: setting only the plain
+`CLOUDFLARE_ACCESS_*` secret names deployed successfully but silently did
+nothing — every request, including a real authenticated one, fell through
+to the Basic Auth backstop. Cause: `nuxt.config.ts`'s
+`process.env.CLOUDFLARE_ACCESS_HOSTNAME` (etc.) reads happen at **build
+time**, inside the Docker build, before Fly secrets are attached to the
+running container — so it always bakes in `undefined` as the default.
+`BASIC_AUTH_USER`/`QBO_CLIENT_ID` already worked around this (an earlier,
+undocumented fix) by *also* setting a `NUXT_`-prefixed twin of each secret
+(e.g. `NUXT_BASIC_AUTH_USER`), which Nitro's own runtime config layer picks
+up fresh at actual container runtime, overriding the frozen build-time
+default. The new Cloudflare Access secrets were missing that twin. Fixed
+by additionally setting `NUXT_CLOUDFLARE_ACCESS_HOSTNAME` /
+`_TEAM_DOMAIN` / `_AUD`. **Any future runtimeConfig key sourced from
+`process.env` needs both the plain and `NUXT_`-prefixed secret set on
+Fly**, or it'll silently read as unset in production despite working fine
+in local dev (where `.env.local` is loaded directly, sidestepping this
+build-vs-runtime split entirely). Also added logging to
+`checkCloudflareAccess`'s failure paths (`server/middleware/auth.ts`) —
+it threw with no console output at all before, which is exactly what made
+this bug hard to diagnose from `fly logs`.
 
 ## Running it
 
