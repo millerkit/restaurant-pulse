@@ -34,12 +34,14 @@ let accessJwks: ReturnType<typeof createRemoteJWKSet> | undefined
 async function checkCloudflareAccess(event: H3Event, teamDomain: string, aud: string) {
   const token = getHeader(event, 'cf-access-jwt-assertion')
   if (!token) {
+    console.error(`Cloudflare Access: request to ${event.path} had no Cf-Access-Jwt-Assertion header`)
     throw createError({ statusCode: 401, statusMessage: 'Missing Cloudflare Access assertion' })
   }
   accessJwks ??= createRemoteJWKSet(new URL(`https://${teamDomain}/cdn-cgi/access/certs`))
   try {
     await jwtVerify(token, accessJwks, { issuer: `https://${teamDomain}`, audience: aud })
-  } catch {
+  } catch (err) {
+    console.error(`Cloudflare Access: JWT verification failed for ${event.path}:`, err)
     throw createError({ statusCode: 401, statusMessage: 'Invalid Cloudflare Access assertion' })
   }
 }
