@@ -174,7 +174,7 @@ function pctOfOpexGroup(row: OpexRow) {
     <!-- Drill-down: what's driving opex -->
     <section>
       <div class="section-head">
-        <div class="section-label">Opex Drill-Down — What's Driving the Cost</div>
+        <div class="section-label">Operating Cost Drill-Down — What's Driving the Cost</div>
         <div class="period-tabs">
           <span class="period-tab">Week</span>
           <span class="period-tab active">Month</span>

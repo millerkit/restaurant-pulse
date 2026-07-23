@@ -372,6 +372,150 @@ walking the `parent_account_id` chain. On budget *write* access: still
 unconfirmed either way (see "QBO 'sync' means export-for-reimport" above) —
 this doesn't change that.
 
+## QBO OAuth hardening — 2026-07-22
+
+Prompted by Intuit's own "Security requirements" doc and its App assessment
+questionnaire's Authorization and Authentication section (both shared by the
+user), reviewed against the OAuth flow already built in
+[`server/utils/qbo.ts`](server/utils/qbo.ts) and
+[`server/api/qbo/`](server/api/qbo/). The questionnaire's questions turned
+out to be more than a form to fill out — auditing the code against each one
+surfaced real gaps, most notably a genuine CSRF vulnerability:
+
+- **CSRF on the OAuth callback (real bug, not just a questionnaire item)**:
+  `connect.get.ts` generated a `state` value but never stored it, and
+  `callback.get.ts` never checked the `state` query param Intuit echoes
+  back — meaning an attacker could get a victim to load a crafted callback
+  URL and bind an arbitrary QBO company to this app's stored tokens. Fixed
+  by storing `state` in a short-lived `httpOnly` cookie set in
+  `connect.get.ts` and validated in `callback.get.ts` before any code
+  exchange happens. `sameSite: 'lax'`, not `'strict'` — the callback is a
+  cross-site top-level GET navigation from Intuit's domain, and `Strict`
+  cookies aren't sent on those.
+- **Intuit's OAuth discovery document** (the questionnaire asks directly
+  whether an app uses it) now backs `authorization_endpoint` /
+  `token_endpoint` / `revocation_endpoint` instead of hardcoded URLs,
+  cached in-memory for 24h per environment. Falls back to the previous
+  hardcoded constants if the discovery fetch itself fails, so a network
+  hiccup reaching Intuit's discovery endpoint can't block login.
+- **Real vs. transient auth failures are now distinguished.** `QboAuthError`
+  (a 4xx from the token endpoint — bad code, `invalid_grant`, etc.) is never
+  retried; network errors and 5xx responses get up to 2 retries with short
+  backoff via `withRetry`. On a `QboAuthError` during token refresh, the
+  dead `qbo_tokens` row is cleared (`clearTokens()`) rather than left stale.
+- **"Ask the customer to reconnect" now has a real signal to hang a UI off
+  of**, without a new DB column: `status.get.ts` catches
+  `QboNotConnectedError` (never connected / already disconnected) and
+  `QboAuthError` (refresh token died — expired, revoked, or invalid) and
+  returns `{ connected: false, reason: 'not_connected' | 'reconnect_required' }`
+  instead of a raw 500. "No `qbo_tokens` row" was already the
+  not-connected signal; clearing it on `QboAuthError` collapses the
+  expired/invalid-refresh-token case into that same signal rather than
+  adding new state to track.
+- **`qboFetch`** (`server/utils/qbo.ts`) wraps actual QBO API calls: if a
+  token dies between the proactive expiry check and the request itself
+  (clock drift, early revocation), it forces one refresh and retries once
+  before giving up. Replaces the near-identical fetch blocks that used to
+  live separately in `status.get.ts` and `pl-report.get.ts`.
+
+## QBO error handling — 2026-07-23
+
+Same questionnaire, its Error Handling section — reviewed after reconnecting
+a real sandbox company (Intuit's OAuth consent screen requires the user's
+own login, so this step needed the user to sign in; the app-side plumbing
+that followed was done as usual). Auditing against these questions live,
+not just by reading the code, surfaced a real bug:
+
+- **QBO's Reports API can return HTTP 200 with an error body** — verified
+  directly against the sandbox: an intentionally malformed report date
+  (`start_date=not-a-date`) came back as `200 OK` with
+  `{ "Fault": { "type": "SystemFault", ... } }` in the JSON, not a 4xx/5xx.
+  The existing `!res.ok` check in `pl-report.get.ts`/`status.get.ts` missed
+  this entirely — a malformed request would have silently returned the
+  Fault object to the caller as if it were a valid report. Fixed with
+  `qboFaultType()` (`server/utils/qbo.ts`): both routes now check
+  `!res.ok || qboFaultType(body)`, and `logAndWrapQboError` reports a
+  Fault-with-2xx as a 502 rather than passing QBO's misleading 200 through.
+  A genuinely valid request was re-verified afterward to confirm no
+  regression.
+- **`intuit_tid` (Intuit's own request-tracing header, which their support
+  team asks for when troubleshooting) is now captured on every QBO API
+  call** via `qboFetch`, and included in both the server-side log line and
+  the `data` field of any thrown error, so it's available to hand to
+  support without needing to reproduce the failure.
+- **Structured error logging**: `logAndWrapQboError` logs every QBO API
+  failure (`intuit_tid`, endpoint, status, fault type, response body) via
+  `console.error` — captured by Fly's log platform (`fly logs`) for the
+  deployed app, which is the "mechanism for storing error info that can be
+  shared for troubleshooting" the questionnaire asks about. No new log
+  storage was built — the platform's own log aggregation already covers
+  this, and a bespoke log table would be solving an already-solved problem.
+- **In-app support contact**: the shared tab nav
+  ([`app/layouts/default.vue`](app/layouts/default.vue)) had no link to the
+  Contact info that already existed on `privacy.vue`/`terms.vue` — someone
+  using the actual dashboard had no way to find it. Added a footer with
+  Contact/Privacy/Terms links to the shared layout so it's reachable from
+  every tab.
+
+## Cloudflare Access — 2026-07-23
+
+Prompted by the security questionnaire's "does your app use multi-factor
+authentication?" (answered "No" — the deployed app only had one shared
+Basic Auth password). Per-person login was already a standing to-do (the
+user found the shared password annoying) — this closes both at once.
+
+**Design**: `server/middleware/auth.ts` now branches on the request's
+`Host` header. The custom domain (`pulse.urbanhearth.net`, carved out from
+the user's existing `urbanhearth.net` — their business website's own DNS
+records are untouched) is gated by Cloudflare Access at the edge, using
+email one-time-code login so kmiller and his wife each get their own
+credential instead of a shared password. Everything else — notably the raw
+`restaurant-pulse.fly.dev` hostname, which stays publicly resolvable
+because Fly owns that DNS zone, not the user, and would otherwise bypass
+Cloudflare entirely — keeps the original shared Basic Auth as a backstop,
+per the user's explicit choice over blocking that hostname outright.
+
+**Why the app also verifies the Cloudflare Access JWT, not just the
+hostname**: Fly apps are reachable directly by IP, not only through
+whatever proxy sits in front of the friendly hostname. If the app trusted
+`Host: pulse.urbanhearth.net` alone, a request that spoofed that header
+while hitting the origin's IP directly would skip Cloudflare — and thus
+Access — entirely. So `checkCloudflareAccess` verifies the signed
+`Cf-Access-Jwt-Assertion` header against Cloudflare's public JWKS
+(`https://<team-domain>/cdn-cgi/access/certs`, via the `jose` package)
+before trusting the request, rather than trusting the Host header alone.
+If Cloudflare Access isn't configured (`CLOUDFLARE_ACCESS_HOSTNAME` /
+`_TEAM_DOMAIN` / `_AUD` unset), this whole path is a no-op and every
+request uses Basic Auth — unchanged from before this section.
+
+**Manual setup (can't be done from this codebase — needs the user's own
+Cloudflare login)**. Simpler than it first looked: `urbanhearth.net` is
+already on Cloudflare's nameservers (confirmed via `dig` — already proxied
+for the live business site and root→www redirect, with Google Workspace
+handling mail), and the user has their own login to that account. So there's
+no nameserver migration or record re-import — just one new record added to
+an existing zone, isolated from the site's own root/www/MX records:
+1. Add a new DNS record: `pulse` → CNAME → `restaurant-pulse.fly.dev`,
+   proxied ("Proxied" / orange cloud).
+2. `fly certs add pulse.urbanhearth.net` (Fly CLI, already authenticated
+   locally) once the CNAME resolves, so Fly issues a TLS cert for it. If
+   Let's Encrypt's validation can't complete while Cloudflare is proxying,
+   temporarily flip that one record to "DNS only," let the cert issue, then
+   flip it back to "Proxied."
+3. In the Cloudflare dashboard, go to Zero Trust → Access → Applications,
+   add an application for `pulse.urbanhearth.net`, add "One-time PIN" as
+   the login method, and add a policy allowing exactly the two email
+   addresses (kmiller's and his wife's). Add a second, unauthenticated
+   bypass policy scoped to the `/privacy` and `/terms` paths, matching the
+   existing `PUBLIC_PATHS` exception in `auth.ts`.
+4. From that Access application's Overview tab, copy the **Application
+   Audience (AUD) Tag**, and from Zero Trust → Settings → Custom Pages (or
+   the org overview), the **team domain** (`<team-name>.cloudflareaccess.com`).
+   Set `CLOUDFLARE_ACCESS_HOSTNAME=pulse.urbanhearth.net`,
+   `CLOUDFLARE_ACCESS_TEAM_DOMAIN`, and `CLOUDFLARE_ACCESS_AUD` as Fly
+   secrets (`fly secrets set ...`), matching how `BASIC_AUTH_USER` etc. are
+   already deployed.
+
 ## Running it
 
 - `npm install`
@@ -391,8 +535,11 @@ this doesn't change that.
 
 ## Not yet done
 
-- QuickBooks Online OAuth + nightly sync job (Nitro server route) that
-  populates `daily_line_items`
+- The nightly sync job (Nitro server route) that populates
+  `daily_line_items` from the QBO Reports API. The OAuth connect/callback/
+  disconnect flow itself is already built and tested against a sandbox
+  company — see QBO OAuth hardening below — this is just the piece that
+  turns a connected token into real data.
 - Wiring the dashboard UI to the real schema — the Dashboard and P&L pages
   currently render the same static sample data as the approved mockups, not
   `useDb()` queries (the Budget tab is the exception — its budget numbers

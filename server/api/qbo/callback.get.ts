@@ -7,6 +7,13 @@ export default defineEventHandler(async (event) => {
   const code = query.code as string | undefined
   const realmId = query.realmId as string | undefined
   const error = query.error as string | undefined
+  const returnedState = query.state as string | undefined
+
+  const expectedState = getCookie(event, 'qbo_oauth_state')
+  deleteCookie(event, 'qbo_oauth_state')
+  if (!expectedState || !returnedState || returnedState !== expectedState) {
+    throw createError({ statusCode: 400, statusMessage: 'QBO callback failed CSRF state check — please restart the connect flow at /api/qbo/connect.' })
+  }
 
   if (error) {
     throw createError({ statusCode: 400, statusMessage: `QBO authorization was not granted: ${error}` })
@@ -16,7 +23,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const { qbo } = useRuntimeConfig()
-  const tokens = await exchangeCodeForTokens(qbo.clientId, qbo.clientSecret, code, qbo.redirectUri)
+  const tokens = await exchangeCodeForTokens(qbo.environment, qbo.clientId, qbo.clientSecret, code, qbo.redirectUri)
   saveTokens(realmId, tokens)
 
   return { connected: true, realmId }

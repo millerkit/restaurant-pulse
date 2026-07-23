@@ -13,6 +13,16 @@ export default defineNuxtConfig({
     basicAuth: {
       user: process.env.BASIC_AUTH_USER,
       pass: process.env.BASIC_AUTH_PASS
+    },
+    cloudflareAccess: {
+      // The custom-domain hostname Cloudflare Access gates (e.g.
+      // pulse.urbanhearth.net). Requests to any other Host — including the
+      // raw *.fly.dev hostname — fall back to Basic Auth instead. Left
+      // unset, this feature is a no-op and everything uses Basic Auth, same
+      // as before.
+      hostname: process.env.CLOUDFLARE_ACCESS_HOSTNAME,
+      teamDomain: process.env.CLOUDFLARE_ACCESS_TEAM_DOMAIN,
+      aud: process.env.CLOUDFLARE_ACCESS_AUD
     }
   }
 })

@@ -7,5 +7,10 @@
       <NuxtLink to="/budget/edit" exact-active-class="active">Edit Budget</NuxtLink>
     </nav>
     <slot />
+    <footer class="app-footer">
+      <a href="mailto:kmillercc@gmail.com">Contact / Support</a>
+      <NuxtLink to="/privacy">Privacy</NuxtLink>
+      <NuxtLink to="/terms">Terms</NuxtLink>
+    </footer>
   </div>
 </template>

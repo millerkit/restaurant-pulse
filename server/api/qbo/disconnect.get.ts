@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
 
   if (row) {
     try {
-      await revokeToken(qbo.clientId, qbo.clientSecret, row.refresh_token)
+      await revokeToken(qbo.environment, qbo.clientId, qbo.clientSecret, row.refresh_token)
     } catch (err) {
       console.error('QBO token revoke failed during disconnect:', err)
     }

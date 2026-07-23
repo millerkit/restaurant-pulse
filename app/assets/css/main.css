@@ -103,6 +103,20 @@ body {
 .tabnav a + a { margin-left: 18px; }
 .tabnav a.active { color: var(--ink); border-bottom-color: var(--accent); }
 
+/* ---------- footer ---------- */
+.app-footer {
+  display: flex;
+  gap: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
+.app-footer a {
+  font-size: 12px;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+.app-footer a:hover { color: var(--accent); }
+
 /* ---------- header ---------- */
 header {
   display: flex;
