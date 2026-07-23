@@ -541,6 +541,113 @@ build-vs-runtime split entirely). Also added logging to
 it threw with no console output at all before, which is exactly what made
 this bug hard to diagnose from `fly logs`.
 
+## QBO Account + P&L sync — 2026-07-23
+
+Closes the two gaps the Budget tab's "Not yet done" list had flagged since
+2026-07-22: `accounts.qbo_account_id` was NULL on every xlsx-seeded row, and
+nothing populated `daily_line_items` from QBO. Prompted by the user
+clarifying that Urban Hearth has been open for years — just at a different
+location before the 2026 move — so real multi-year history exists in QBO to
+backfill, not just a gap that resolves itself once a sync starts running
+forward.
+
+- **QBO Account sync** (`server/utils/qbo-account-sync.ts`) — fetches the
+  real chart of accounts (`SELECT * FROM Account`, QBO's Query API — new
+  ground, nothing in this repo called it before) and matches each P&L-type
+  account (`AccountType` in `Income`/`Cost of Goods Sold`/`Expense`/
+  `Other Income`/`Other Expense`) to a local `accounts` row by
+  `qbo_account_id` first, then `account_number`. Unmatched accounts are
+  inserted, auto-categorized by a heuristic that mirrors
+  `scripts/import-budget-xlsx.mjs`'s first-pass rule exactly (same
+  `FIXED_OPEX_TOPLEVEL` set, same Food/Beverage/Other COGS keyword match,
+  same "walk to the top-level ancestor, check if it's named Labor" split)
+  but driven by QBO's own `AccountType`/`ParentRef` instead of xlsx
+  indentation. `is_owner_compensation` is always inserted `0` — stays
+  hand-set, per the Budget tab section above. Accounts QBO no longer
+  returns (or returns inactive) get `is_active=0`; never deleted. Only
+  actual state changes are written/counted (not every already-matched
+  account on every run), so `rows_synced` stays a meaningful number instead
+  of the full account count every single night.
+- **Real gotcha caught by verifying against the live sandbox before
+  writing the parser** (per the user's own instinct to check rather than
+  assume): QBO's `AccountType` values are **not** the camelCase-no-space
+  form `CostOfGoodsSold`/`OtherIncome`/`OtherExpense` — they're
+  `"Cost of Goods Sold"`, `"Other Income"`, `"Other Expense"`, with spaces
+  (`"Income"`/`"Expense"` happen to look the same either way, which would
+  have masked this in a spot-check of just those two). Confirmed via a
+  temporary inspection route hitting the live sandbox connection, same
+  disposable pattern as the one below — trusting the assumed enum strings
+  would have silently dropped every COGS and Other account from the sync.
+- **P&L ingestion** (`server/utils/qbo-pl-sync.ts` +
+  `server/utils/qbo-pl-parse.mjs`) — pulls `ProfitAndLoss`
+  (`summarize_column_by=Days`), matches each report row to a local account
+  via the row's own `ColData[0].id` (confirmed live: every real Data row
+  carries this), and upserts into `daily_line_items`. The parsing logic
+  lives in a dependency-free `.mjs` file (not `.ts`) specifically so the
+  standalone backfill script below can `import` it directly via plain
+  `node` — the production Docker image is `node:22-bookworm-slim`, and
+  Node 22 doesn't reliably strip TypeScript without a build step. Another
+  live-verified gotcha: the report's trailing "Total" column has no
+  `StartDate`/`EndDate` in its `MetaData` at all (only `ColKey: "total"`) —
+  recognized and skipped explicitly rather than either crashing on it or
+  (worse) silently upserting a bogus day.
+- **`runNightlySync()`** (`server/utils/qbo-sync-runner.ts`) always runs
+  the account sync before the P&L pull, so a brand-new QBO account has a
+  local row to match against before its own transactions are processed.
+  Writes `sync_runs` (`running` → `success`/`error`), which nothing in the
+  codebase touched before this. Guarded against overlap by a simple
+  in-memory flag — sufficient given `fly.toml`'s single always-on machine.
+- **Nightly trigger is in-process, not external cron**
+  (`server/plugins/qbo-nightly-sync.ts`) — this app has no cron
+  infrastructure at all (no node-cron dependency, no Fly scheduled
+  machine), but `fly.toml` already runs with `min_machines_running=1` /
+  `auto_stop_machines=false`, so a plain `setInterval` inside the
+  already-always-on Nitro process is simpler than adding new infra. Uses
+  `Intl.DateTimeFormat` with an IANA zone (`America/New_York`, Urban
+  Hearth's actual location, confirmed with the user rather than guessed —
+  the container's own clock is UTC) to decide "past 3:04am local," matching
+  the sample time already in `useSyncStatus()`. Also fires once at boot
+  (covers a redeploy that straddled the target time) — `POST /api/qbo/sync`
+  triggers the identical function manually, both going through the same
+  `runNightlySync()` so there's exactly one definition of what a sync run
+  does.
+- **Historical backfill is a separate standalone script**
+  (`scripts/backfill-qbo-pl.mjs`, `npm run db:backfill-pl`), not the
+  nightly job — chunked month-by-month (a multi-year
+  `summarize_column_by=Days` request in one call isn't reliable), defaults
+  to 2 years back, idempotent so an interrupted run can just be re-invoked.
+  Deliberately duplicates (does not import) a small OAuth/fetch helper from
+  `server/utils/qbo.ts`, for the same Node-22-can't-run-TypeScript reason
+  as the parser module above — keep it in sync by hand if `qbo.ts` changes.
+  Deliberately does **not** write `sync_runs` — that table's whole purpose
+  is nightly-freshness tracking for the "last synced" UI signal, and a
+  one-time bulk load's `rows_synced` (tens of thousands of rows) would
+  misrepresent that if a future query ever just does
+  `ORDER BY started_at DESC LIMIT 1`. Progress goes to `console.log`
+  instead, matching `import-budget-xlsx.mjs`'s style.
+- **Verified against the live sandbox connection end-to-end** before
+  shipping: account sync (70 accounts matched/inserted with sane
+  categorization), P&L sync for a known day (reconciled exactly against
+  the raw report), the `sync_runs` error path (temporarily disconnected via
+  `/api/qbo/disconnect`, confirmed `running→error` with a real message,
+  reconnected and confirmed recovery), and the backfill script's
+  idempotency (re-ran an identical range, byte-identical row count/sum) and
+  month-chunk boundaries. The two temporary inspection routes used for this
+  (`pl-report.get.ts`, and a short-lived `account-query.get.ts` built
+  alongside it) are both deleted now that the real sync is verified
+  working, matching `pl-report.get.ts`'s own original header comment.
+- **Still sandbox, not production** — the connected QBO token is for the
+  sandbox environment. Pulling Urban Hearth's real multi-year history needs
+  a production OAuth reconnect first (same manual-step pattern as the
+  Cloudflare Access rollout above: needs the user's own Intuit login).
+  `account_number`-based matching is also only lightly exercised so far —
+  the sandbox's demo chart of accounts has no `AcctNum` set on any account
+  at all, so every sandbox account landed via the "insert as new" path, not
+  the "match by account_number" path real accounts will mostly take.
+- **Explicitly out of scope, on purpose** — wiring the Dashboard/P&L/Budget
+  pages' `sampleActuals` over to real `daily_line_items` queries. That's
+  its own separate task; this pass was sync + ingestion only.
+
 ## Running it
 
 - `npm install`
@@ -555,24 +662,22 @@ this bug hard to diagnose from `fly logs`.
   seed of `accounts` + `budget_targets` from a real QuickBooks budget Excel
   export; also writes the sanitized `data/qbo-budget-template.xlsx` used by
   the Budget tab's export feature. See Budget tab below.
+- `npm run db:backfill-pl -- [--since=YYYY-MM-DD] [--until=YYYY-MM-DD]` —
+  one-time historical backfill of `daily_line_items` from QBO's
+  ProfitAndLoss report. See QBO Account + P&L sync below. Needs an account
+  sync to have run first (`qbo_account_id` populated) — the nightly
+  scheduler or `POST /api/qbo/sync` does this automatically.
 - `npm run dev` — all three pages are the real app now, not the static
   mockup files (which still exist under `design/` for reference)
 
 ## Not yet done
 
-- The nightly sync job (Nitro server route) that populates
-  `daily_line_items` from the QBO Reports API. The OAuth connect/callback/
-  disconnect flow itself is already built and tested against a sandbox
-  company — see QBO OAuth hardening below — this is just the piece that
-  turns a connected token into real data.
 - Wiring the dashboard UI to the real schema — the Dashboard and P&L pages
   currently render the same static sample data as the approved mockups, not
   `useDb()` queries (the Budget tab is the exception — its budget numbers
-  are real, only its actuals are still sample data)
-- A real QBO Account sync to fill in `qbo_account_id` on the xlsx-seeded
-  `accounts` rows and keep the chart of accounts current (new accounts,
-  renames, deactivations) — see "what happens when the COA changes" in the
-  Budget tab section above
+  are real, only its actuals are still sample data). `daily_line_items` now
+  has a real path in (see QBO Account + P&L sync below) — this is now
+  purely a UI-wiring task, no longer blocked on data.
 - A manual entry flow for `category_benchmarks`
 - Auto-recalculating expense budgets when a revenue estimate is revised
   mid-month (raised, deliberately deferred — the Budget tab ships manual

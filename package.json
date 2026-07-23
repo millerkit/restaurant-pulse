@@ -9,7 +9,8 @@
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "db:init": "node scripts/init-db.mjs",
-    "db:import-budget": "node scripts/import-budget-xlsx.mjs"
+    "db:import-budget": "node scripts/import-budget-xlsx.mjs",
+    "db:backfill-pl": "node --env-file=.env.local scripts/backfill-qbo-pl.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
