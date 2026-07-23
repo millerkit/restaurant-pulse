@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, categoryTotals, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, YEAR_DAY_FRACTION, categoryTotals, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
@@ -53,7 +53,7 @@ const laborExOwnerComp = computed(() => {
 const selectedPeriod = ref<'month' | 'year'>('month')
 const periodDayFraction = computed(() => selectedPeriod.value === 'month'
   ? AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)
-  : 197 / 365) // matches the Dashboard's "197 of 365 days elapsed" sample figure
+  : YEAR_DAY_FRACTION)
 const periodActuals = computed(() => sampleActuals[selectedPeriod.value])
 const periodBudget = computed(() => selectedPeriod.value === 'month' ? monthBudget.value : yearBudget.value)
 

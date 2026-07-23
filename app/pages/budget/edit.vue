@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -158,6 +158,56 @@ const liveDraftNetIncome = computed(() => netIncome({
   opex: categoryComputedTotal('opex')
 }))
 
+// ---- Live pace preview — Year ---------------------------------------------
+// The month preview above only means anything for the current as-of month
+// (only July has actuals to pace against). The year total, though, is a sum
+// across all 12 months' budgets — so a draft edit to *any* month changes it,
+// not just July. This mirrors the Budget Pace page's Year view, but swaps in
+// this tab's in-progress (unsaved) draft for whichever month is currently
+// open and falls back to each other month's last-saved amount for the rest.
+function yearCategoryTotal(cat: Category): number {
+  let total = 0
+  for (let m = 1; m <= 12; m++) {
+    if (m === editMonth.value) {
+      total += categoryComputedTotal(cat)
+      continue
+    }
+    const data = monthlyData.value[m - 1]
+    if (!data) continue
+    total += data.accounts.filter(a => a.category === cat && a.amount !== null).reduce((sum, a) => sum + (a.amount || 0), 0)
+  }
+  return total
+}
+
+function yearMonthsBudgeted(cat: Category): number {
+  let count = 0
+  for (let m = 1; m <= 12; m++) {
+    if (m === editMonth.value) {
+      if (categoryComputedTotal(cat) !== 0) count++
+      continue
+    }
+    const data = monthlyData.value[m - 1]
+    if (data && data.accounts.some(a => a.category === cat && a.amount !== null)) count++
+  }
+  return count
+}
+
+const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
+  const actual = sampleActuals.year[cat]
+  const budget = yearCategoryTotal(cat)
+  const monthsBudgeted = yearMonthsBudgeted(cat)
+  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const, actual, budget, monthsBudgeted }
+  const actualPct = (actual / budget) * 100
+  const status = paceStatus(actualPct, YEAR_DAY_FRACTION * 100, CATEGORY_DIRECTION[cat])
+  return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, actual, budget, monthsBudgeted, actualPct, status }
+}))
+const yearLiveNetIncome = computed(() => netIncome({
+  revenue: yearCategoryTotal('revenue'),
+  cogs: yearCategoryTotal('cogs'),
+  labor: yearCategoryTotal('labor'),
+  opex: yearCategoryTotal('opex')
+}))
+
 // ---- COGS % of revenue (Food/Beverage trailing average) ----------------
 // COGS is fundamentally a variable cost — it scales with revenue, the
 // menu, and month-to-month inventory timing, unlike rent or a salary — so
@@ -286,18 +336,25 @@ async function saveBudgets() {
   }
 }
 
-// ---- Update/project from actuals ---------------------------------------
+// ---- Update this month from actuals ------------------------------------
+// Three variants of the same underlying operation (copy-actuals sums
+// daily_line_items for one source month and upserts that total into
+// budget_targets for the target month) — they only differ in which month
+// they read from. All three currently 422 in practice, since
+// daily_line_items is empty until the nightly QBO sync is wired in (see
+// CLAUDE.md's Not yet done) — the error message below surfaces that
+// directly rather than pretending the button did something.
 const actionStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const actionMessage = ref('')
 
-async function updateThisMonthFromActuals() {
+async function copyActualsIntoEditMonth(sourceYear: number, sourceMonth: number, sourceDescription: string) {
   actionStatus.value = 'running'
   try {
     const result = await $fetch('/api/budget/copy-actuals', {
       method: 'POST',
-      body: { sourceYear: YEAR, sourceMonth: editMonth.value, targetMonths: [{ year: YEAR, month: editMonth.value }] }
+      body: { sourceYear, sourceMonth, targetMonths: [{ year: YEAR, month: editMonth.value }] }
     })
-    actionMessage.value = `Updated ${result.accountsCopied} accounts for ${MONTH_NAMES[editMonth.value - 1]} from actuals.`
+    actionMessage.value = `Updated ${result.accountsCopied} accounts for ${MONTH_NAMES[editMonth.value - 1]} from ${sourceDescription}.`
     actionStatus.value = 'done'
     await loadYear()
   } catch (err: any) {
@@ -306,21 +363,23 @@ async function updateThisMonthFromActuals() {
   }
 }
 
-async function projectRemainingMonths() {
-  actionStatus.value = 'running'
-  try {
-    const targetMonths = Array.from({ length: 12 - AS_OF_MONTH }, (_, i) => ({ year: YEAR, month: AS_OF_MONTH + 1 + i }))
-    const result = await $fetch('/api/budget/copy-actuals', {
-      method: 'POST',
-      body: { sourceYear: YEAR, sourceMonth: AS_OF_MONTH, targetMonths }
-    })
-    actionMessage.value = `Projected ${result.accountsCopied} accounts across ${targetMonths.length} remaining months from ${MONTH_NAMES[AS_OF_MONTH - 1]} actuals.`
-    actionStatus.value = 'done'
-    await loadYear()
-  } catch (err: any) {
-    actionStatus.value = 'error'
-    actionMessage.value = err?.data?.statusMessage || err?.message || 'No actuals available yet'
-  }
+function updateFromLastMonth() {
+  if (!previousMonthLabel.value) return
+  copyActualsIntoEditMonth(YEAR, editMonth.value - 1, `${previousMonthLabel.value} actuals`)
+}
+
+// Mechanically this just points the same copy-actuals engine at
+// sourceYear = YEAR - 1 — budget_targets/daily_line_items are keyed by an
+// arbitrary (year, month), not scoped to a single year, so nothing in the
+// data model blocks this. In practice it'll 422 for a while regardless:
+// this restaurant's first full month open is July 2026 (see CLAUDE.md), so
+// there's no 2025 data to have synced yet, real sync or not.
+function updateFromSameMonthLastYear() {
+  copyActualsIntoEditMonth(YEAR - 1, editMonth.value, `${MONTH_NAMES[editMonth.value - 1]} ${YEAR - 1} actuals`)
+}
+
+function updateThisMonthFromActuals() {
+  copyActualsIntoEditMonth(YEAR, editMonth.value, 'actuals')
 }
 
 function exportForQuickBooks() {
@@ -369,7 +428,7 @@ function exportForQuickBooks() {
 
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent"><span class="dot"></span>Live preview</span>
+            <span class="chip accent"><span class="dot"></span>Live preview — Month</span>
             <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s pace looks with your unsaved edits below — the only month with actuals to pace against.</span>
           </div>
           <div class="live-pace-grid">
@@ -381,6 +440,26 @@ function exportForQuickBooks() {
           </div>
           <div class="live-pace-net">
             Net income (draft): <strong :class="liveDraftNetIncome >= 0 ? 'good' : 'critical'">{{ liveDraftNetIncome >= 0 ? '+' : '' }}${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
+          </div>
+        </div>
+
+        <div class="live-pace-card">
+          <div class="live-pace-head">
+            <span class="chip accent"><span class="dot"></span>Live preview — Year</span>
+            <span class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget.</span>
+          </div>
+          <div class="live-pace-grid">
+            <div v-for="card in yearLivePaceCards" :key="card.category" class="live-pace-item">
+              <span class="name">{{ card.label }}</span>
+              <span v-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
+              <template v-else>
+                <span :class="['chip', card.status]"><span class="dot"></span>{{ card.actualPct.toFixed(1) }}% of budget</span>
+                <span v-if="card.monthsBudgeted < 12" class="mini-note">{{ card.monthsBudgeted }}/12 mo budgeted</span>
+              </template>
+            </div>
+          </div>
+          <div class="live-pace-net">
+            Net income (draft): <strong :class="yearLiveNetIncome >= 0 ? 'good' : 'critical'">{{ yearLiveNetIncome >= 0 ? '+' : '' }}${{ Math.round(yearLiveNetIncome).toLocaleString() }}</strong>
           </div>
         </div>
 
@@ -438,8 +517,13 @@ function exportForQuickBooks() {
 
         <div class="action-row">
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
+          <button
+            class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
+            :title="previousMonthLabel ? undefined : 'No prior month in this year'"
+            @click="updateFromLastMonth"
+          >Update this month from {{ previousMonthLabel || '—' }}</button>
+          <button class="action-btn" :disabled="actionStatus === 'running'" @click="updateFromSameMonthLastYear">Update this month from {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR - 1 }}</button>
           <button class="action-btn" :disabled="actionStatus === 'running'" @click="updateThisMonthFromActuals">Update this month from actuals</button>
-          <button class="action-btn" :disabled="actionStatus === 'running'" @click="projectRemainingMonths">Project remaining months from {{ MONTH_NAMES[AS_OF_MONTH - 1] }} actuals</button>
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
         <div v-if="saveStatus === 'saved'" class="chip good"><span class="dot"></span>Saved</div>
@@ -506,6 +590,7 @@ function exportForQuickBooks() {
 .chip.accent { background: var(--surface); color: var(--accent); }
 .live-pace-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; }
 .live-pace-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+.live-pace-item .mini-note { font-size: 10.5px; font-weight: 500; color: var(--ink-3); }
 .live-pace-net { font-size: 12.5px; color: var(--ink-2); }
 .live-pace-net strong.good { color: var(--good); }
 .live-pace-net strong.critical { color: var(--critical); }

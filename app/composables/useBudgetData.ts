@@ -90,6 +90,12 @@ export const CATEGORY_DIRECTION: Record<Exclude<Category, 'other'>, Direction> =
   revenue: 'higher-is-better', cogs: 'higher-is-worse', labor: 'higher-is-worse', opex: 'higher-is-worse'
 }
 
+// Same fraction of the year elapsed as the Dashboard's "197 of 365 days
+// elapsed" sample figure — shared here so every page computing a year-pace
+// expectation (Budget Pace's Year toggle, Edit Budget's year live preview)
+// uses the identical number instead of each hardcoding its own copy.
+export const YEAR_DAY_FRACTION = 197 / 365
+
 export function paceStatus(actualPct: number, expectedPct: number, direction: Direction) {
   const diff = direction === 'higher-is-better' ? expectedPct - actualPct : actualPct - expectedPct
   if (diff <= 0) return 'good'
