@@ -580,6 +580,20 @@ const yearLiveNetIncome = computed(() => netIncome({
 // retail) — those don't scale with revenue the same way and stay
 // manually edited via the category/account rows above.
 //
+// Each group's % is against its OWN matching revenue (Food COGS ÷ Food
+// revenue, Beverage COGS ÷ Beverage revenue) — the standard restaurant
+// "food cost %" / "beverage cost %" definition — not against total
+// revenue (changed 2026-07-28 after the user caught the two producing
+// materially different numbers; total-revenue was the original,
+// non-standard version). Revenue accounts got a matching Food/Beverage
+// accounts.subcategory tag for exactly this (4010 Restaurant Food; 4020
+// Restaurant Beverage and its 4022/4024/4026/4028 children) — scoped to
+// core restaurant sales only, mirroring the COGS side's primary 5010/5100
+// grouping; catering's own Food/Beverage-ish revenue and COGS accounts are
+// deliberately left untagged for now (catering COGS only tags "Food" on
+// one account today, and every catering figure in this budget is $0, so
+// there's nothing to lose by leaving that edge case for later).
+//
 // This uses real budget_targets figures for past months, not the sample
 // actuals figure used elsewhere on this page — this restaurant has been
 // updating its QBO "budget" with real numbers as each month closed (see
@@ -597,18 +611,24 @@ function trailingMonthsWithData(targetMonth: number, count = COGS_TRAILING_WINDO
 }
 
 function cogsGroupPctOverMonths(monthNumbers: number[], group: 'Food' | 'Beverage'): number | null {
-  let groupTotal = 0
-  let revenueTotal = 0
+  let groupCogsTotal = 0
+  let groupRevenueTotal = 0
   for (const m of monthNumbers) {
     const data = monthlyData.value[m - 1]
     if (!data) continue
     for (const acc of data.accounts) {
       if (acc.amount === null) continue
-      if (acc.category === 'revenue') revenueTotal += acc.amount
-      if (acc.category === 'cogs' && acc.subcategory === group) groupTotal += acc.amount
+      if (acc.category === 'revenue' && acc.subcategory === group) groupRevenueTotal += acc.amount
+      if (acc.category === 'cogs' && acc.subcategory === group) groupCogsTotal += acc.amount
     }
   }
-  return revenueTotal > 0 ? groupTotal / revenueTotal : null
+  return groupRevenueTotal > 0 ? groupCogsTotal / groupRevenueTotal : null
+}
+
+function groupRevenueBudget(data: MonthData, group: 'Food' | 'Beverage'): number {
+  return data.accounts
+    .filter(a => a.category === 'revenue' && a.subcategory === group && a.amount !== null)
+    .reduce((sum, a) => sum + (a.amount || 0), 0)
 }
 
 const cogsTrailingMonths = computed(() => trailingMonthsWithData(editMonth.value))
@@ -637,7 +657,9 @@ async function recomputeCogsFromTrailingAverage() {
     for (const group of ['Food', 'Beverage'] as const) {
       const pct = group === 'Food' ? cogsTrailingFoodPct.value : cogsTrailingBeveragePct.value
       if (pct === null) continue
-      const groupBudget = pct * revenueBudget
+      // Group-specific revenue budget, not the whole month's revenue — see
+      // the comment above cogsGroupPctOverMonths for why.
+      const groupBudget = pct * groupRevenueBudget(data, group)
       const accounts = data.accounts.filter(a => a.category === 'cogs' && a.subcategory === group)
       if (accounts.length === 0) continue
       const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
@@ -982,9 +1004,8 @@ function exportForQuickBooks() {
                     <div class="section-note">
                       COGS is variable — it scales with revenue, not a fixed dollar guess. Trailing
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }})</template>:
-                      Food <strong>{{ cogsTrailingFoodPct !== null ? (cogsTrailingFoodPct * 100).toFixed(1) + '%' : 'n/a' }}</strong>,
-                      Beverage <strong>{{ cogsTrailingBeveragePct !== null ? (cogsTrailingBeveragePct * 100).toFixed(1) + '%' : 'n/a' }}</strong>
-                      of revenue.
+                      Food <strong>{{ cogsTrailingFoodPct !== null ? (cogsTrailingFoodPct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Food revenue,
+                      Beverage <strong>{{ cogsTrailingBeveragePct !== null ? (cogsTrailingBeveragePct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Beverage revenue.
                       <button class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
                         Recompute {{ MONTH_NAMES[editMonth - 1] }} COGS from this average
                       </button>
