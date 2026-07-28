@@ -136,11 +136,11 @@ function meterStatusLabel(status: string | null) {
   <div>
     <div v-if="pending" class="state-note">Loading dashboard…</div>
     <div v-else-if="error" class="drill-card">
-      <span class="chip critical"><span class="dot"></span>Couldn't load dashboard data</span>
+      <span class="chip critical">Couldn't load dashboard data</span>
       <span class="quiet-note">{{ error.message }}</span>
     </div>
     <div v-else-if="!data?.asOfDate" class="drill-card">
-      <span class="chip warning"><span class="dot"></span>No synced data yet</span>
+      <span class="chip warning">No synced data yet</span>
       <span class="quiet-note">Run a QuickBooks sync (POST /api/qbo/sync) to pull in P&amp;L data before this page has anything to show.</span>
     </div>
 
@@ -151,7 +151,7 @@ function meterStatusLabel(status: string | null) {
           <div class="sub">{{ formatLongDate(data.asOfDate) }} &middot; reporting through last night's close</div>
         </div>
         <div class="as-of">
-          <span :class="['chip', syncFailed ? 'critical' : 'good']"><span class="dot"></span>{{ syncFailed ? 'Sync failed' : neverSynced ? 'Never synced' : 'Sync healthy' }}</span>
+          <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : neverSynced ? 'Never synced' : 'Sync healthy' }}</span>
           <div class="sync-line">
             <template v-if="syncFailed">Sync failed — showing data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
             <template v-else-if="lastSyncLabel">Last synced from QuickBooks: <strong>{{ lastSyncLabel }}</strong></template>
@@ -167,8 +167,8 @@ function meterStatusLabel(status: string | null) {
           <div class="hero-card anchor">
             <div class="hero-top">
               <span class="period">This Month ({{ MONTH_NAMES[data.asOfMonth - 1] }} 1–{{ data.asOfDay }})</span>
-              <span v-if="monthView?.hasBudget" :class="['chip', monthView.revenue!.status]"><span class="dot"></span>{{ paceLabel(monthView.revenue!.status) }}</span>
-              <span v-else class="chip warning"><span class="dot"></span>No budget set</span>
+              <span v-if="monthView?.hasBudget" :class="['chip', monthView.revenue!.status]">{{ paceLabel(monthView.revenue!.status) }}</span>
+              <span v-else class="chip warning">No budget set</span>
             </div>
             <div :class="['figure', (monthView?.actualNet ?? 0) >= 0 ? 'good' : 'critical']">{{ (monthView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(monthView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
@@ -180,8 +180,8 @@ function meterStatusLabel(status: string | null) {
           <div class="hero-card">
             <div class="hero-top">
               <span class="period">This Year (Jan 1–{{ asOfMonthDayLabel }})</span>
-              <span v-if="yearView?.hasBudget" :class="['chip', yearView.revenue!.status]"><span class="dot"></span>{{ paceLabel(yearView.revenue!.status) }}</span>
-              <span v-else class="chip warning"><span class="dot"></span>No budget set</span>
+              <span v-if="yearView?.hasBudget" :class="['chip', yearView.revenue!.status]">{{ paceLabel(yearView.revenue!.status) }}</span>
+              <span v-else class="chip warning">No budget set</span>
             </div>
             <div :class="['figure', (yearView?.actualNet ?? 0) >= 0 ? 'good' : 'critical']">{{ (yearView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(yearView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
@@ -261,7 +261,7 @@ function meterStatusLabel(status: string | null) {
             <div class="meter-foot">
               <span v-if="m.benchmark">Target: &le;{{ (m.benchmark.targetPct * 100).toFixed(0) }}% of revenue</span>
               <span v-else>No benchmark set</span>
-              <span :class="['chip', m.status ?? 'warning']"><span class="dot"></span>{{ meterStatusLabel(m.status) }}</span>
+              <span :class="['chip', m.status ?? 'warning']">{{ meterStatusLabel(m.status) }}</span>
             </div>
           </div>
         </div>
@@ -283,12 +283,12 @@ function meterStatusLabel(status: string | null) {
           </div>
           <div class="runway-foot">
             <span>$0</span>
-            <span :class="['chip', monthView.revenue!.status]"><span class="dot"></span>{{ monthView.revenue!.paceOfExpectedPct !== null ? `${monthView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
+            <span :class="['chip', monthView.revenue!.status]">{{ monthView.revenue!.paceOfExpectedPct !== null ? `${monthView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
             <span>${{ Math.round(monthView.revenue!.target).toLocaleString() }}</span>
           </div>
         </div>
         <div v-else class="drill-card quiet">
-          <span class="chip warning"><span class="dot"></span>No budget set</span>
+          <span class="chip warning">No budget set</span>
           <span class="quiet-note">Enter a revenue target for this month on the Edit Budget tab to see runway here.</span>
         </div>
 
@@ -303,21 +303,21 @@ function meterStatusLabel(status: string | null) {
           </div>
           <div class="runway-foot">
             <span>$0</span>
-            <span :class="['chip', yearView.revenue!.status]"><span class="dot"></span>{{ yearView.revenue!.paceOfExpectedPct !== null ? `${yearView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
+            <span :class="['chip', yearView.revenue!.status]">{{ yearView.revenue!.paceOfExpectedPct !== null ? `${yearView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
             <span>${{ Math.round(yearView.revenue!.target).toLocaleString() }}</span>
           </div>
         </div>
         <div v-else class="drill-card quiet">
-          <span class="chip warning"><span class="dot"></span>No budget set</span>
+          <span class="chip warning">No budget set</span>
           <span class="quiet-note">Enter revenue targets for {{ data.asOfYear }} on the Edit Budget tab to see runway here.</span>
         </div>
       </section>
 
       <div class="legend">
-        <span class="chip good"><span class="dot"></span>On / ahead of target</span>
-        <span class="chip warning"><span class="dot"></span>Watch</span>
-        <span class="chip serious"><span class="dot"></span>Off pace</span>
-        <span class="chip critical"><span class="dot"></span>Over / under target</span>
+        <span class="chip good">On / ahead of target</span>
+        <span class="chip warning">Watch</span>
+        <span class="chip serious">Off pace</span>
+        <span class="chip critical">Over / under target</span>
       </div>
 
       <footer>

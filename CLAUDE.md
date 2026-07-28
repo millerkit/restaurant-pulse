@@ -666,12 +666,15 @@ whether the selected month is closed, current, or future:
   actuals) was removed entirely in favor of this — overwriting would
   destroy the only thing that makes the comparison meaningful. Variance is
   actual vs. the full month's budget (100% reference).
-- **The current (in-progress) month** gets an added "Actual (to date)"
-  column plus a Variance column, both alongside the still-editable Budget
-  inputs. Variance here is actual vs. an *expected-to-date* figure
-  (budget × how far through the month we are), not the full month's
-  budget — otherwise a partial month always reads as "under," which isn't
-  a meaningful signal this early (raised by the user 2026-07-28).
+- **The current (in-progress) month** gets "Actual (to date)", "Projected",
+  and Variance columns, alongside the still-editable Budget inputs.
+  Projected is a straight-line extrapolation of actual-to-date (scaled up
+  by how far through the month we are); Variance compares that projection
+  against the full month's budget (100% reference), not actual-to-date
+  against an expected-to-date figure — revised 2026-07-28 after the user
+  pointed out a straight actual-vs-expected-to-date comparison doesn't
+  answer "will we land over or under budget," which the Projected column
+  makes possible to compare directly instead.
 - **Future months** are unchanged — plain editable Budget column, no
   actuals fetch at all (nothing to fetch).
 

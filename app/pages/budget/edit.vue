@@ -205,6 +205,22 @@ function categoryActualTotal(cat: Category): number {
   return roots.reduce((sum, a) => sum + computedAccountActual(a), 0)
 }
 
+// Straight-line projection of the current month's final total: actual so
+// far, scaled up by how much of the month (by Tue-Sun operating days, see
+// monthExpectedFraction below) has elapsed. A simple scalar multiply, so
+// projecting a parent's already-summed actual gives the same result as
+// summing each child's own projection — no separate recursive walk needed.
+function projectFromActual(actual: number): number {
+  if (monthExpectedFraction.value <= 0) return actual
+  return actual / monthExpectedFraction.value
+}
+function categoryProjectedTotal(cat: Category): number {
+  return projectFromActual(categoryActualTotal(cat))
+}
+function computedAccountProjected(acc: BudgetAccount): number {
+  return projectFromActual(computedAccountActual(acc))
+}
+
 // Shared budget-vs-actual comparison used by both the per-line-item table
 // and the summary card below, for any category (leaf account rows reuse
 // their own account's category for the good/bad direction). 'other' has no
@@ -212,11 +228,11 @@ function categoryActualTotal(cat: Category): number {
 // neutrally, without a color judgment, same as everywhere else 'other' is
 // excluded from directional benchmarking (e.g. netIncome()).
 //
-// `reference` is what actual is judged against — the full month's budget
-// for a closed month (reference === budget, so referencePct is always
-// 100%), or an expected-to-date figure for the current month (see
-// monthExpectedFraction below) so a partial month isn't just compared
-// against the whole month's number and flagged "under" by default.
+// `reference` defaults to `budget` (so referencePct is always 100%) — used
+// as-is for a closed month's real final actual, and for the current
+// month's *projected* total (see categoryProjectedTotal/
+// computedAccountProjected above), which stands in for "the final number"
+// the same way a closed month's actual does.
 function budgetActualVariance(category: Category, budget: number, actual: number, reference: number = budget) {
   if (!budget) return { kind: 'no-budget' as const, budget, actual }
   if (category === 'other') return { kind: 'neutral' as const, budget, actual, delta: actual - reference }
@@ -436,27 +452,31 @@ const accountVarianceById = computed(() => {
 })
 
 // Same idea for the current (in-progress) month, but judged against the
-// expected-to-date figure (budget × monthExpectedFraction) rather than the
-// full month's budget — otherwise a partial month would always show as
-// "under," which isn't a meaningful variance signal this early.
-const categoryVarianceToDateByCat = computed(() => {
+// *projected* month-end total (see categoryProjectedTotal/
+// computedAccountProjected above) rather than actual-to-date against an
+// expected-to-date figure — this answers "at this pace, will we land over
+// or under budget by month's end," which is what the Projected column is
+// showing right next to it. reference defaults to budget (100%), same as
+// the closed-month case, since projected already stands in for "the final
+// number" the way a closed month's real actual does.
+const categoryProjectedVarianceByCat = computed(() => {
   const map = new Map<Category, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
   if (!selectedMonthIsCurrent.value) return map
   for (const cat of CATEGORIES) {
     const budget = categoryComputedTotal(cat)
     map.set(cat, selectedMonthHasActuals.value
-      ? budgetActualVariance(cat, budget, categoryActualTotal(cat), budget * monthExpectedFraction.value)
+      ? budgetActualVariance(cat, budget, categoryProjectedTotal(cat))
       : { kind: 'no-actuals' })
   }
   return map
 })
-const accountVarianceToDateById = computed(() => {
+const accountProjectedVarianceById = computed(() => {
   const map = new Map<number, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
   if (!selectedMonthIsCurrent.value) return map
   for (const acc of editMonthData.value?.accounts || []) {
     const budget = computedAccountAmount(acc)
     map.set(acc.accountId, selectedMonthHasActuals.value
-      ? budgetActualVariance(acc.category, budget, computedAccountActual(acc), budget * monthExpectedFraction.value)
+      ? budgetActualVariance(acc.category, budget, computedAccountProjected(acc))
       : { kind: 'no-actuals' })
   }
   return map
@@ -739,7 +759,7 @@ function exportForQuickBooks() {
         <div class="sub">Edit any month's budget, update from actuals, or export for QuickBooks &middot; {{ YEAR }}</div>
       </div>
       <div class="as-of">
-        <span :class="['chip', syncFailed ? 'critical' : 'good']"><span class="dot"></span>{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
+        <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
         <div class="sync-line">
           <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
           <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
@@ -749,7 +769,7 @@ function exportForQuickBooks() {
     </header>
 
     <div v-if="loadError" class="drill-card">
-      <span class="chip critical"><span class="dot"></span>Couldn't load budget data</span>
+      <span class="chip critical">Couldn't load budget data</span>
       <span class="quiet-note">{{ loadError }}</span>
     </div>
 
@@ -757,14 +777,14 @@ function exportForQuickBooks() {
       <section>
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent"><span class="dot"></span>Live preview — Month</span>
+            <span class="chip accent">Live preview — Month</span>
             <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s pace looks with your unsaved edits below — the only month with actuals to pace against.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in livePaceCards" :key="card.category" class="live-pace-item">
               <span class="name">{{ card.label }}</span>
-              <span v-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
-              <span v-else :class="['chip', card.status]"><span class="dot"></span>{{ card.actualPct.toFixed(1) }}% of budget</span>
+              <span v-if="card.noBudget" class="chip warning">No budget</span>
+              <span v-else :class="['chip', card.status]">{{ card.actualPct.toFixed(1) }}% of budget</span>
             </div>
           </div>
           <div class="live-pace-net">
@@ -777,15 +797,15 @@ function exportForQuickBooks() {
 
         <div v-else-if="monthActualVsBudgetCards" class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent"><span class="dot"></span>Actual vs Budget — {{ MONTH_NAMES[editMonth - 1] }}</span>
+            <span class="chip accent">Actual vs Budget — {{ MONTH_NAMES[editMonth - 1] }}</span>
             <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }} actually finished against the budget shown below.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in monthActualVsBudgetCards" :key="card.category" class="live-pace-item">
               <span class="name">{{ card.label }}</span>
-              <span v-if="card.noActuals" class="chip warning"><span class="dot"></span>No actual data synced</span>
-              <span v-else-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
-              <span v-else :class="['chip', card.status]"><span class="dot"></span>{{ card.status === 'good' ? '✓' : '▲' }} {{ card.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.delta)).toLocaleString() }} vs budget</span>
+              <span v-if="card.noActuals" class="chip warning">No actual data synced</span>
+              <span v-else-if="card.noBudget" class="chip warning">No budget</span>
+              <span v-else :class="['chip', card.status]">{{ card.status === 'good' ? '✓' : (card.delta >= 0 ? '▲' : '▼') }} {{ card.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.delta)).toLocaleString() }} vs budget</span>
             </div>
           </div>
           <div v-if="monthActualNetIncome !== null" class="live-pace-net">
@@ -799,17 +819,17 @@ function exportForQuickBooks() {
 
         <div class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent"><span class="dot"></span>Live preview — Year</span>
+            <span class="chip accent">Live preview — Year</span>
             <span v-if="viewingAnnualTotal" class="quiet-note">How the full year paces against every month's last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
             <span v-else class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in yearLivePaceCards" :key="card.category" class="live-pace-item">
               <span class="name">{{ card.label }}</span>
-              <span v-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
-              <span v-else-if="card.noActuals" class="chip warning"><span class="dot"></span>No actual data synced yet</span>
+              <span v-if="card.noBudget" class="chip warning">No budget</span>
+              <span v-else-if="card.noActuals" class="chip warning">No actual data synced yet</span>
               <template v-else>
-                <span :class="['chip', card.status]"><span class="dot"></span>{{ card.actualPct.toFixed(1) }}% of budget</span>
+                <span :class="['chip', card.status]">{{ card.actualPct.toFixed(1) }}% of budget</span>
                 <span v-if="card.monthsBudgeted < 12" class="mini-note">{{ card.monthsBudgeted }}/12 mo budgeted</span>
                 <span v-if="yearActualsMonthsWithData < monthsElapsed" class="mini-note">{{ yearActualsMonthsWithData }}/{{ monthsElapsed }} mo of actuals synced</span>
               </template>
@@ -821,10 +841,10 @@ function exportForQuickBooks() {
         </div>
 
         <div class="legend">
-          <span class="chip good"><span class="dot"></span>On / ahead of budget</span>
-          <span class="chip warning"><span class="dot"></span>Watch</span>
-          <span class="chip serious"><span class="dot"></span>Off pace</span>
-          <span class="chip critical"><span class="dot"></span>Over / under budget</span>
+          <span class="chip good">On / ahead of budget</span>
+          <span class="chip warning">Watch</span>
+          <span class="chip serious">Off pace</span>
+          <span class="chip critical">Over / under budget</span>
         </div>
 
         <div class="pl-table-card">
@@ -870,6 +890,7 @@ function exportForQuickBooks() {
                 <th scope="col"></th>
                 <th scope="col">Budget</th>
                 <th scope="col">Actual (to date)</th>
+                <th scope="col">Projected</th>
                 <th scope="col">Variance</th>
               </tr>
             </thead>
@@ -911,11 +932,15 @@ function exportForQuickBooks() {
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                     <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
                   </td>
+                  <td v-if="selectedMonthIsCurrent">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(categoryProjectedTotal(cat)).toLocaleString() }}</span>
+                  </td>
                   <td v-if="selectedMonthIsCurrent" class="variance-cell">
-                    <span v-if="categoryVarianceToDateByCat.get(cat)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
-                    <span v-else-if="categoryVarianceToDateByCat.get(cat)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
-                    <span v-else-if="categoryVarianceToDateByCat.get(cat)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ categoryVarianceToDateByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceToDateByCat.get(cat).delta)).toLocaleString() }}</span>
-                    <span v-else :class="['chip', categoryVarianceToDateByCat.get(cat).status]"><span class="dot"></span>{{ categoryVarianceToDateByCat.get(cat).status === 'good' ? '✓' : '▲' }} {{ categoryVarianceToDateByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceToDateByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
+                    <span v-else-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                    <span v-else-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral">{{ categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryProjectedVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['chip', categoryProjectedVarianceByCat.get(cat).status]">{{ categoryProjectedVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryProjectedVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
                   </td>
                 </tr>
                 <template v-if="expandedCategory === cat">
@@ -934,16 +959,20 @@ function exportForQuickBooks() {
                       <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                       <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
                     </td>
+                    <td v-if="selectedMonthIsCurrent">
+                      <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountProjected(acc)).toLocaleString() }}</span>
+                    </td>
                     <td v-if="selectedMonthIsCurrent" class="variance-cell">
-                      <span v-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
-                      <span v-else-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
-                      <span v-else-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ accountVarianceToDateById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceToDateById.get(acc.accountId).delta)).toLocaleString() }}</span>
-                      <span v-else :class="['chip', accountVarianceToDateById.get(acc.accountId).status]"><span class="dot"></span>{{ accountVarianceToDateById.get(acc.accountId).status === 'good' ? '✓' : '▲' }} {{ accountVarianceToDateById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceToDateById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
+                      <span v-else-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                      <span v-else-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral">{{ accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountProjectedVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['chip', accountProjectedVarianceById.get(acc.accountId).status]">{{ accountProjectedVarianceById.get(acc.accountId).status === 'good' ? '✓' : (accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '▲' : '▼') }} {{ accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountProjectedVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
                     </td>
                   </tr>
                 </template>
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
-                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
+                  <td :colspan="selectedMonthIsCurrent ? 5 : 2">
                     <div class="section-note">
                       COGS is variable — it scales with revenue, not a fixed dollar guess. Trailing
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }})</template>:
@@ -953,8 +982,8 @@ function exportForQuickBooks() {
                       <button class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
                         Recompute {{ MONTH_NAMES[editMonth - 1] }} COGS from this average
                       </button>
-                      <span v-if="cogsRecomputeStatus === 'done'" class="chip good"><span class="dot"></span>{{ cogsRecomputeMessage }}</span>
-                      <span v-if="cogsRecomputeStatus === 'error'" class="chip warning"><span class="dot"></span>{{ cogsRecomputeMessage }}</span>
+                      <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
+                      <span v-if="cogsRecomputeStatus === 'error'" class="chip warning">{{ cogsRecomputeMessage }}</span>
                     </div>
                   </td>
                 </tr>
@@ -978,10 +1007,10 @@ function exportForQuickBooks() {
                     <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
                   </td>
                   <td class="variance-cell">
-                    <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
-                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
-                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
-                    <span v-else :class="['chip', categoryVarianceByCat.get(cat).status]"><span class="dot"></span>{{ categoryVarianceByCat.get(cat).status === 'good' ? '✓' : '▲' }} {{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
+                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral">{{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['chip', categoryVarianceByCat.get(cat).status]">{{ categoryVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
                   </td>
                 </tr>
                 <template v-if="expandedCategory === cat">
@@ -995,10 +1024,10 @@ function exportForQuickBooks() {
                       <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
                     </td>
                     <td class="variance-cell">
-                      <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
-                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
-                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
-                      <span v-else :class="['chip', accountVarianceById.get(acc.accountId).status]"><span class="dot"></span>{{ accountVarianceById.get(acc.accountId).status === 'good' ? '✓' : '▲' }} {{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
+                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral">{{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['chip', accountVarianceById.get(acc.accountId).status]">{{ accountVarianceById.get(acc.accountId).status === 'good' ? '✓' : (accountVarianceById.get(acc.accountId).delta >= 0 ? '▲' : '▼') }} {{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
                     </td>
                   </tr>
                 </template>
@@ -1024,10 +1053,10 @@ function exportForQuickBooks() {
         <div v-else class="action-row">
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
-        <div v-if="saveStatus === 'saved'" class="chip good"><span class="dot"></span>Saved</div>
-        <div v-if="saveStatus === 'error'" class="chip critical"><span class="dot"></span>{{ saveMessage }}</div>
-        <div v-if="actionStatus === 'done'" class="chip good"><span class="dot"></span>{{ actionMessage }}</div>
-        <div v-if="actionStatus === 'error'" class="chip warning"><span class="dot"></span>{{ actionMessage }}</div>
+        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+        <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
+        <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
       </section>
     </template>
 
@@ -1171,7 +1200,6 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .variance-cell { min-width: 120px; }
 .chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
-.chip.neutral .dot { background: var(--ink-3); }
 
 .edit-table tr.cogs-avg-row td { padding: 10px 16px 14px; }
 .edit-table tr.cogs-avg-row .section-note {

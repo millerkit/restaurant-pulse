@@ -201,15 +201,10 @@ section {
   border-radius: 100px;
   white-space: nowrap;
 }
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .chip.good      { color: var(--good);     background: var(--good-wash); }
-.chip.good .dot      { background: var(--good); }
 .chip.warning   { color: var(--warning);  background: var(--warning-wash); }
-.chip.warning .dot   { background: var(--warning); }
 .chip.serious   { color: var(--serious);  background: var(--serious-wash); }
-.chip.serious .dot   { background: var(--serious); }
 .chip.critical  { color: var(--critical); background: var(--critical-wash); }
-.chip.critical .dot  { background: var(--critical); }
 
 /* ---------- legend / footer ---------- */
 .legend {

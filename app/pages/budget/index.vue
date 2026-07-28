@@ -149,7 +149,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
         <div class="sub">Are we going to earn enough to hit budget? &middot; {{ YEAR }}</div>
       </div>
       <div class="as-of">
-        <span :class="['chip', syncFailed ? 'critical' : 'good']"><span class="dot"></span>{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
+        <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
         <div class="sync-line">
           <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
           <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
@@ -159,7 +159,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
     </header>
 
     <div v-if="loadError" class="drill-card">
-      <span class="chip critical"><span class="dot"></span>Couldn't load budget data</span>
+      <span class="chip critical">Couldn't load budget data</span>
       <span class="quiet-note">{{ loadError }}</span>
     </div>
 
@@ -179,14 +179,14 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
             <div class="hero-top">
               <span class="period">Net Income — {{ selectedPeriod === 'month' ? 'This Month' : 'This Year' }}</span>
               <span :class="['chip', actualNetIncome >= budgetNetIncome ? 'good' : 'serious']">
-                <span class="dot"></span>{{ actualNetIncome >= budgetNetIncome ? 'On/ahead of budget' : 'Behind budget' }}
+                {{ actualNetIncome >= budgetNetIncome ? 'On/ahead of budget' : 'Behind budget' }}
               </span>
             </div>
             <div :class="['figure', actualNetIncome >= 0 ? 'good' : 'critical']">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
             <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex, derived, not entered directly)</div>
             <div v-if="selectedPeriod === 'month'" class="caption projection-line">
               Projected month-end (at this pace): <strong :class="projectedNetIncome >= 0 ? 'good' : 'critical'">{{ projectedNetIncome >= 0 ? '+' : '' }}${{ Math.round(projectedNetIncome).toLocaleString() }}</strong>
-              <span :class="['chip', projectedNetIncome >= budgetNetIncome ? 'good' : 'serious']"><span class="dot"></span>{{ projectedNetIncome >= budgetNetIncome ? '✓ on pace to hit budget' : '▲ projected to miss budget' }}</span>
+              <span :class="['chip', projectedNetIncome >= budgetNetIncome ? 'good' : 'serious']">{{ projectedNetIncome >= budgetNetIncome ? '✓ on pace to hit budget' : '▲ projected to miss budget' }}</span>
             </div>
           </div>
         </div>
@@ -195,7 +195,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
           <div v-for="card in paceCards" :key="card.category" class="runway-card">
             <template v-if="card.noBudget">
               <div class="runway-head"><span class="name">{{ card.label }}</span></div>
-              <span class="chip warning"><span class="dot"></span>No budget set for this {{ selectedPeriod }}</span>
+              <span class="chip warning">No budget set for this {{ selectedPeriod }}</span>
             </template>
             <template v-else>
               <div class="runway-head">
@@ -208,12 +208,12 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
               </div>
               <div class="runway-foot">
                 <span>$0</span>
-                <span :class="['chip', card.status]"><span class="dot"></span>{{ card.paceLabel }}</span>
+                <span :class="['chip', card.status]">{{ card.paceLabel }}</span>
                 <span>${{ card.budget.toLocaleString() }}</span>
               </div>
               <div v-if="card.projection" class="section-note projection-note">
                 Projected month-end: <strong>${{ Math.round(card.projection.projected).toLocaleString() }}</strong>
-                <span :class="['chip', card.projection.projectedStatus]"><span class="dot"></span>{{ card.projection.projectedStatus === 'good' ? '✓' : '▲' }} {{ card.projection.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.projection.delta)).toLocaleString() }} vs budget</span>
+                <span :class="['chip', card.projection.projectedStatus]">{{ card.projection.projectedStatus === 'good' ? '✓' : (card.projection.delta >= 0 ? '▲' : '▼') }} {{ card.projection.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.projection.delta)).toLocaleString() }} vs budget</span>
               </div>
               <div v-if="selectedPeriod === 'year' && card.monthsBudgeted < 12" class="section-note">Only {{ card.monthsBudgeted }} of 12 months budgeted so far — edit them on the Edit Budget tab</div>
               <div v-if="card.category === 'labor' && laborExOwnerComp" class="section-note">
@@ -250,17 +250,17 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
           </div>
         </div>
         <div v-else class="drill-card quiet">
-          <span class="chip good"><span class="dot"></span>Nothing unusual</span>
+          <span class="chip good">Nothing unusual</span>
           <span class="quiet-note">No cost category is running ahead of budget pace this {{ selectedPeriod }}.</span>
         </div>
       </section>
     </template>
 
     <div class="legend">
-      <span class="chip good"><span class="dot"></span>On / ahead of budget</span>
-      <span class="chip warning"><span class="dot"></span>Watch</span>
-      <span class="chip serious"><span class="dot"></span>Off pace</span>
-      <span class="chip critical"><span class="dot"></span>Over / under budget</span>
+      <span class="chip good">On / ahead of budget</span>
+      <span class="chip warning">Watch</span>
+      <span class="chip serious">Off pace</span>
+      <span class="chip critical">Over / under budget</span>
     </div>
 
     <footer>

@@ -71,7 +71,7 @@ function pctOfOpexGroup(row: OpexRow) {
         <div class="sub">Week, month, and year to date &middot; reporting through last night's close (Thu, Jul 16)</div>
       </div>
       <div class="as-of">
-        <span :class="['chip', syncFailed ? 'critical' : 'good']"><span class="dot"></span>{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
+        <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
         <div class="sync-line">
           <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
           <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
@@ -166,7 +166,7 @@ function pctOfOpexGroup(row: OpexRow) {
         </div>
       </div>
       <div v-else class="drill-card quiet">
-        <span class="chip good"><span class="dot"></span>Nothing unusual</span>
+        <span class="chip good">Nothing unusual</span>
         <span class="quiet-note">Labor is within target this month, and no single cost driver stands out.</span>
       </div>
     </section>
@@ -205,7 +205,7 @@ function pctOfOpexGroup(row: OpexRow) {
             <span class="rank-group-label">Variable / discretionary</span>
             <span class="rank-group-total">
               ${{ variableOpexTotal.toLocaleString() }} &middot; {{ variableOpexPct.toFixed(1) }}% of rev.
-              <span :class="['chip', variableOpexOffTarget ? 'serious' : 'good']"><span class="dot"></span>{{ variableOpexOffTarget ? 'Off target' : 'On target' }}</span>
+              <span :class="['chip', variableOpexOffTarget ? 'serious' : 'good']">{{ variableOpexOffTarget ? 'Off target' : 'On target' }}</span>
             </span>
           </div>
           <div v-for="row in variableOpexRows" :key="row.label" class="rank-row">
@@ -216,7 +216,7 @@ function pctOfOpexGroup(row: OpexRow) {
         </div>
       </div>
       <div v-else class="drill-card quiet">
-        <span class="chip good"><span class="dot"></span>Nothing unusual</span>
+        <span class="chip good">Nothing unusual</span>
         <span class="quiet-note">Variable/discretionary opex is within target this month, and no single cost driver stands out.</span>
       </div>
     </section>
@@ -243,22 +243,22 @@ function pctOfOpexGroup(row: OpexRow) {
             <div class="date">{{ day.date }}<span class="sub">vs. {{ day.vsDate }}<sup v-if="day.vsFootnote">*</sup></span></div>
             <div class="rank-track"><div :class="['rank-fill', day.barWidth > 75 ? 'critical' : 'serious']" :style="{ width: day.barWidth + '%' }"></div></div>
             <div class="amounts"><strong>${{ day.actual.toLocaleString() }}</strong> vs. ${{ day.comparison.toLocaleString() }}</div>
-            <div :class="['chip', day.barWidth > 75 ? 'critical' : 'serious']"><span class="dot"></span>▼ {{ Math.abs(day.deltaPct).toFixed(1) }}%</div>
+            <div :class="['chip', day.barWidth > 75 ? 'critical' : 'serious']">▼ {{ Math.abs(day.deltaPct).toFixed(1) }}%</div>
           </div>
         </div>
         <div v-if="shortfallDays.some(d => d.vsFootnote)" class="section-note">* same weekday-position last month (3rd Sunday), not a fixed day-count offset</div>
       </div>
       <div v-else class="drill-card quiet">
-        <span class="chip good"><span class="dot"></span>Nothing unusual</span>
+        <span class="chip good">Nothing unusual</span>
         <span class="quiet-note">All days this month met or beat their same-weekday comparison.</span>
       </div>
     </section>
 
     <div class="legend">
-      <span class="chip good"><span class="dot"></span>Within benchmark</span>
-      <span class="chip warning"><span class="dot"></span>Watch</span>
-      <span class="chip serious"><span class="dot"></span>Off benchmark</span>
-      <span class="chip critical"><span class="dot"></span>Over benchmark</span>
+      <span class="chip good">Within benchmark</span>
+      <span class="chip warning">Watch</span>
+      <span class="chip serious">Off benchmark</span>
+      <span class="chip critical">Over benchmark</span>
     </div>
 
     <footer>
