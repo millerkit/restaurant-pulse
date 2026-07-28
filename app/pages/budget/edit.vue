@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, type MonthData, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, sampleActuals, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, type MonthData, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -353,13 +353,19 @@ function accountVisible(acc: BudgetAccount): boolean {
 // anything.
 const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === AS_OF_MONTH)
 const livePaceExpectedPct = computed(() => (AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)) * 100)
+// Real actual-to-date from daily_line_items (selectedMonthAccountActuals),
+// not sampleActuals — matches the per-line-item table below and the Year
+// live preview card, both already wired off real data. noActuals mirrors
+// monthActualVsBudgetCards' own selectedMonthHasActuals gate below, so a
+// not-yet-synced month reads as "no data" rather than a misleading $0.
 const livePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
-  const actual = sampleActuals.month[cat]
   const budget = categoryComputedTotal(cat)
-  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const, actual, budget }
+  if (!selectedMonthHasActuals.value) return { category: cat, label: CATEGORY_LABEL[cat], noActuals: true as const, noBudget: false as const, actual: 0, budget }
+  const actual = categoryActualTotal(cat)
+  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noActuals: false as const, noBudget: true as const, actual, budget }
   const actualPct = (actual / budget) * 100
   const status = paceStatus(actualPct, livePaceExpectedPct.value, CATEGORY_DIRECTION[cat])
-  return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, actual, budget, actualPct, status }
+  return { category: cat, label: CATEGORY_LABEL[cat], noActuals: false as const, noBudget: false as const, actual, budget, actualPct, status }
 }))
 const liveDraftNetIncome = computed(() => netIncome({
   revenue: categoryComputedTotal('revenue'),
@@ -387,26 +393,18 @@ const liveDraftNetIncome = computed(() => netIncome({
 const selectedMonthClosed = computed(() => !viewingAnnualTotal.value && isMonthClosed(YEAR, editMonth.value))
 const selectedMonthIsCurrent = computed(() => !viewingAnnualTotal.value && isMonthCurrent(YEAR, editMonth.value))
 
-// Jan-Jul 2026's budget_targets aren't independent plans — they're this
+// Jan-Jun 2026's budget_targets aren't independent plans — they're this
 // restaurant's own actual results, typed into QBO's budget object as each
 // month closed (see CLAUDE.md's Budget tab section), which is why the new
 // Actual vs Budget columns above will always show ~$0 variance for these
-// months specifically. Jun and Jul were additionally rounded to the
-// nearest $100 (2026-07-28, at the user's request, purely to make the
-// closed-month table read like a normal rounded budget instead of showing
-// actuals down to the penny) — Jan-May are still the exact-cent figures
-// from the original xlsx import. Hardcoded to this known historical
-// window rather than a general "is this budget actuals-derived" flag,
-// since nothing in the schema distinguishes the two today.
+// months specifically. Jun was additionally rounded to the nearest $100
+// (2026-07-28, at the user's request, purely to make the closed-month
+// table read like a normal rounded budget instead of showing actuals down
+// to the penny) — Jan-May are still the exact-cent figures from the
+// original xlsx import. Hardcoded to this known historical window rather
+// than a general "is this budget actuals-derived" flag, since nothing in
+// the schema distinguishes the two today.
 const budgetIsActualsDerived = computed(() => !viewingAnnualTotal.value && editMonth.value <= 6)
-// July is a mix, not a clean "actuals" or "budget" month: Food/Beer/
-// Liquor/Wine/Non-Alcoholic revenue got a real forward-looking budget from
-// a CSV (2026-07-28), but everything else in July — COGS, Labor, Opex, and
-// the rest of revenue — is still the rounded actuals carried over from
-// before that. Gets its own note rather than folding into
-// budgetIsActualsDerived above, since "somewhat budgeted" isn't the same
-// claim as "this is actuals, not a plan."
-const julyIsPartiallyBudgeted = computed(() => !viewingAnnualTotal.value && editMonth.value === 7)
 
 const monthActualVsBudgetCards = computed(() => {
   if (!selectedMonthClosed.value) return null
@@ -792,7 +790,6 @@ function exportForQuickBooks() {
           <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
           <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
         </div>
-        <span class="sample-tag">Actuals are sample data — budgets are real</span>
       </div>
     </header>
 
@@ -811,15 +808,13 @@ function exportForQuickBooks() {
           <div class="live-pace-grid">
             <div v-for="card in livePaceCards" :key="card.category" class="live-pace-item">
               <span class="name">{{ card.label }}</span>
-              <span v-if="card.noBudget" class="chip warning">No budget</span>
+              <span v-if="card.noActuals" class="chip warning">No actual data synced</span>
+              <span v-else-if="card.noBudget" class="chip warning">No budget</span>
               <span v-else :class="['chip', card.status]">{{ card.actualPct.toFixed(1) }}% of budget</span>
             </div>
           </div>
           <div class="live-pace-net">
             Net income (draft): <strong :class="liveDraftNetIncome >= 0 ? 'good' : 'critical'">{{ liveDraftNetIncome >= 0 ? '+' : '' }}${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
-          </div>
-          <div v-if="julyIsPartiallyBudgeted" class="quiet-note actuals-derived-note">
-            {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR }} is somewhat budgeted: Food, Beer, Liquor, Wine, and Non-Alcoholic revenue now carry a real forward-looking budget. Everything else this month — COGS, Labor, Opex, and the rest of revenue — is still {{ MONTH_NAMES[editMonth - 1] }}'s rounded actuals carried over, not an independently-set target.
           </div>
         </div>
 
@@ -1088,7 +1083,7 @@ function exportForQuickBooks() {
     </template>
 
     <footer>
-      <span>Actuals: illustrative sample data &middot; Budgets: real data imported from QuickBooks' budget export</span>
+      <span>Actuals: real data synced from QuickBooks (daily_line_items) &middot; Budgets: real data imported from QuickBooks' budget export</span>
       <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
     </footer>
   </div>
