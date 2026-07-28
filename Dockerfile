@@ -19,12 +19,17 @@ WORKDIR /app
 
 # node_modules (not just .output) is included so `npm run db:init` can still
 # be run inside the container via `fly ssh console` when the data volume is
-# first provisioned.
+# first provisioned. server/ is included too — scripts/backfill-qbo-pl.mjs
+# imports server/utils/qbo-pl-parse.mjs directly (it runs via plain `node`,
+# not through Nitro, so it can't reach that file through the bundled
+# .output — see that script's own comment for why it can't just import from
+# .output instead).
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/schema.sql ./schema.sql
 COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/server ./server
 
 ENV NODE_ENV=production
 EXPOSE 3000
