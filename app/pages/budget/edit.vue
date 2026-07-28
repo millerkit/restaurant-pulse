@@ -48,7 +48,13 @@ const annualMonthData = computed<MonthData | null>(() => {
 })
 
 const editMonthData = computed(() => viewingAnnualTotal.value ? annualMonthData.value : monthlyData.value[editMonth.value - 1])
-const expandedCategory = ref<Category | null>(null)
+// A Set rather than a single Category, so expanding COGS doesn't collapse
+// Revenue — each category expands/collapses independently.
+const expandedCategories = ref<Set<Category>>(new Set())
+function toggleCategoryExpanded(cat: Category) {
+  if (expandedCategories.value.has(cat)) expandedCategories.value.delete(cat)
+  else expandedCategories.value.add(cat)
+}
 const editableAccountAmounts = ref<Record<number, string>>({})
 
 // Whole-dollar, comma-formatted display — native <input type="number">
@@ -903,13 +909,13 @@ function exportForQuickBooks() {
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
                   <th scope="row">
-                    <button class="expand-toggle" @click="expandedCategory = expandedCategory === cat ? null : cat">
-                      {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
+                    <button class="expand-toggle" @click="toggleCategoryExpanded(cat)">
+                      {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
                   <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                 </tr>
-                <template v-if="expandedCategory === cat">
+                <template v-if="expandedCategories.has(cat)">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
@@ -923,8 +929,8 @@ function exportForQuickBooks() {
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
                   <th scope="row">
-                    <button class="expand-toggle" @click="expandedCategory = expandedCategory === cat ? null : cat">
-                      {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
+                    <button class="expand-toggle" @click="toggleCategoryExpanded(cat)">
+                      {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
                   <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
@@ -943,7 +949,7 @@ function exportForQuickBooks() {
                     <span v-else :class="['chip', categoryProjectedVarianceByCat.get(cat).status]">{{ categoryProjectedVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryProjectedVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
                   </td>
                 </tr>
-                <template v-if="expandedCategory === cat">
+                <template v-if="expandedCategories.has(cat)">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
@@ -997,8 +1003,8 @@ function exportForQuickBooks() {
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
                   <th scope="row">
-                    <button class="expand-toggle" @click="expandedCategory = expandedCategory === cat ? null : cat">
-                      {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
+                    <button class="expand-toggle" @click="toggleCategoryExpanded(cat)">
+                      {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
                   <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
@@ -1013,7 +1019,7 @@ function exportForQuickBooks() {
                     <span v-else :class="['chip', categoryVarianceByCat.get(cat).status]">{{ categoryVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
                   </td>
                 </tr>
-                <template v-if="expandedCategory === cat">
+                <template v-if="expandedCategories.has(cat)">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
