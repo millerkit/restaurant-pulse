@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, sampleActuals, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
 const { lastSync, syncFailed } = useSyncStatus()
 const { monthlyData, loadError, loadYear } = useBudgetYear()
+const { monthlyActuals } = useActualsYear()
 
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
@@ -23,6 +24,37 @@ watch(editMonthData, (data) => {
   editableAccountAmounts.value = {}
   for (const acc of data.accounts) {
     if (acc.amount !== null) editableAccountAmounts.value[acc.accountId] = acc.amount.toFixed(2)
+  }
+}, { immediate: true })
+
+// Real per-account actuals for whichever month is selected, fetched lazily
+// (not eagerly for all 12 months like budget_targets above) — only a closed
+// or current month ever renders this, so there's nothing to fetch for the
+// common case of browsing a future month. For the current (in-progress)
+// month this comes back as a partial, to-date total — actuals-by-account's
+// own date range is just "the whole month," but daily_line_items itself
+// only ever has rows through whatever the sync has actually reached, so no
+// separate "to-date" query is needed; the same fetch naturally returns
+// less for a month that isn't over yet. Empty accounts list means the
+// month hasn't synced yet, not that everything was $0 — see
+// actuals-by-account.get.ts.
+const selectedMonthAccountActuals = ref<Record<number, number>>({})
+const selectedMonthHasActuals = ref(false)
+watch(editMonth, async (month) => {
+  if (!isMonthClosed(YEAR, month) && !isMonthCurrent(YEAR, month)) {
+    selectedMonthAccountActuals.value = {}
+    selectedMonthHasActuals.value = false
+    return
+  }
+  try {
+    const result = await $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+    const map: Record<number, number> = {}
+    for (const a of result.accounts) map[a.accountId] = a.amount
+    selectedMonthAccountActuals.value = map
+    selectedMonthHasActuals.value = result.accounts.length > 0
+  } catch {
+    selectedMonthAccountActuals.value = {}
+    selectedMonthHasActuals.value = false
   }
 }, { immediate: true })
 
@@ -92,6 +124,75 @@ function categoryComputedTotal(cat: Category): number {
   return roots.reduce((sum, a) => sum + computedAccountAmount(a), 0)
 }
 
+// Actual-side mirror of computedAccountAmount/categoryComputedTotal above —
+// same recursive parent-sums-its-children shape, but reading from
+// selectedMonthAccountActuals (real daily_line_items) instead of the
+// editable budget draft. A leaf account absent from that map is a real $0,
+// not unknown — selectedMonthHasActuals is what distinguishes "this month
+// hasn't synced" from "this account had no activity."
+function computedAccountActual(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return selectedMonthAccountActuals.value[acc.accountId] || 0
+  return children.reduce((sum, c) => sum + computedAccountActual(c), 0)
+}
+
+function categoryActualTotal(cat: Category): number {
+  const roots = (editMonthData.value?.accounts || []).filter(a => a.category === cat && a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + computedAccountActual(a), 0)
+}
+
+// Shared budget-vs-actual comparison used by both the per-line-item table
+// and the summary card below, for any category (leaf account rows reuse
+// their own account's category for the good/bad direction). 'other' has no
+// declared direction (see CATEGORY_DIRECTION) — its variance is shown
+// neutrally, without a color judgment, same as everywhere else 'other' is
+// excluded from directional benchmarking (e.g. netIncome()).
+//
+// `reference` is what actual is judged against — the full month's budget
+// for a closed month (reference === budget, so referencePct is always
+// 100%), or an expected-to-date figure for the current month (see
+// monthExpectedFraction below) so a partial month isn't just compared
+// against the whole month's number and flagged "under" by default.
+function budgetActualVariance(category: Category, budget: number, actual: number, reference: number = budget) {
+  if (!budget) return { kind: 'no-budget' as const, budget, actual }
+  if (category === 'other') return { kind: 'neutral' as const, budget, actual, delta: actual - reference }
+  const actualPct = (actual / budget) * 100
+  const referencePct = (reference / budget) * 100
+  const status = paceStatus(actualPct, referencePct, CATEGORY_DIRECTION[category])
+  return { kind: 'value' as const, budget, actual, delta: actual - reference, status }
+}
+
+// Tue-Sun operating-day fraction of the current month elapsed so far. A
+// plain calendar-day fraction (e.g. "16 of 31 days") overstates how far
+// through the month a restaurant's business actually is, since Urban
+// Hearth is closed Mondays (confirmed by the user, not assumed) — every
+// closed day counts toward elapsed calendar time but contributes zero
+// expected revenue or spend. Counts operating days only, for both the
+// numerator (today inclusive) and the denominator (the whole month).
+// Approximates "hours" as equal-weighted operating days rather than actual
+// per-day hours, since this app has no real operating-hours data to weight
+// by — worth revisiting if that ever becomes available.
+function isOperatingDay(date: Date): boolean {
+  return date.getDay() !== 1 // Date#getDay(): 0=Sun...6=Sat, 1=Mon is the closed day
+}
+function countOperatingDays(start: Date, end: Date): number {
+  let count = 0
+  const d = new Date(start)
+  while (d <= end) {
+    if (isOperatingDay(d)) count++
+    d.setDate(d.getDate() + 1)
+  }
+  return count
+}
+const monthExpectedFraction = computed(() => {
+  const monthStart = new Date(YEAR, editMonth.value - 1, 1)
+  const monthEnd = new Date(YEAR, editMonth.value, 0)
+  const today = new Date()
+  const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
+  if (totalOperatingDays === 0) return 0
+  return countOperatingDays(monthStart, today) / totalOperatingDays
+})
+
 // ---- Row filters: hide accounts with no budget history --------------------
 // Pure declutter toggles — they only affect which rows are drawn, never
 // what's summed into a total (categoryComputedTotal/computedAccountAmount
@@ -158,6 +259,109 @@ const liveDraftNetIncome = computed(() => netIncome({
   opex: categoryComputedTotal('opex')
 }))
 
+// ---- Actual vs Budget (closed months) -------------------------------------
+// The Month live-pace preview above only ever applies to the current
+// in-progress month — a closed month has no "pace" left to track, just a
+// final result. For those, show what actually happened (real
+// daily_line_items) against the budget shown below — both category-level,
+// in a summary card, and per line item, in the table itself (see the
+// accountVarianceById/categoryVarianceByCat maps below). Answers the
+// question of whether a past month should show its budget or its actuals:
+// both, plus the delta, at every level of the tree. Both sides are
+// read-only for a closed month — there's nothing left to plan for a month
+// that's already over.
+const selectedMonthClosed = computed(() => isMonthClosed(YEAR, editMonth.value))
+const selectedMonthIsCurrent = computed(() => isMonthCurrent(YEAR, editMonth.value))
+
+// Jan-Jul 2026's budget_targets aren't independent plans — they're this
+// restaurant's own actual results, typed into QBO's budget object as each
+// month closed (see CLAUDE.md's Budget tab section), which is why the new
+// Actual vs Budget columns above will always show ~$0 variance for these
+// months specifically. Jun and Jul were additionally rounded to the
+// nearest $100 (2026-07-28, at the user's request, purely to make the
+// closed-month table read like a normal rounded budget instead of showing
+// actuals down to the penny) — Jan-May are still the exact-cent figures
+// from the original xlsx import. Hardcoded to this known historical
+// window rather than a general "is this budget actuals-derived" flag,
+// since nothing in the schema distinguishes the two today.
+const budgetIsActualsDerived = computed(() => editMonth.value <= 7)
+
+const monthActualVsBudgetCards = computed(() => {
+  if (!selectedMonthClosed.value) return null
+  return (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
+    const budget = categoryComputedTotal(cat)
+    if (!selectedMonthHasActuals.value) return { category: cat, label: CATEGORY_LABEL[cat], noActuals: true as const, noBudget: false as const, budget }
+    const actual = categoryActualTotal(cat)
+    if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noActuals: false as const, noBudget: true as const, actual, budget }
+    const actualPct = (actual / budget) * 100
+    const status = paceStatus(actualPct, 100, CATEGORY_DIRECTION[cat])
+    return { category: cat, label: CATEGORY_LABEL[cat], noActuals: false as const, noBudget: false as const, actual, budget, delta: actual - budget, status }
+  })
+})
+const monthActualNetIncome = computed(() => {
+  if (!selectedMonthClosed.value || !selectedMonthHasActuals.value) return null
+  return netIncome({
+    revenue: categoryActualTotal('revenue'),
+    cogs: categoryActualTotal('cogs'),
+    labor: categoryActualTotal('labor'),
+    opex: categoryActualTotal('opex')
+  })
+})
+
+// Per-row variance for the read-only table below — one lookup per category
+// (all 5, including 'other') and one per account, built once per render
+// rather than recomputed per template call. 'no-actuals' short-circuits
+// before touching budgetActualVariance so every row in a not-yet-synced
+// closed month shows the same "no data" state instead of a misleading
+// $0-actual comparison.
+const categoryVarianceByCat = computed(() => {
+  const map = new Map<Category, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
+  if (!selectedMonthClosed.value) return map
+  for (const cat of CATEGORIES) {
+    map.set(cat, selectedMonthHasActuals.value
+      ? budgetActualVariance(cat, categoryComputedTotal(cat), categoryActualTotal(cat))
+      : { kind: 'no-actuals' })
+  }
+  return map
+})
+const accountVarianceById = computed(() => {
+  const map = new Map<number, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
+  if (!selectedMonthClosed.value) return map
+  for (const acc of editMonthData.value?.accounts || []) {
+    map.set(acc.accountId, selectedMonthHasActuals.value
+      ? budgetActualVariance(acc.category, computedAccountAmount(acc), computedAccountActual(acc))
+      : { kind: 'no-actuals' })
+  }
+  return map
+})
+
+// Same idea for the current (in-progress) month, but judged against the
+// expected-to-date figure (budget × monthExpectedFraction) rather than the
+// full month's budget — otherwise a partial month would always show as
+// "under," which isn't a meaningful variance signal this early.
+const categoryVarianceToDateByCat = computed(() => {
+  const map = new Map<Category, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
+  if (!selectedMonthIsCurrent.value) return map
+  for (const cat of CATEGORIES) {
+    const budget = categoryComputedTotal(cat)
+    map.set(cat, selectedMonthHasActuals.value
+      ? budgetActualVariance(cat, budget, categoryActualTotal(cat), budget * monthExpectedFraction.value)
+      : { kind: 'no-actuals' })
+  }
+  return map
+})
+const accountVarianceToDateById = computed(() => {
+  const map = new Map<number, ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }>()
+  if (!selectedMonthIsCurrent.value) return map
+  for (const acc of editMonthData.value?.accounts || []) {
+    const budget = computedAccountAmount(acc)
+    map.set(acc.accountId, selectedMonthHasActuals.value
+      ? budgetActualVariance(acc.category, budget, computedAccountActual(acc), budget * monthExpectedFraction.value)
+      : { kind: 'no-actuals' })
+  }
+  return map
+})
+
 // ---- Live pace preview — Year ---------------------------------------------
 // The month preview above only means anything for the current as-of month
 // (only July has actuals to pace against). The year total, though, is a sum
@@ -165,6 +369,25 @@ const liveDraftNetIncome = computed(() => netIncome({
 // not just July. This mirrors the Budget Pace page's Year view, but swaps in
 // this tab's in-progress (unsaved) draft for whichever month is currently
 // open and falls back to each other month's last-saved amount for the rest.
+//
+// Unlike the Month preview above, the *actual* side here uses real
+// daily_line_items (via useActualsYear), not sampleActuals — this card
+// specifically compares real closed-month results against the draft
+// budget, and using a fake canned year figure next to real Jan-June numbers
+// would be actively misleading rather than just illustrative. It'll show a
+// "no actual data synced" state until a real backfill/sync populates this
+// year's daily_line_items — see CLAUDE.md's QBO Account + P&L sync section.
+const monthsElapsed = computed(() => monthsElapsedInYear(YEAR))
+const yearActualsMonthsWithData = computed(() => monthlyActuals.value.filter(m => m.month <= monthsElapsed.value && m.hasData).length)
+
+function realYearCategoryTotal(cat: Exclude<Category, 'other'>): number {
+  let total = 0
+  for (const m of monthlyActuals.value) {
+    if (m.month <= monthsElapsed.value) total += m.totals[cat] || 0
+  }
+  return total
+}
+
 function yearCategoryTotal(cat: Category): number {
   let total = 0
   for (let m = 1; m <= 12; m++) {
@@ -193,13 +416,16 @@ function yearMonthsBudgeted(cat: Category): number {
 }
 
 const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
-  const actual = sampleActuals.year[cat]
+  const actual = realYearCategoryTotal(cat)
   const budget = yearCategoryTotal(cat)
   const monthsBudgeted = yearMonthsBudgeted(cat)
-  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const, actual, budget, monthsBudgeted }
+  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const, noActuals: false as const, actual, budget, monthsBudgeted }
+  if (yearActualsMonthsWithData.value === 0) {
+    return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: true as const, actual, budget, monthsBudgeted }
+  }
   const actualPct = (actual / budget) * 100
   const status = paceStatus(actualPct, YEAR_DAY_FRACTION * 100, CATEGORY_DIRECTION[cat])
-  return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, actual, budget, monthsBudgeted, actualPct, status }
+  return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: false as const, actual, budget, monthsBudgeted, actualPct, status }
 }))
 const yearLiveNetIncome = computed(() => netIncome({
   revenue: yearCategoryTotal('revenue'),
@@ -336,50 +562,59 @@ async function saveBudgets() {
   }
 }
 
-// ---- Update this month from actuals ------------------------------------
-// Three variants of the same underlying operation (copy-actuals sums
+// ---- Update this month from budget/actuals (seeding another month) -------
+// Two variants of the same underlying operation (copy-into-month sums
 // daily_line_items for one source month and upserts that total into
-// budget_targets for the target month) — they only differ in which month
-// they read from. All three currently 422 in practice, since
-// daily_line_items is empty until the nightly QBO sync is wired in (see
-// CLAUDE.md's Not yet done) — the error message below surfaces that
-// directly rather than pretending the button did something.
+// budget_targets for the target month, rounded to the nearest $100 — see
+// copy-into-month.post.ts) — they only differ in which month they read
+// from. Both fall back to the source month's budget when it has no
+// actuals: their real use is seeding an unbudgeted month (e.g. September)
+// from a nearby one, and the nearby source month often won't have actuals
+// either — either because it's also still in progress, or because the QBO
+// sync hasn't reached it yet. Falling back to that month's already-entered
+// budget keeps the button useful either way; the result message says which
+// one it actually used rather than leaving that ambiguous.
+//
+// There's deliberately no third "update this month from its own actuals"
+// action — that would mean overwriting a month's budget with its own
+// result, destroying the ability to ever compare "what we planned" against
+// "what happened" for that month (exactly the loss that made Jan-June's
+// real budget figures useless as a comparison point — see the Actual vs
+// Budget card above). Closed months show that comparison read-only instead.
 const actionStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const actionMessage = ref('')
 
-async function copyActualsIntoEditMonth(sourceYear: number, sourceMonth: number, sourceDescription: string) {
+function describeSource(sourceLabel: string, source: 'actuals' | 'budget') {
+  return source === 'budget' ? `${sourceLabel}'s budget (no actuals synced for ${sourceLabel} yet)` : `${sourceLabel} actuals`
+}
+
+async function copyIntoEditMonth(sourceYear: number, sourceMonth: number, sourceLabel: string) {
   actionStatus.value = 'running'
   try {
-    const result = await $fetch('/api/budget/copy-actuals', {
+    const result = await $fetch('/api/budget/copy-into-month', {
       method: 'POST',
-      body: { sourceYear, sourceMonth, targetMonths: [{ year: YEAR, month: editMonth.value }] }
+      body: { sourceYear, sourceMonth, targetMonths: [{ year: YEAR, month: editMonth.value }], allowBudgetFallback: true }
     })
-    actionMessage.value = `Updated ${result.accountsCopied} accounts for ${MONTH_NAMES[editMonth.value - 1]} from ${sourceDescription}.`
+    actionMessage.value = `Updated ${result.accountsCopied} accounts for ${MONTH_NAMES[editMonth.value - 1]} from ${describeSource(sourceLabel, result.source)}.`
     actionStatus.value = 'done'
     await loadYear()
   } catch (err: any) {
     actionStatus.value = 'error'
-    actionMessage.value = err?.data?.statusMessage || err?.message || 'No actuals available yet'
+    actionMessage.value = err?.data?.statusMessage || err?.message || 'No actuals or budget available yet'
   }
 }
 
 function updateFromLastMonth() {
   if (!previousMonthLabel.value) return
-  copyActualsIntoEditMonth(YEAR, editMonth.value - 1, `${previousMonthLabel.value} actuals`)
+  copyIntoEditMonth(YEAR, editMonth.value - 1, previousMonthLabel.value)
 }
 
-// Mechanically this just points the same copy-actuals engine at
+// Mechanically this just points the same copy-into-month engine at
 // sourceYear = YEAR - 1 — budget_targets/daily_line_items are keyed by an
 // arbitrary (year, month), not scoped to a single year, so nothing in the
-// data model blocks this. In practice it'll 422 for a while regardless:
-// this restaurant's first full month open is July 2026 (see CLAUDE.md), so
-// there's no 2025 data to have synced yet, real sync or not.
+// data model blocks this.
 function updateFromSameMonthLastYear() {
-  copyActualsIntoEditMonth(YEAR - 1, editMonth.value, `${MONTH_NAMES[editMonth.value - 1]} ${YEAR - 1} actuals`)
-}
-
-function updateThisMonthFromActuals() {
-  copyActualsIntoEditMonth(YEAR, editMonth.value, 'actuals')
+  copyIntoEditMonth(YEAR - 1, editMonth.value, `${MONTH_NAMES[editMonth.value - 1]} ${YEAR - 1}`)
 }
 
 function exportForQuickBooks() {
@@ -443,18 +678,42 @@ function exportForQuickBooks() {
           </div>
         </div>
 
+        <div v-else-if="monthActualVsBudgetCards" class="live-pace-card">
+          <div class="live-pace-head">
+            <span class="chip accent"><span class="dot"></span>Actual vs Budget — {{ MONTH_NAMES[editMonth - 1] }}</span>
+            <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }} actually finished against the budget shown below.</span>
+          </div>
+          <div class="live-pace-grid">
+            <div v-for="card in monthActualVsBudgetCards" :key="card.category" class="live-pace-item">
+              <span class="name">{{ card.label }}</span>
+              <span v-if="card.noActuals" class="chip warning"><span class="dot"></span>No actual data synced</span>
+              <span v-else-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
+              <span v-else :class="['chip', card.status]"><span class="dot"></span>{{ card.status === 'good' ? '✓' : '▲' }} {{ card.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.delta)).toLocaleString() }} vs budget</span>
+            </div>
+          </div>
+          <div v-if="monthActualNetIncome !== null" class="live-pace-net">
+            Net income (actual): <strong :class="monthActualNetIncome >= 0 ? 'good' : 'critical'">{{ monthActualNetIncome >= 0 ? '+' : '' }}${{ Math.round(monthActualNetIncome).toLocaleString() }}</strong>
+            vs. budgeted <strong>${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
+          </div>
+          <div v-if="budgetIsActualsDerived" class="quiet-note actuals-derived-note">
+            Jan–Jul {{ YEAR }}'s budget is this restaurant's own actual results for each month, entered as QuickBooks budget figures after each month closed — not an independently-set target, which is why variance above is near zero. Jun and Jul are rounded to the nearest $100; Jan–May are shown to the exact cent as originally imported.
+          </div>
+        </div>
+
         <div class="live-pace-card">
           <div class="live-pace-head">
             <span class="chip accent"><span class="dot"></span>Live preview — Year</span>
-            <span class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget.</span>
+            <span class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in yearLivePaceCards" :key="card.category" class="live-pace-item">
               <span class="name">{{ card.label }}</span>
               <span v-if="card.noBudget" class="chip warning"><span class="dot"></span>No budget</span>
+              <span v-else-if="card.noActuals" class="chip warning"><span class="dot"></span>No actual data synced yet</span>
               <template v-else>
                 <span :class="['chip', card.status]"><span class="dot"></span>{{ card.actualPct.toFixed(1) }}% of budget</span>
                 <span v-if="card.monthsBudgeted < 12" class="mini-note">{{ card.monthsBudgeted }}/12 mo budgeted</span>
+                <span v-if="yearActualsMonthsWithData < monthsElapsed" class="mini-note">{{ yearActualsMonthsWithData }}/{{ monthsElapsed }} mo of actuals synced</span>
               </template>
             </div>
           </div>
@@ -473,7 +732,23 @@ function exportForQuickBooks() {
             >{{ name }}</button>
           </div>
           <table class="pl-table edit-table">
-            <tbody>
+            <thead v-if="selectedMonthClosed">
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Budget</th>
+                <th scope="col">Actual</th>
+                <th scope="col">Variance</th>
+              </tr>
+            </thead>
+            <thead v-else-if="selectedMonthIsCurrent">
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Budget</th>
+                <th scope="col">Actual (to date)</th>
+                <th scope="col">Variance</th>
+              </tr>
+            </thead>
+            <tbody v-if="!selectedMonthClosed">
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
                   <th scope="row">
@@ -481,7 +756,17 @@ function exportForQuickBooks() {
                       {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
-                  <td><span class="amount-input readonly">{{ categoryComputedTotal(cat).toFixed(2) }}</span></td>
+                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
+                  <td v-if="selectedMonthIsCurrent">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
+                  </td>
+                  <td v-if="selectedMonthIsCurrent" class="variance-cell">
+                    <span v-if="categoryVarianceToDateByCat.get(cat)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
+                    <span v-else-if="categoryVarianceToDateByCat.get(cat)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
+                    <span v-else-if="categoryVarianceToDateByCat.get(cat)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ categoryVarianceToDateByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceToDateByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['chip', categoryVarianceToDateByCat.get(cat).status]"><span class="dot"></span>{{ categoryVarianceToDateByCat.get(cat).status === 'good' ? '✓' : '▲' }} {{ categoryVarianceToDateByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceToDateByCat.get(cat).delta)).toLocaleString() }}</span>
+                  </td>
                 </tr>
                 <template v-if="expandedCategory === cat">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
@@ -490,12 +775,22 @@ function exportForQuickBooks() {
                     </th>
                     <td>
                       <input v-if="isLeafAccount(acc)" type="number" step="0.01" class="amount-input" v-model="editableAccountAmounts[acc.accountId]" placeholder="0.00" />
-                      <span v-else class="amount-input readonly">{{ computedAccountAmount(acc).toFixed(2) }}</span>
+                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
+                    </td>
+                    <td v-if="selectedMonthIsCurrent">
+                      <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                    </td>
+                    <td v-if="selectedMonthIsCurrent" class="variance-cell">
+                      <span v-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
+                      <span v-else-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
+                      <span v-else-if="accountVarianceToDateById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ accountVarianceToDateById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceToDateById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['chip', accountVarianceToDateById.get(acc.accountId).status]"><span class="dot"></span>{{ accountVarianceToDateById.get(acc.accountId).status === 'good' ? '✓' : '▲' }} {{ accountVarianceToDateById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceToDateById.get(acc.accountId).delta)).toLocaleString() }}</span>
                     </td>
                   </tr>
                 </template>
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
-                  <td colspan="2">
+                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
                       COGS is variable — it scales with revenue, not a fixed dollar guess. Trailing
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }})</template>:
@@ -512,18 +807,68 @@ function exportForQuickBooks() {
                 </tr>
               </template>
             </tbody>
+            <!-- Closed month: budget and actual are both final, so this is a
+                 read-only comparison, not an editor — no input boxes, and no
+                 COGS-recompute banner (that tool is for planning ahead, not
+                 reviewing what already happened). -->
+            <tbody v-else>
+              <template v-for="cat in CATEGORIES" :key="cat">
+                <tr>
+                  <th scope="row">
+                    <button class="expand-toggle" @click="expandedCategory = expandedCategory === cat ? null : cat">
+                      {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
+                    </button>
+                  </th>
+                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
+                  <td>
+                    <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
+                  </td>
+                  <td class="variance-cell">
+                    <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
+                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
+                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['chip', categoryVarianceByCat.get(cat).status]"><span class="dot"></span>{{ categoryVarianceByCat.get(cat).status === 'good' ? '✓' : '▲' }} {{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                  </td>
+                </tr>
+                <template v-if="expandedCategory === cat">
+                  <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                    <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
+                      <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                    </th>
+                    <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
+                    <td>
+                      <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
+                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                    </td>
+                    <td class="variance-cell">
+                      <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning"><span class="dot"></span>No actual data</span>
+                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning"><span class="dot"></span>No budget</span>
+                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral"><span class="dot"></span>{{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['chip', accountVarianceById.get(acc.accountId).status]"><span class="dot"></span>{{ accountVarianceById.get(acc.accountId).status === 'good' ? '✓' : '▲' }} {{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                    </td>
+                  </tr>
+                </template>
+              </template>
+            </tbody>
           </table>
         </div>
 
-        <div class="action-row">
+        <div v-if="!selectedMonthClosed" class="action-row">
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
           <button
+            class="action-btn" :disabled="actionStatus === 'running'"
+            :title="`Uses ${MONTH_NAMES[editMonth - 1]} ${YEAR - 1}'s actuals if synced, otherwise its budget`"
+            @click="updateFromSameMonthLastYear"
+          >Update this month from {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR - 1 }}</button>
+          <button
             class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
-            :title="previousMonthLabel ? undefined : 'No prior month in this year'"
+            :title="previousMonthLabel ? `Uses ${previousMonthLabel}'s actuals if synced, otherwise its budget` : 'No prior month in this year'"
             @click="updateFromLastMonth"
           >Update this month from {{ previousMonthLabel || '—' }}</button>
-          <button class="action-btn" :disabled="actionStatus === 'running'" @click="updateFromSameMonthLastYear">Update this month from {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR - 1 }}</button>
-          <button class="action-btn" :disabled="actionStatus === 'running'" @click="updateThisMonthFromActuals">Update this month from actuals</button>
+          <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
+        </div>
+        <div v-else class="action-row">
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
         <div v-if="saveStatus === 'saved'" class="chip good"><span class="dot"></span>Saved</div>
@@ -559,6 +904,7 @@ function exportForQuickBooks() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.actuals-derived-note { padding-top: 6px; border-top: 1px dashed var(--hair); }
 
 /* ---------- row filter toggles ---------- */
 .filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -614,17 +960,17 @@ function exportForQuickBooks() {
   font-size: 12px;
   font-weight: 700;
   font-family: inherit;
-  padding: 7px 14px;
+  padding: 7px 20px;
   border: 1px solid var(--hair);
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   background: var(--surface-alt);
-  color: var(--ink-3);
+  color: var(--ink-2);
   cursor: pointer;
   position: relative;
   top: 1px;
 }
-.month-tab.unbudgeted { color: var(--ink-3); opacity: 0.55; }
+.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
 .month-tab.active {
   background: var(--surface);
   color: var(--ink);
@@ -664,6 +1010,21 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   color: var(--ink-2);
   font-weight: 700;
 }
+.amount-input.readonly.muted { color: var(--ink-3); font-weight: 500; }
+
+/* ---------- closed-month read-only Budget/Actual/Variance columns ---------- */
+.col-head-row th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 8px 16px 6px;
+  border-bottom: 1px solid var(--hair);
+}
+.variance-cell { min-width: 120px; }
+.chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
+.chip.neutral .dot { background: var(--ink-3); }
 
 .edit-table tr.cogs-avg-row td { padding: 10px 16px 14px; }
 .edit-table tr.cogs-avg-row .section-note {

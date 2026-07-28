@@ -648,6 +648,44 @@ forward.
   pages' `sampleActuals` over to real `daily_line_items` queries. That's
   its own separate task; this pass was sync + ingestion only.
 
+## Budget vs Actual on the Edit Budget page — 2026-07-28
+
+Wires the Edit Budget page's account tree to real `daily_line_items`
+(previous section) instead of `sampleActuals`, per-line-item, in
+[`app/pages/budget/edit.vue`](app/pages/budget/edit.vue). Backed by two new
+routes ([`server/api/budget/actuals.get.ts`](server/api/budget/actuals.get.ts)
+for per-category year totals, used by the Live preview — Year card;
+[`server/api/budget/actuals-by-account.get.ts`](server/api/budget/actuals-by-account.get.ts)
+for per-account totals for one month, fetched lazily only for the selected
+month — not eagerly for all 12 like `budget_targets`). Behavior differs by
+whether the selected month is closed, current, or future:
+
+- **Closed months** are fully read-only — Budget/Actual/Variance columns,
+  no input boxes, no COGS-recompute banner. The old "Update this month from
+  actuals" button (which overwrote a closed month's budget with its own
+  actuals) was removed entirely in favor of this — overwriting would
+  destroy the only thing that makes the comparison meaningful. Variance is
+  actual vs. the full month's budget (100% reference).
+- **The current (in-progress) month** gets an added "Actual (to date)"
+  column plus a Variance column, both alongside the still-editable Budget
+  inputs. Variance here is actual vs. an *expected-to-date* figure
+  (budget × how far through the month we are), not the full month's
+  budget — otherwise a partial month always reads as "under," which isn't
+  a meaningful signal this early (raised by the user 2026-07-28).
+- **Future months** are unchanged — plain editable Budget column, no
+  actuals fetch at all (nothing to fetch).
+
+**"How far through the month" uses Tue-Sun operating days, not calendar
+days** (`monthExpectedFraction` in edit.vue) — Urban Hearth is closed
+Mondays (confirmed by the user, not assumed), so a plain day-count fraction
+(e.g. "16 of 31 days elapsed") overstates progress: every closed Monday
+counts as elapsed time but contributes zero expected revenue or spend.
+Counts operating days only, both for days-elapsed-so-far and days-in-the-
+whole-month. This is day-weighted, not hour-weighted — the app has no real
+per-day operating-hours data to weight by, so equal weighting across the
+six operating days is the closest feasible approximation; revisit if real
+hours data ever becomes available.
+
 ## Running it
 
 - `npm install`
@@ -670,6 +708,28 @@ forward.
 - `npm run dev` — all three pages are the real app now, not the static
   mockup files (which still exist under `design/` for reference)
 
+## `fly deploy` warning — known benign, 2026-07-28
+
+Every `fly deploy` prints `WARNING The app is not listening on the expected
+address and will not be reachable by fly-proxy` partway through the rolling
+update, then the deploy still finishes healthy every time. Investigated via
+`fly logs` around an actual deploy rather than assumed away: the new machine
+fully reboots (Firecracker VM restart, not just a process restart), and on
+this `shared-cpu-1x`/512mb machine there's a real ~5 second gap between the
+Node process starting and Nitro logging `Listening on http://[::]:3000` —
+normal cold-start time (loading routes, opening the `better-sqlite3` native
+binding, runtime config) on this VM size, not something
+`server/plugins/qbo-nightly-sync.ts`'s boot-time catch-up check adds, since
+that call is fire-and-forget (never awaited) and can't block Nitro's own
+startup. Fly's very-early "is anything listening yet" check fires inside
+that ~5 second window and misses it; the real health/smoke checks that
+actually gate deploy success run afterward with retries and always pass —
+confirmed by curling the deployed app immediately after every deploy so far,
+always correct. Since `fly.toml` already keeps the machine warm 24/7
+(`min_machines_running=1`, `auto_stop_machines=false`), this cold start only
+ever happens during a deploy itself, never during normal operation — so
+there's no user-facing availability impact to chase here. Safe to ignore.
+
 ## Not yet done
 
 - Wiring the dashboard UI to the real schema — the Dashboard and P&L pages
@@ -684,6 +744,12 @@ forward.
   editing + category-level flagging first)
 - Per-account actuals in the Overspending drill-down (needs real
   `daily_line_items`, not sample data — see Budget tab above)
+- Per-line-item actual-vs-budget on the Edit Budget page (raised by the user
+  2026-07-23) — the new "Actual vs Budget" card (see Budget tab above) is
+  category-level only, same as the Overspending drill-down above it on this
+  list. Extending it into the account tree (one delta per leaf account, not
+  just per category) is deliberately deferred rather than built alongside
+  the category-level version.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
   SQL on the two owner accounts) and to split *actual* labor by owner-comp
   the same way the budget side already is (needs real per-account actuals)

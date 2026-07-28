@@ -102,6 +102,14 @@ export function isMonthClosed(year: number, month: number): boolean {
   return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth() + 1)
 }
 
+// The one month that's neither closed nor entirely in the future — the
+// only month where "actuals so far" is a partial, still-growing number
+// rather than a final result or nothing at all.
+export function isMonthCurrent(year: number, month: number): boolean {
+  const now = new Date()
+  return year === now.getFullYear() && month === now.getMonth() + 1
+}
+
 // How many months of `year` have started as of the real calendar date —
 // i.e. could plausibly have actuals synced by now (the current month
 // counts, partial as it is). 0 for a year that hasn't started yet, 12 for

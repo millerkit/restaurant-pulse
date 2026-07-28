@@ -62,20 +62,51 @@ const periodBudget = computed(() => selectedPeriod.value === 'month' ? monthBudg
 const actualNetIncome = computed(() => netIncome(periodActuals.value))
 const budgetNetIncome = computed(() => netIncome(periodBudget.value.totals as any))
 
+// ---- Month-end projection --------------------------------------------
+// Straight-line projection of the current in-progress month: actual-to-date
+// scaled up by how much of the month has elapsed. Month-only — the Year
+// view's "actual" already blends 6+ closed months with the in-progress one,
+// so a single straight-line scale-up wouldn't mean the same thing there.
+// This is the non-destructive alternative to the Edit Budget page's
+// "Update this month from actuals" button actually overwriting budget_targets
+// with a partial-month guess — see edit.vue.
+const monthDayFraction = computed(() => AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH))
+const monthProjected = computed(() => {
+  const proj = {} as Record<Exclude<Category, 'other'>, number>
+  for (const cat of ['revenue', 'cogs', 'labor', 'opex'] as const) {
+    proj[cat] = sampleActuals.month[cat] / monthDayFraction.value
+  }
+  return proj
+})
+const projectedNetIncome = computed(() => netIncome(monthProjected.value))
+
 const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = periodActuals.value[cat]
   const budget = periodBudget.value.totals[cat]
   const monthsBudgeted = periodBudget.value.monthsBudgeted[cat]
   const expectedPct = periodDayFraction.value * 100
   if (!budget) {
-    return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true, actual, budget, monthsBudgeted }
+    return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true, actual, budget, monthsBudgeted, projection: null }
   }
   const actualPct = (actual / budget) * 100
   const status = paceStatus(actualPct, expectedPct, CATEGORY_DIRECTION[cat])
+  // Compares the projected month-end total against 100% of budget (will we
+  // land over or under), not against today's expected pace (are we on
+  // track right now) — a related but distinct question, so it reuses
+  // paceStatus with a different expectedPct rather than the card's own.
+  const projection = selectedPeriod.value === 'month'
+    ? (() => {
+        const projected = monthProjected.value[cat]
+        const projectedPct = (projected / budget) * 100
+        const projectedStatus = paceStatus(projectedPct, 100, CATEGORY_DIRECTION[cat])
+        return { projected, projectedStatus, delta: projected - budget }
+      })()
+    : null
   return {
     category: cat, label: CATEGORY_LABEL[cat], noBudget: false, actual, budget, monthsBudgeted,
     fillPct: Math.min(100, actualPct), expectedPct, status,
-    paceLabel: `${actualPct.toFixed(1)}% of ${selectedPeriod.value === 'month' ? 'month' : 'year'} budget`
+    paceLabel: `${actualPct.toFixed(1)}% of ${selectedPeriod.value === 'month' ? 'month' : 'year'} budget`,
+    projection
   }
 }))
 
@@ -153,6 +184,10 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
             </div>
             <div :class="['figure', actualNetIncome >= 0 ? 'good' : 'critical']">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
             <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex, derived, not entered directly)</div>
+            <div v-if="selectedPeriod === 'month'" class="caption projection-line">
+              Projected month-end (at this pace): <strong :class="projectedNetIncome >= 0 ? 'good' : 'critical'">{{ projectedNetIncome >= 0 ? '+' : '' }}${{ Math.round(projectedNetIncome).toLocaleString() }}</strong>
+              <span :class="['chip', projectedNetIncome >= budgetNetIncome ? 'good' : 'serious']"><span class="dot"></span>{{ projectedNetIncome >= budgetNetIncome ? '✓ on pace to hit budget' : '▲ projected to miss budget' }}</span>
+            </div>
           </div>
         </div>
 
@@ -175,6 +210,10 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
                 <span>$0</span>
                 <span :class="['chip', card.status]"><span class="dot"></span>{{ card.paceLabel }}</span>
                 <span>${{ card.budget.toLocaleString() }}</span>
+              </div>
+              <div v-if="card.projection" class="section-note projection-note">
+                Projected month-end: <strong>${{ Math.round(card.projection.projected).toLocaleString() }}</strong>
+                <span :class="['chip', card.projection.projectedStatus]"><span class="dot"></span>{{ card.projection.projectedStatus === 'good' ? '✓' : '▲' }} {{ card.projection.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.projection.delta)).toLocaleString() }} vs budget</span>
               </div>
               <div v-if="selectedPeriod === 'year' && card.monthsBudgeted < 12" class="section-note">Only {{ card.monthsBudgeted }} of 12 months budgeted so far — edit them on the Edit Budget tab</div>
               <div v-if="card.category === 'labor' && laborExOwnerComp" class="section-note">
@@ -256,6 +295,9 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .hero-card .figure.good { color: var(--good); }
 .hero-card .figure.critical { color: var(--critical); }
 .hero-card .caption { font-size: 12px; color: var(--ink-3); }
+.hero-card .caption.projection-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.hero-card .caption.projection-line strong.good { color: var(--good); }
+.hero-card .caption.projection-line strong.critical { color: var(--critical); }
 
 /* ---------- period pill selector (copied from pl.vue) ---------- */
 .period-tabs { display: flex; gap: 6px; }
@@ -298,6 +340,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
   font-size: 9px; white-space: nowrap; color: var(--ink-3); font-weight: 600;
 }
 .runway-foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); }
+.runway-card .section-note.projection-note { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding-top: 2px; border-top: 1px dashed var(--hair); }
 
 /* ---------- ranked drill-down list (copied from pl.vue) ---------- */
 .drill-card {
