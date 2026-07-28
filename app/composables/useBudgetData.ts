@@ -30,6 +30,16 @@ export function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate()
 }
 
+// 1-indexed day-of-year (Jan 1 = 1), UTC-based to match the ISO date strings
+// (YYYY-MM-DD) daily_line_items/sync data is keyed by.
+export function dayOfYear(year: number, month: number, day: number): number {
+  return Math.round((Date.UTC(year, month - 1, day) - Date.UTC(year, 0, 1)) / 86400000) + 1
+}
+
+export function daysInYear(year: number): number {
+  return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365
+}
+
 // Actuals (the "how much did we actually make/spend" side of every
 // comparison) stay sample data for now — QBO sync isn't wired to the UI
 // yet, same as the Dashboard and P&L pages. These are the exact same
@@ -82,6 +92,50 @@ export function useBudgetYear() {
   return { monthlyData, loadError, loading, loadYear }
 }
 
+// Real calendar-date closedness for daily_line_items/budget_targets — the
+// real synced data these two feed off of, not the app's frozen sample
+// "as-of" narration date (AS_OF_MONTH above), which only describes the
+// still-sample-data Dashboard/P&L/Month-preview figures. Mirrors the same
+// check in server/api/budget/copy-into-month.post.ts.
+export function isMonthClosed(year: number, month: number): boolean {
+  const now = new Date()
+  return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth() + 1)
+}
+
+// How many months of `year` have started as of the real calendar date —
+// i.e. could plausibly have actuals synced by now (the current month
+// counts, partial as it is). 0 for a year that hasn't started yet, 12 for
+// one that's fully in the past.
+export function monthsElapsedInYear(year: number): number {
+  const now = new Date()
+  if (year < now.getFullYear()) return 12
+  if (year > now.getFullYear()) return 0
+  return now.getMonth() + 1
+}
+
+export type MonthActuals = { month: number, hasData: boolean, totals: Record<Exclude<Category, 'other'>, number> }
+
+// Real per-month actuals from daily_line_items, independent of
+// budget_targets — see actuals.get.ts. Empty (hasData: false for every
+// month) until a real QBO backfill/sync has populated this year's data.
+export function useActualsYear() {
+  const monthlyActuals = ref<MonthActuals[]>([])
+  const loadError = ref<string | null>(null)
+
+  async function loadActualsYear() {
+    loadError.value = null
+    try {
+      const result = await $fetch<{ year: number, months: MonthActuals[] }>('/api/budget/actuals', { query: { year: YEAR } })
+      monthlyActuals.value = result.months
+    } catch (err: any) {
+      loadError.value = err?.data?.statusMessage || err?.message || 'Failed to load actuals'
+    }
+  }
+  onMounted(loadActualsYear)
+
+  return { monthlyActuals, loadError, loadActualsYear }
+}
+
 // direction: for revenue, running ahead of budget pace is good; for the
 // three cost categories, running ahead of budget pace means overspending,
 // so the same ratio needs the opposite color interpretation.
@@ -101,6 +155,23 @@ export function paceStatus(actualPct: number, expectedPct: number, direction: Di
   if (diff <= 0) return 'good'
   if (diff <= 10) return 'warning'
   if (diff <= 25) return 'serious'
+  return 'critical'
+}
+
+export type CategoryBenchmark = { category: string, targetPct: number, warningPct: number, seriousPct: number, criticalPct: number }
+
+// Cost-ratio status (COGS/labor/prime-cost % of revenue) against
+// category_benchmarks — a different shape from paceStatus above (which
+// compares a period's *elapsed-time* pace against a dollar budget).
+// targetPct/warningPct/seriousPct are ascending absolute pct-of-revenue
+// ceilings: at/below target is 'good', and each successive ceiling crossed
+// bumps the status up one level. criticalPct is stored for reference but
+// unused here — anything past seriousPct is already 'critical'.
+export function benchmarkStatus(actualPct: number, benchmark: CategoryBenchmark | undefined): 'good' | 'warning' | 'serious' | 'critical' | null {
+  if (!benchmark) return null
+  if (actualPct <= benchmark.targetPct) return 'good'
+  if (actualPct <= benchmark.warningPct) return 'warning'
+  if (actualPct <= benchmark.seriousPct) return 'serious'
   return 'critical'
 }
 
