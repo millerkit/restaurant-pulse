@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, sampleActuals, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, type MonthData, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, sampleActuals, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -15,17 +15,81 @@ function monthHasBudget(month: number) {
 
 // ---- Edit Monthly Budget ------------------------------------------------
 const editMonth = ref(AS_OF_MONTH)
-const editMonthData = computed(() => monthlyData.value[editMonth.value - 1])
+const viewingAnnualTotal = ref(false)
+
+// Synthesizes a MonthData-shaped object summing each account's budget
+// across all 12 months, so it can stand in for a real month's data and let
+// every existing piece of account-tree machinery below (directChildren,
+// accountDepth, accountsForCategory, categoryComputedTotal, the $0-row
+// filter...) work on the annual total for free, unchanged — none of that
+// logic actually cares which month it's looking at, only at `.accounts`
+// and each account's `.amount`. An account stays `amount: null` only if
+// every month was null (never budgeted at all); otherwise null months
+// contribute $0 to the sum, same as categoryTotals()/yearCategoryTotal()
+// elsewhere already treat them.
+const annualMonthData = computed<MonthData | null>(() => {
+  const first = monthlyData.value.find(m => m)
+  if (!first || monthlyData.value.some(m => !m)) return null
+  const totals = new Map<number, number>()
+  const everBudgeted = new Set<number>()
+  for (const data of monthlyData.value) {
+    if (!data) continue
+    for (const acc of data.accounts) {
+      if (acc.amount === null) continue
+      everBudgeted.add(acc.accountId)
+      totals.set(acc.accountId, (totals.get(acc.accountId) ?? 0) + acc.amount)
+    }
+  }
+  return {
+    year: YEAR,
+    month: 0,
+    accounts: first.accounts.map(acc => ({ ...acc, amount: everBudgeted.has(acc.accountId) ? (totals.get(acc.accountId) ?? 0) : null }))
+  }
+})
+
+const editMonthData = computed(() => viewingAnnualTotal.value ? annualMonthData.value : monthlyData.value[editMonth.value - 1])
 const expandedCategory = ref<Category | null>(null)
 const editableAccountAmounts = ref<Record<number, string>>({})
+
+// Whole-dollar, comma-formatted display — native <input type="number">
+// can't render thousands separators at all (not a styling limit, the HTML
+// spec only allows plain digits/decimal/minus in a number input's value),
+// so these are text inputs with their own parse/format handling instead.
+function parseEditableAmount(raw: string | undefined): number {
+  if (!raw) return 0
+  const n = Number(raw.replace(/,/g, ''))
+  return Number.isFinite(n) ? n : 0
+}
+function formatWholeDollars(n: number): string {
+  return Math.round(n).toLocaleString()
+}
 
 watch(editMonthData, (data) => {
   if (!data) return
   editableAccountAmounts.value = {}
   for (const acc of data.accounts) {
-    if (acc.amount !== null) editableAccountAmounts.value[acc.accountId] = acc.amount.toFixed(2)
+    // Rounded to the nearest whole dollar for display only — cents aren't
+    // meaningful for a budget entered this way, but this must NOT snap to
+    // the nearest $10 the way an actual edit does (see onAmountBlur below):
+    // doing that here would make saveBudgets() see every untouched account
+    // as "changed" the moment the page loads, silently rounding the whole
+    // month on the next Save click.
+    if (acc.amount !== null) editableAccountAmounts.value[acc.accountId] = formatWholeDollars(acc.amount)
   }
 }, { immediate: true })
+
+// Snaps to the nearest $10 once you finish editing a field (not while
+// still typing, so digits don't jump around under your cursor) — the
+// user's explicit ask, on top of the whole-dollar display above. Leaves an
+// intentionally-cleared field empty rather than forcing it to "0".
+function onAmountBlur(accountId: number) {
+  const raw = editableAccountAmounts.value[accountId]
+  if (raw === undefined || raw.trim() === '') {
+    editableAccountAmounts.value[accountId] = ''
+    return
+  }
+  editableAccountAmounts.value[accountId] = formatWholeDollars(Math.round(parseEditableAmount(raw) / 10) * 10)
+}
 
 // Real per-account actuals for whichever month is selected, fetched lazily
 // (not eagerly for all 12 months like budget_targets above) — only a closed
@@ -115,7 +179,7 @@ function isLeafAccount(acc: BudgetAccount): boolean {
 
 function computedAccountAmount(acc: BudgetAccount): number {
   const children = directChildren(acc.accountId)
-  if (children.length === 0) return Number(editableAccountAmounts.value[acc.accountId] || 0)
+  if (children.length === 0) return parseEditableAmount(editableAccountAmounts.value[acc.accountId])
   return children.reduce((sum, c) => sum + computedAccountAmount(c), 0)
 }
 
@@ -193,15 +257,38 @@ const monthExpectedFraction = computed(() => {
   return countOperatingDays(monthStart, today) / totalOperatingDays
 })
 
-// ---- Row filters: hide accounts with no budget history --------------------
-// Pure declutter toggles — they only affect which rows are drawn, never
-// what's summed into a total (categoryComputedTotal/computedAccountAmount
-// above always include every account regardless of visibility) or what's
-// saved. Both compare against *stored* amounts, not live unsaved edits, so
-// a row never vanishes mid-edit just because you cleared it to retype a
-// number.
-const hideNoPriorMonthBudget = ref(false)
-const hideNoCurrentMonthBudget = ref(false)
+// ---- Row filter: hide $0 rows ---------------------------------------------
+// A single adaptive toggle rather than two independent ones (simplified
+// 2026-07-28 — two side-by-side toggles read as confusing about which one
+// to use when). What "$0" means depends on the month being viewed, since a
+// fresh unbudgeted month's own values are all null and filtering by them
+// would hide nearly everything:
+//   - closed month: filters by that month's own stored budget amount — the
+//     month is final, so its own $0 rows meaningfully mean "not used."
+//   - future month: filters by the *previous* month's amount instead,
+//     since the future month has nothing of its own yet; the previous
+//     month is the best available signal of which accounts typically get
+//     budgeted.
+//   - current (in-progress) month: treated like a future month (filter by
+//     previous month) for its first two weeks, since its own budget may
+//     still be mid-setup and an entered $0 isn't yet a reliable signal;
+//     after that it's treated like a closed month (filter by its own
+//     value). "Two weeks" is real calendar days elapsed, not synced
+//     actuals — simpler, and sync lag is normally hours, not days.
+// Pure declutter — never affects what's summed into a total
+// (categoryComputedTotal/computedAccountAmount always include every
+// account regardless of visibility) or what's saved. Compares against
+// *stored* amounts, not live unsaved edits, so a row never vanishes
+// mid-edit just because you cleared it to retype a number.
+const hideZeroRows = ref(true)
+const filterMode = computed<'own' | 'previous'>(() => {
+  // The annual total has no "previous" period to fall back to — it's
+  // always judged against its own value, exactly like a closed month.
+  if (viewingAnnualTotal.value) return 'own'
+  if (selectedMonthClosed.value) return 'own'
+  if (selectedMonthIsCurrent.value) return new Date().getDate() >= 14 ? 'own' : 'previous'
+  return 'previous'
+})
 const previousMonthLabel = computed(() => editMonth.value > 1 ? MONTH_NAMES[editMonth.value - 2] : null)
 const previousMonthAccountsById = computed(() => {
   const map = new Map<number, BudgetAccount>()
@@ -216,12 +303,12 @@ function hasNoStoredAmount(amount: number | null): boolean {
 }
 
 function leafVisible(acc: BudgetAccount): boolean {
-  if (hideNoPriorMonthBudget.value && previousMonthAccountsById.value.size > 0) {
-    const prevAmount = previousMonthAccountsById.value.get(acc.accountId)?.amount ?? null
-    if (hasNoStoredAmount(prevAmount)) return false
+  if (!hideZeroRows.value) return true
+  if (filterMode.value === 'previous') {
+    if (previousMonthAccountsById.value.size === 0) return true
+    return !hasNoStoredAmount(previousMonthAccountsById.value.get(acc.accountId)?.amount ?? null)
   }
-  if (hideNoCurrentMonthBudget.value && hasNoStoredAmount(acc.amount)) return false
-  return true
+  return !hasNoStoredAmount(acc.amount)
 }
 
 // A parent account stays visible as long as at least one descendant leaf
@@ -242,7 +329,7 @@ function accountVisible(acc: BudgetAccount): boolean {
 // so this recomputes a compact version of that page's pace cards straight
 // from the draft values above, gated to only the one month where it means
 // anything.
-const showLivePace = computed(() => editMonth.value === AS_OF_MONTH)
+const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === AS_OF_MONTH)
 const livePaceExpectedPct = computed(() => (AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)) * 100)
 const livePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = sampleActuals.month[cat]
@@ -270,8 +357,13 @@ const liveDraftNetIncome = computed(() => netIncome({
 // both, plus the delta, at every level of the tree. Both sides are
 // read-only for a closed month — there's nothing left to plan for a month
 // that's already over.
-const selectedMonthClosed = computed(() => isMonthClosed(YEAR, editMonth.value))
-const selectedMonthIsCurrent = computed(() => isMonthCurrent(YEAR, editMonth.value))
+// All four of these read editMonth.value directly, so they'd otherwise
+// stay stubbornly true/false based on whatever month was selected *before*
+// switching to the Annual Total tab (e.g. "Jun" left selected underneath),
+// wrongly labeling the annual aggregate as that specific month's card.
+// viewingAnnualTotal always wins.
+const selectedMonthClosed = computed(() => !viewingAnnualTotal.value && isMonthClosed(YEAR, editMonth.value))
+const selectedMonthIsCurrent = computed(() => !viewingAnnualTotal.value && isMonthCurrent(YEAR, editMonth.value))
 
 // Jan-Jul 2026's budget_targets aren't independent plans — they're this
 // restaurant's own actual results, typed into QBO's budget object as each
@@ -284,7 +376,15 @@ const selectedMonthIsCurrent = computed(() => isMonthCurrent(YEAR, editMonth.val
 // from the original xlsx import. Hardcoded to this known historical
 // window rather than a general "is this budget actuals-derived" flag,
 // since nothing in the schema distinguishes the two today.
-const budgetIsActualsDerived = computed(() => editMonth.value <= 7)
+const budgetIsActualsDerived = computed(() => !viewingAnnualTotal.value && editMonth.value <= 6)
+// July is a mix, not a clean "actuals" or "budget" month: Food/Beer/
+// Liquor/Wine/Non-Alcoholic revenue got a real forward-looking budget from
+// a CSV (2026-07-28), but everything else in July — COGS, Labor, Opex, and
+// the rest of revenue — is still the rounded actuals carried over from
+// before that. Gets its own note rather than folding into
+// budgetIsActualsDerived above, since "somewhat budgeted" isn't the same
+// claim as "this is actuals, not a plan."
+const julyIsPartiallyBudgeted = computed(() => !viewingAnnualTotal.value && editMonth.value === 7)
 
 const monthActualVsBudgetCards = computed(() => {
   if (!selectedMonthClosed.value) return null
@@ -391,7 +491,13 @@ function realYearCategoryTotal(cat: Exclude<Category, 'other'>): number {
 function yearCategoryTotal(cat: Category): number {
   let total = 0
   for (let m = 1; m <= 12; m++) {
-    if (m === editMonth.value) {
+    // While viewing the Annual Total tab, editMonthData/categoryComputedTotal
+    // already point at the annual aggregate, not a single month's draft —
+    // substituting it into one month's slot here would double-count that
+    // month's total into the whole year. There's also no "unsaved draft" to
+    // fold in during annual view (nothing renders an input), so every month
+    // just reads its own stored value like the non-substituted branch below.
+    if (!viewingAnnualTotal.value && m === editMonth.value) {
       total += categoryComputedTotal(cat)
       continue
     }
@@ -405,7 +511,7 @@ function yearCategoryTotal(cat: Category): number {
 function yearMonthsBudgeted(cat: Category): number {
   let count = 0
   for (let m = 1; m <= 12; m++) {
-    if (m === editMonth.value) {
+    if (!viewingAnnualTotal.value && m === editMonth.value) {
       if (categoryComputedTotal(cat) !== 0) count++
       continue
     }
@@ -539,12 +645,15 @@ async function saveBudgets() {
 
     // Only leaf accounts have anything to save — every parent account's
     // number is derived (see computedAccountAmount above), never entered,
-    // so there's nothing of its own to write.
+    // so there's nothing of its own to write. Compared at whole-dollar
+    // precision (not the old 0.005 cent-level epsilon) since the displayed
+    // value is already whole dollars — an untouched account whose real
+    // stored amount has cents (e.g. Jan-May's exact-cent actuals) must not
+    // register as "changed" just because its display dropped the cents.
     for (const acc of data.accounts) {
       if (!isLeafAccount(acc)) continue
-      const raw = editableAccountAmounts.value[acc.accountId]
-      const newAmount = raw === undefined || raw === '' ? 0 : Number(raw)
-      if (Math.abs(newAmount - (acc.amount ?? 0)) >= 0.005) {
+      const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
+      if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
         targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
       }
     }
@@ -646,21 +755,6 @@ function exportForQuickBooks() {
 
     <template v-else>
       <section>
-        <div class="section-head">
-          <div class="section-label">Edit Monthly Budget</div>
-          <div class="filter-tabs">
-            <button
-              type="button" class="filter-tab" :class="{ active: hideNoPriorMonthBudget }"
-              :disabled="!previousMonthLabel" :title="previousMonthLabel ? undefined : 'No prior month to compare'"
-              @click="hideNoPriorMonthBudget = !hideNoPriorMonthBudget"
-            >Hide $0 in {{ previousMonthLabel || '—' }}</button>
-            <button
-              type="button" class="filter-tab" :class="{ active: hideNoCurrentMonthBudget }"
-              @click="hideNoCurrentMonthBudget = !hideNoCurrentMonthBudget"
-            >Hide $0 in {{ MONTH_NAMES[editMonth - 1] }}</button>
-          </div>
-        </div>
-
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
             <span class="chip accent"><span class="dot"></span>Live preview — Month</span>
@@ -675,6 +769,9 @@ function exportForQuickBooks() {
           </div>
           <div class="live-pace-net">
             Net income (draft): <strong :class="liveDraftNetIncome >= 0 ? 'good' : 'critical'">{{ liveDraftNetIncome >= 0 ? '+' : '' }}${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
+          </div>
+          <div v-if="julyIsPartiallyBudgeted" class="quiet-note actuals-derived-note">
+            {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR }} is somewhat budgeted: Food, Beer, Liquor, Wine, and Non-Alcoholic revenue now carry a real forward-looking budget. Everything else this month — COGS, Labor, Opex, and the rest of revenue — is still {{ MONTH_NAMES[editMonth - 1] }}'s rounded actuals carried over, not an independently-set target.
           </div>
         </div>
 
@@ -696,14 +793,15 @@ function exportForQuickBooks() {
             vs. budgeted <strong>${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
           </div>
           <div v-if="budgetIsActualsDerived" class="quiet-note actuals-derived-note">
-            Jan–Jul {{ YEAR }}'s budget is this restaurant's own actual results for each month, entered as QuickBooks budget figures after each month closed — not an independently-set target, which is why variance above is near zero. Jun and Jul are rounded to the nearest $100; Jan–May are shown to the exact cent as originally imported.
+            Jan–Jun {{ YEAR }}'s budget is this restaurant's own actual results for each month, entered as QuickBooks budget figures after each month closed — not an independently-set target, which is why variance above is near zero. Jun is rounded to the nearest $100; Jan–May are shown to the exact cent as originally imported.
           </div>
         </div>
 
         <div class="live-pace-card">
           <div class="live-pace-head">
             <span class="chip accent"><span class="dot"></span>Live preview — Year</span>
-            <span class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
+            <span v-if="viewingAnnualTotal" class="quiet-note">How the full year paces against every month's last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
+            <span v-else class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in yearLivePaceCards" :key="card.category" class="live-pace-item">
@@ -722,17 +820,44 @@ function exportForQuickBooks() {
           </div>
         </div>
 
+        <div class="legend">
+          <span class="chip good"><span class="dot"></span>On / ahead of budget</span>
+          <span class="chip warning"><span class="dot"></span>Watch</span>
+          <span class="chip serious"><span class="dot"></span>Off pace</span>
+          <span class="chip critical"><span class="dot"></span>Over / under budget</span>
+        </div>
+
         <div class="pl-table-card">
+          <div class="section-head table-head">
+            <div class="section-label">Edit Monthly Budget</div>
+            <button
+              type="button" class="filter-tab" :class="{ active: hideZeroRows }"
+              :disabled="filterMode === 'previous' && !previousMonthLabel"
+              :title="filterMode === 'previous' && !previousMonthLabel ? 'No prior month to compare' : undefined"
+              @click="hideZeroRows = !hideZeroRows"
+            >{{ hideZeroRows ? 'Show' : 'Hide' }} {{ filterMode === 'previous' ? `rows with $0 in ${previousMonthLabel || '—'}` : '$0 rows' }}</button>
+          </div>
           <div class="month-tabs">
             <button
               v-for="(name, i) in MONTH_NAMES" :key="name"
               type="button"
-              :class="['month-tab', editMonth === i + 1 && 'active', !monthHasBudget(i + 1) && 'unbudgeted']"
-              @click="editMonth = i + 1"
+              :class="['month-tab', (editMonth === i + 1 && !viewingAnnualTotal) && 'active', !monthHasBudget(i + 1) && 'unbudgeted']"
+              @click="editMonth = i + 1; viewingAnnualTotal = false"
             >{{ name }}</button>
+            <button
+              type="button"
+              :class="['month-tab', 'annual-total-tab', viewingAnnualTotal && 'active']"
+              @click="viewingAnnualTotal = true"
+            >Total</button>
           </div>
           <table class="pl-table edit-table">
-            <thead v-if="selectedMonthClosed">
+            <thead v-if="viewingAnnualTotal">
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Total</th>
+              </tr>
+            </thead>
+            <thead v-else-if="selectedMonthClosed">
               <tr class="col-head-row">
                 <th scope="col"></th>
                 <th scope="col">Budget</th>
@@ -748,7 +873,32 @@ function exportForQuickBooks() {
                 <th scope="col">Variance</th>
               </tr>
             </thead>
-            <tbody v-if="!selectedMonthClosed">
+            <!-- Annual total: a straight sum across all 12 months per line
+                 item, read-only (there's nothing to edit or compare against
+                 for an aggregate) — no Actual/Variance columns, no
+                 COGS-recompute banner (that's for planning one month, not
+                 reviewing a year). -->
+            <tbody v-if="viewingAnnualTotal">
+              <template v-for="cat in CATEGORIES" :key="cat">
+                <tr>
+                  <th scope="row">
+                    <button class="expand-toggle" @click="expandedCategory = expandedCategory === cat ? null : cat">
+                      {{ expandedCategory === cat ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
+                    </button>
+                  </th>
+                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
+                </tr>
+                <template v-if="expandedCategory === cat">
+                  <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                    <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
+                      <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                    </th>
+                    <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
+                  </tr>
+                </template>
+              </template>
+            </tbody>
+            <tbody v-else-if="!selectedMonthClosed">
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
                   <th scope="row">
@@ -774,7 +924,10 @@ function exportForQuickBooks() {
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
                     <td>
-                      <input v-if="isLeafAccount(acc)" type="number" step="0.01" class="amount-input" v-model="editableAccountAmounts[acc.accountId]" placeholder="0.00" />
+                      <input
+                        v-if="isLeafAccount(acc)" type="text" inputmode="numeric" class="amount-input"
+                        v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
+                      />
                       <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
                     </td>
                     <td v-if="selectedMonthIsCurrent">
@@ -854,7 +1007,7 @@ function exportForQuickBooks() {
           </table>
         </div>
 
-        <div v-if="!selectedMonthClosed" class="action-row">
+        <div v-if="!selectedMonthClosed && !viewingAnnualTotal" class="action-row">
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
           <button
             class="action-btn" :disabled="actionStatus === 'running'"
@@ -878,13 +1031,6 @@ function exportForQuickBooks() {
       </section>
     </template>
 
-    <div class="legend">
-      <span class="chip good"><span class="dot"></span>On / ahead of budget</span>
-      <span class="chip warning"><span class="dot"></span>Watch</span>
-      <span class="chip serious"><span class="dot"></span>Off pace</span>
-      <span class="chip critical"><span class="dot"></span>Over / under budget</span>
-    </div>
-
     <footer>
       <span>Actuals: illustrative sample data &middot; Budgets: real data imported from QuickBooks' budget export</span>
       <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
@@ -907,7 +1053,7 @@ function exportForQuickBooks() {
 .actuals-derived-note { padding-top: 6px; border-top: 1px dashed var(--hair); }
 
 /* ---------- row filter toggles ---------- */
-.filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.pl-table-card .table-head { padding: 12px 14px 8px; }
 .filter-tab {
   font-size: 11px;
   font-weight: 700;
@@ -971,6 +1117,7 @@ function exportForQuickBooks() {
   top: 1px;
 }
 .month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
+.month-tab.annual-total-tab { margin-left: 8px; }
 .month-tab.active {
   background: var(--surface);
   color: var(--ink);
