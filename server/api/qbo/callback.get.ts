@@ -1,7 +1,10 @@
 // Intuit redirects here after the user approves (or denies) access, per
 // QBO_REDIRECT_URI. Exchanges the one-time code for an access/refresh token
 // pair and stores them in qbo_tokens — from here on, sync jobs read tokens
-// from the database, not from this route.
+// from the database, not from this route. Only ever hit by a real browser
+// at the tail end of the OAuth redirect chain (never called by our own
+// frontend), so on success it redirects into the app rather than returning
+// raw JSON.
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const code = query.code as string | undefined
@@ -26,5 +29,5 @@ export default defineEventHandler(async (event) => {
   const tokens = await exchangeCodeForTokens(qbo.environment, qbo.clientId, qbo.clientSecret, code, qbo.redirectUri)
   saveTokens(realmId, tokens)
 
-  return { connected: true, realmId }
+  return sendRedirect(event, '/')
 })
