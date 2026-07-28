@@ -802,8 +802,8 @@ function exportForQuickBooks() {
       <section>
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent">Live preview — Month</span>
-            <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s pace looks with your unsaved edits below — the only month with actuals to pace against.</span>
+            <span class="chip accent">Live Preview</span>
+            <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s actual-to-date paces against the budget below, including any edits you haven't saved yet.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in livePaceCards" :key="card.category" class="live-pace-item">
@@ -840,11 +840,10 @@ function exportForQuickBooks() {
           </div>
         </div>
 
-        <div class="live-pace-card">
+        <div v-if="viewingAnnualTotal" class="live-pace-card">
           <div class="live-pace-head">
-            <span class="chip accent">Live preview — Year</span>
-            <span v-if="viewingAnnualTotal" class="quiet-note">How the full year paces against every month's last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
-            <span v-else class="quiet-note">How the full year paces with {{ MONTH_NAMES[editMonth - 1] }}'s unsaved edits folded in — every other month uses its last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
+            <span class="chip accent">Live Preview</span>
+            <span class="quiet-note">How the full year paces against every month's last-saved budget. Actuals are real (daily_line_items), not sample data.</span>
           </div>
           <div class="live-pace-grid">
             <div v-for="card in yearLivePaceCards" :key="card.category" class="live-pace-item">
