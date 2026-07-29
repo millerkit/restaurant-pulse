@@ -381,7 +381,7 @@ const liveDraftNetIncome = computed(() => netIncome({
   cogs: categoryComputedTotal('cogs'),
   labor: categoryComputedTotal('labor'),
   opex: categoryComputedTotal('opex')
-}))
+}) + categoryComputedTotal('other'))
 
 // ---- Actual vs Budget (closed months) -------------------------------------
 // The Month live-pace preview above only ever applies to the current
@@ -434,7 +434,7 @@ const monthActualNetIncome = computed(() => {
     cogs: categoryActualTotal('cogs'),
     labor: categoryActualTotal('labor'),
     opex: categoryActualTotal('opex')
-  })
+  }) + categoryActualTotal('other')
 })
 
 // ---- Net Income row (bottom of the table, every scope) --------------------
@@ -452,7 +452,7 @@ const currentMonthActualNetIncome = computed(() => {
     cogs: categoryActualTotal('cogs'),
     labor: categoryActualTotal('labor'),
     opex: categoryActualTotal('opex')
-  })
+  }) + categoryActualTotal('other')
 })
 const currentMonthProjectedNetIncome = computed(() => {
   if (!selectedMonthIsCurrent.value || !selectedMonthHasActuals.value) return null
@@ -461,7 +461,7 @@ const currentMonthProjectedNetIncome = computed(() => {
     cogs: categoryProjectedTotal('cogs'),
     labor: categoryProjectedTotal('labor'),
     opex: categoryProjectedTotal('opex')
-  })
+  }) + categoryProjectedTotal('other')
 })
 // Actual side of the Annual Total tab's net income row — mirrors
 // yearLiveNetIncome's budgeted counterpart, but built from
@@ -470,12 +470,16 @@ const currentMonthProjectedNetIncome = computed(() => {
 // until at least one month has actually synced.
 const yearActualNetIncome = computed(() => {
   if (yearActualsMonthsWithData.value === 0) return null
+  let otherTotal = 0
+  for (const m of monthlyActuals.value) {
+    if (m.month <= monthsElapsed.value) otherTotal += m.totals.other || 0
+  }
   return netIncome({
     revenue: realYearCategoryTotal('revenue'),
     cogs: realYearCategoryTotal('cogs'),
     labor: realYearCategoryTotal('labor'),
     opex: realYearCategoryTotal('opex')
-  })
+  }) + otherTotal
 })
 
 function netIncomeClass(value: number | null): string {
@@ -620,7 +624,7 @@ const yearLiveNetIncome = computed(() => netIncome({
   cogs: yearCategoryTotal('cogs'),
   labor: yearCategoryTotal('labor'),
   opex: yearCategoryTotal('opex')
-}))
+}) + yearCategoryTotal('other'))
 
 // ---- COGS % of revenue (Food/Beverage trailing average) ----------------
 // COGS is fundamentally a variable cost — it scales with revenue, the
