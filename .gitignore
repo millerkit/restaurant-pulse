@@ -33,5 +33,14 @@ data/*.sqlite3
 # see scripts/import-budget-xlsx.mjs.
 !data/qbo-budget-template.xlsx
 
+# Real QBO exports (payroll figures, chart-of-accounts dumps) used as one-off
+# script input — same reasoning as the real budget xlsx above: never check
+# in the source file itself, only sanitized/derived artifacts.
+data/*.csv
+
 # Personal Claude Code settings (permissions etc.), not shared config
 .claude/settings.local.json
+
+# Local-machine bookkeeping for scripts/pull-accounts-from-prod.mjs's predev
+# throttle — not shared state, nothing to check in
+data/.last-accounts-pull

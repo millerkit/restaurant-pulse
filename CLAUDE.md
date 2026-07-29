@@ -636,14 +636,13 @@ forward.
   (`pl-report.get.ts`, and a short-lived `account-query.get.ts` built
   alongside it) are both deleted now that the real sync is verified
   working, matching `pl-report.get.ts`'s own original header comment.
-- **Still sandbox, not production** — the connected QBO token is for the
-  sandbox environment. Pulling Urban Hearth's real multi-year history needs
-  a production OAuth reconnect first (same manual-step pattern as the
-  Cloudflare Access rollout above: needs the user's own Intuit login).
-  `account_number`-based matching is also only lightly exercised so far —
-  the sandbox's demo chart of accounts has no `AcctNum` set on any account
-  at all, so every sandbox account landed via the "insert as new" path, not
-  the "match by account_number" path real accounts will mostly take.
+- **Was sandbox-only at the time this was written; production reconnect
+  completed 2026-07-29** — see the QBO production reconnect + local/prod
+  account drift section below. The sandbox's demo chart of accounts had no
+  `AcctNum` set on any account at all, so every sandbox account landed via
+  the "insert as new" path rather than "match by account_number" — real
+  accounts mostly take the latter, and that path is now exercised for real
+  in production.
 - **Explicitly out of scope, on purpose** — wiring the Dashboard/P&L/Budget
   pages' `sampleActuals` over to real `daily_line_items` queries. That's
   its own separate task; this pass was sync + ingestion only.
@@ -688,6 +687,78 @@ whole-month. This is day-weighted, not hour-weighted — the app has no real
 per-day operating-hours data to weight by, so equal weighting across the
 six operating days is the closest feasible approximation; revisit if real
 hours data ever becomes available.
+
+## QBO production reconnect + local/prod account drift — 2026-07-29
+
+Production connected to the real Urban Hearth QBO company (production OAuth
+keys, real redirect URI) — the "still sandbox" note above is now stale.
+`qbo-account-sync.ts` has been running nightly against real data since the
+reconnect, and production's `accounts` table (220 rows, all with
+`qbo_account_id` populated) now reflects the true chart of accounts.
+
+This surfaced two real bugs, both found by trying to write the same set of
+budget numbers to local dev and production and comparing results:
+
+- **Local dev and production `accounts` rows had drifted apart, silently.**
+  Local was seeded once from a QBO budget xlsx export
+  (`scripts/import-budget-xlsx.mjs`) and never touched again; production's
+  table has been rebuilt by the live nightly sync since the reconnect.
+  Same account names ended up at completely different `id`s in each
+  database — e.g. local `id=91` was "Wine Director" while production
+  `id=91` was "Employer Group Dental Insurance Expense". A one-off SQL
+  script that hardcoded local account `id`s and ran it against production
+  wrote wage-shaped budget numbers onto the wrong production accounts
+  before this was caught; it was reverted from an on-volume backup taken
+  seconds earlier, and the machine was restarted to drop any in-memory
+  state from the bad write. No lasting production impact, but the
+  takeaway is durable: **never key a script touching `accounts` or
+  `budget_targets` on raw `id` across environments — always match by
+  `account_number` or `qbo_account_id`.**
+- **The nightly sync's boot-time catch-up re-synced on every restart, not
+  just a missed window.** `server/plugins/qbo-nightly-sync.ts` only
+  tracked "already ran today" in an in-process variable that resets to
+  `null` on every restart, so a plain `fly apps restart` (used to recover
+  from the incident above) triggered a redundant extra sync. Fixed by
+  having the boot check also consult `sync_runs` (which survives
+  restarts) before firing — `alreadySucceededToday()` in that file.
+
+Local dev still can't hold its own QBO connection — Intuit's production
+OAuth keys only accept a public HTTPS redirect URI, so `localhost` was
+never going to be a viable OAuth target, independent of any of the above.
+Instead, **`npm run db:pull-accounts`** (`scripts/pull-accounts-from-prod.mjs`)
+does a one-way, on-demand pull of just the `accounts` table from the
+production Fly volume into local dev over `fly ssh console` (the container
+image has no `sqlite3` CLI, so it shells out to a small script using the
+app's own `better-sqlite3` dependency, same technique used to diagnose and
+repair the incident above). Matches remote to local by `qbo_account_id`
+first, `account_number` second, same precedence as `qbo-account-sync.ts`
+itself; never touches `budget_targets`/`daily_line_items` (both key off the
+local `id`, which existing rows keep); never overwrites
+`is_owner_compensation` (hand-set locally, not sourced from QBO); never
+deletes, only deactivates a local row whose `qbo_account_id` disappears
+from the remote dump.
+
+**A first version of this script re-created the exact bug it was meant to
+prevent**, on local dev this time: `findByAccountNumber` didn't restrict to
+active rows, so a handful of pre-existing local duplicate-account-number
+situations (same root cause as the local/prod drift above, apparently from
+an earlier stray import or partial sync attempt — 22 pairs found, one of
+them the Wine Director/Tip Wages pair from earlier this session) let the
+match land on an already-deactivated empty duplicate instead of the active
+row holding real budget/actuals history, silently creating a second active
+row per pair. Caught by checking for duplicate active `account_number`s
+after running it, before trusting the result. Fixed two ways: the match
+query now requires `is_active = 1`, and if more than one active row still
+matches an account_number (should no longer happen, but not assumed), the
+script skips the auto-match, inserts the remote account as new, and prints
+an explicit warning listing the candidate ids for manual review, rather
+than picking one silently. The script also prints a warning if any
+duplicate active `account_number`s remain after it runs, as a standing
+safety net. The 22 pre-existing local duplicates from this run were
+resolved by hand (keep whichever row had real `budget_targets`/
+`daily_line_items` history, or — where neither side had history — whichever
+already carried a `qbo_account_id`; deactivate the other, transferring its
+`qbo_account_id` onto the kept row first if needed).
 
 ## Running it
 
