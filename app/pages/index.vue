@@ -497,9 +497,15 @@ function meterStatusLabel(status: string | null) {
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
+/* margin-top clears room for .runway-expected::after's "today's pace"
+   label below, which sits 22px above this track's own top (-4px tick
+   position + -18px label offset) — the .runway-card flex gap alone (10px)
+   wasn't enough, so the label overlapped .runway-head's actual/target text
+   above (same bug as budget/index.vue's pace cards). */
 .runway-track {
   position: relative;
   height: 22px;
+  margin-top: 14px;
   border-radius: 8px;
   background: var(--surface-alt);
   overflow: visible;
