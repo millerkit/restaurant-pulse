@@ -136,13 +136,22 @@ watch(editMonth, async (month) => {
 // Accounts without a number (QBO system accounts like "Uncategorized
 // Income") sort to the end.
 function accountsForCategory(cat: Category) {
-  return (editMonthData.value?.accounts || [])
-    .filter(a => a.category === cat && accountVisible(a))
-    .sort((a, b) => {
-      const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
-      const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
-      return an !== bn ? an - bn : a.name.localeCompare(b.name)
-    })
+  const all = (editMonthData.value?.accounts || []).filter(a => a.category === cat)
+  // The $0-row filter (leafVisible/accountVisible above) is meant to
+  // declutter, not to hide an entire category — but a category whose
+  // previous month has no stored amounts anywhere (e.g. Labor/Opex/Other
+  // budgets got cleared or never entered) can filter every single one of
+  // its accounts out, leaving the expanded category looking empty/broken
+  // instead of showing an editable tree. Same escape hatch as the
+  // whole-month one at previousMonthAccountsById.value.size === 0 above,
+  // just scoped to "would this category end up with nothing," not "is the
+  // whole previous month missing."
+  const visible = all.filter(accountVisible)
+  return (visible.length > 0 ? visible : all).sort((a, b) => {
+    const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
+    const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
+    return an !== bn ? an - bn : a.name.localeCompare(b.name)
+  })
 }
 
 const editMonthAccountsById = computed(() => {
