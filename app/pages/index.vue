@@ -497,7 +497,7 @@ function meterStatusLabel(status: string | null) {
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
-/* margin-top clears room for .runway-expected::after's "today's pace"
+/* margin-top clears room for .runway-expected::after's "today's target"
    label below, which sits 22px above this track's own top (-4px tick
    position + -18px label offset) — the .runway-card flex gap alone (10px)
    wasn't enough, so the label overlapped .runway-head's actual/target text
@@ -528,7 +528,7 @@ function meterStatusLabel(status: string | null) {
   opacity: 0.55;
 }
 .runway-expected::after {
-  content: "today's pace";
+  content: "today's target";
   position: absolute;
   top: -18px;
   left: 50%;

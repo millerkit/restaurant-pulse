@@ -355,10 +355,11 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .runway-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 .runway-head .name { font-size: 14px; font-weight: 700; }
 .runway-head .nums { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-/* margin-top clears room for .runway-expected::after's "today's pace" label
-   below, which sits 22px above this track's own top (-4px tick position +
-   -18px label offset) — the .runway-card flex gap alone (10px) wasn't
-   enough, so the label overlapped .runway-head's actual/budget text above. */
+/* margin-top clears room for .runway-expected::after's "today's target"
+   label below, which sits 22px above this track's own top (-4px tick
+   position + -18px label offset) — the .runway-card flex gap alone (10px)
+   wasn't enough, so the label overlapped .runway-head's actual/budget text
+   above. */
 .runway-track { position: relative; height: 22px; margin-top: 14px; border-radius: 8px; background: var(--surface-alt); overflow: visible; }
 .runway-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 8px; }
 .runway-fill.good { background: var(--good); }
@@ -367,7 +368,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .runway-fill.critical { background: var(--critical); }
 .runway-expected { position: absolute; top: -4px; width: 2px; height: 30px; background: var(--ink); opacity: 0.55; }
 .runway-expected::after {
-  content: "today's pace"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+  content: "today's target"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
   font-size: 9px; white-space: nowrap; color: var(--ink-3); font-weight: 600;
 }
 .runway-foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); }
