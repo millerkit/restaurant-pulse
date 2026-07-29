@@ -257,6 +257,31 @@ function budgetActualVariance(category: Category, budget: number, actual: number
   return { kind: 'value' as const, budget, actual, delta: actual - reference, status }
 }
 
+// Renders variance as a colored dollar-figure directly on the Actual/
+// Projected number itself (e.g. "$52,976" / "▲ (+$12,596)") rather than a
+// separate Variance column — per the design rule that status color must
+// always pair with an icon, never stand alone (see the P&L page's ✓/▲
+// treatment). The icon sits next to the delta, not the absolute total —
+// putting it on the total read as "▼ $184,210" meaning "down to $184,210,"
+// when the icon is actually describing the delta below it, not the total
+// itself. Delta stays a dollar figure, not a percentage: a $24 miss on a
+// $100 budget line is a huge percentage but immaterial, while dollar deltas
+// make materiality visible at a glance regardless of the line's size.
+type Variance = ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }
+function varianceIcon(v?: Variance): string {
+  if (!v || v.kind !== 'value') return ''
+  return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
+}
+function varianceClass(v?: Variance): string {
+  if (!v || v.kind === 'no-actuals' || v.kind === 'no-budget') return ''
+  return v.kind === 'neutral' ? 'v-neutral' : `v-${v.status}`
+}
+function varianceDeltaLabel(v?: Variance): string {
+  if (!v || (v.kind !== 'value' && v.kind !== 'neutral')) return ''
+  const sign = v.delta >= 0 ? '+' : '−'
+  return `(${sign}$${Math.abs(Math.round(v.delta)).toLocaleString()})`
+}
+
 // Tue-Sun operating-day fraction of the current month elapsed so far. A
 // plain calendar-day fraction (e.g. "16 of 31 days") overstates how far
 // through the month a restaurant's business actually is, since Urban
@@ -1046,7 +1071,6 @@ function exportForQuickBooks() {
                 <th scope="col"></th>
                 <th scope="col">Budget</th>
                 <th scope="col">Actual</th>
-                <th scope="col">Variance</th>
               </tr>
             </thead>
             <thead v-else-if="selectedMonthIsCurrent">
@@ -1055,7 +1079,6 @@ function exportForQuickBooks() {
                 <th scope="col">Budget</th>
                 <th scope="col">Actual (to date)</th>
                 <th scope="col">Projected</th>
-                <th scope="col">Variance</th>
               </tr>
             </thead>
             <!-- Annual total: a straight sum across all 12 months per line
@@ -1106,13 +1129,14 @@ function exportForQuickBooks() {
                   </td>
                   <td v-if="selectedMonthIsCurrent">
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
-                    <span v-else class="amount-input readonly">${{ Math.round(categoryProjectedTotal(cat)).toLocaleString() }}</span>
-                  </td>
-                  <td v-if="selectedMonthIsCurrent" class="variance-cell">
-                    <span v-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
-                    <span v-else-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
-                    <span v-else-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral">{{ categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryProjectedVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
-                    <span v-else :class="['chip', categoryProjectedVarianceByCat.get(cat).status]">{{ categoryProjectedVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryProjectedVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryProjectedVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(categoryProjectedVarianceByCat.get(cat))]">
+                      <span class="variance-main">${{ Math.round(categoryProjectedTotal(cat)).toLocaleString() }}</span>
+                      <span v-if="varianceDeltaLabel(categoryProjectedVarianceByCat.get(cat))" class="variance-delta">
+                        <span v-if="varianceIcon(categoryProjectedVarianceByCat.get(cat))" class="variance-icon">{{ varianceIcon(categoryProjectedVarianceByCat.get(cat)) }}</span>
+                        {{ varianceDeltaLabel(categoryProjectedVarianceByCat.get(cat)) }}
+                      </span>
+                      <span v-if="categoryProjectedVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                    </span>
                   </td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
@@ -1133,18 +1157,19 @@ function exportForQuickBooks() {
                     </td>
                     <td v-if="selectedMonthIsCurrent">
                       <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
-                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountProjected(acc)).toLocaleString() }}</span>
-                    </td>
-                    <td v-if="selectedMonthIsCurrent" class="variance-cell">
-                      <span v-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
-                      <span v-else-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
-                      <span v-else-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral">{{ accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountProjectedVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
-                      <span v-else :class="['chip', accountProjectedVarianceById.get(acc.accountId).status]">{{ accountProjectedVarianceById.get(acc.accountId).status === 'good' ? '✓' : (accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '▲' : '▼') }} {{ accountProjectedVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountProjectedVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(accountProjectedVarianceById.get(acc.accountId))]">
+                        <span class="variance-main">${{ Math.round(computedAccountProjected(acc)).toLocaleString() }}</span>
+                        <span v-if="varianceDeltaLabel(accountProjectedVarianceById.get(acc.accountId))" class="variance-delta">
+                          <span v-if="varianceIcon(accountProjectedVarianceById.get(acc.accountId))" class="variance-icon">{{ varianceIcon(accountProjectedVarianceById.get(acc.accountId)) }}</span>
+                          {{ varianceDeltaLabel(accountProjectedVarianceById.get(acc.accountId)) }}
+                        </span>
+                        <span v-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                      </span>
                     </td>
                   </tr>
                 </template>
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
-                  <td :colspan="selectedMonthIsCurrent ? 5 : 2">
+                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
                       COGS is variable — it scales with revenue, not a fixed dollar guess. Trailing
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }})</template>:
@@ -1171,7 +1196,6 @@ function exportForQuickBooks() {
                   <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                   <span v-else class="amount-input readonly"><strong :class="netIncomeClass(currentMonthProjectedNetIncome)">{{ formatNetIncome(currentMonthProjectedNetIncome) }}</strong></span>
                 </td>
-                <td v-if="selectedMonthIsCurrent" class="variance-cell"></td>
               </tr>
             </tbody>
             <!-- Closed month: budget and actual are both final, so this is a
@@ -1189,13 +1213,14 @@ function exportForQuickBooks() {
                   <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                   <td>
                     <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
-                    <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
-                  </td>
-                  <td class="variance-cell">
-                    <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
-                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
-                    <span v-else-if="categoryVarianceByCat.get(cat)?.kind === 'neutral'" class="chip neutral">{{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
-                    <span v-else :class="['chip', categoryVarianceByCat.get(cat).status]">{{ categoryVarianceByCat.get(cat).status === 'good' ? '✓' : (categoryVarianceByCat.get(cat).delta >= 0 ? '▲' : '▼') }} {{ categoryVarianceByCat.get(cat).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(categoryVarianceByCat.get(cat).delta)).toLocaleString() }}</span>
+                    <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(categoryVarianceByCat.get(cat))]">
+                      <span class="variance-main">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
+                      <span v-if="varianceDeltaLabel(categoryVarianceByCat.get(cat))" class="variance-delta">
+                        <span v-if="varianceIcon(categoryVarianceByCat.get(cat))" class="variance-icon">{{ varianceIcon(categoryVarianceByCat.get(cat)) }}</span>
+                        {{ varianceDeltaLabel(categoryVarianceByCat.get(cat)) }}
+                      </span>
+                      <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                    </span>
                   </td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
@@ -1206,13 +1231,14 @@ function exportForQuickBooks() {
                     <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
                     <td>
                       <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
-                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
-                    </td>
-                    <td class="variance-cell">
-                      <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="chip warning">No actual data</span>
-                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
-                      <span v-else-if="accountVarianceById.get(acc.accountId)?.kind === 'neutral'" class="chip neutral">{{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
-                      <span v-else :class="['chip', accountVarianceById.get(acc.accountId).status]">{{ accountVarianceById.get(acc.accountId).status === 'good' ? '✓' : (accountVarianceById.get(acc.accountId).delta >= 0 ? '▲' : '▼') }} {{ accountVarianceById.get(acc.accountId).delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(accountVarianceById.get(acc.accountId).delta)).toLocaleString() }}</span>
+                      <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(accountVarianceById.get(acc.accountId))]">
+                        <span class="variance-main">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                        <span v-if="varianceDeltaLabel(accountVarianceById.get(acc.accountId))" class="variance-delta">
+                          <span v-if="varianceIcon(accountVarianceById.get(acc.accountId))" class="variance-icon">{{ varianceIcon(accountVarianceById.get(acc.accountId)) }}</span>
+                          {{ varianceDeltaLabel(accountVarianceById.get(acc.accountId)) }}
+                        </span>
+                        <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                      </span>
                     </td>
                   </tr>
                 </template>
@@ -1224,7 +1250,6 @@ function exportForQuickBooks() {
                   <span v-if="monthActualNetIncome === null" class="amount-input readonly muted">—</span>
                   <span v-else class="amount-input readonly"><strong :class="netIncomeClass(monthActualNetIncome)">{{ formatNetIncome(monthActualNetIncome) }}</strong></span>
                 </td>
-                <td class="variance-cell"></td>
               </tr>
             </tbody>
           </table>
@@ -1376,6 +1401,29 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .amount-input.readonly.muted { color: var(--ink-3); font-weight: 500; }
 
+/* Variance is shown directly on the Actual/Projected figure (color + a ✓/▲/▼
+   icon, per the "color must pair with an icon" rule, plus the dollar delta
+   in parens) rather than a separate column — see varianceIcon/varianceClass/
+   varianceDeltaLabel above. Specificity matches .amount-input.readonly.muted
+   above so these colors actually win over the base readonly color. */
+.amount-input.readonly.variance-text.v-good { color: var(--good); }
+.amount-input.readonly.variance-text.v-warning { color: var(--warning); }
+.amount-input.readonly.variance-text.v-serious { color: var(--serious); }
+.amount-input.readonly.variance-text.v-critical { color: var(--critical); }
+.amount-input.readonly.variance-text.v-neutral { color: var(--ink-2); }
+.amount-input.readonly.variance-text {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: auto;
+}
+/* icon + amount never split across lines; the delta always drops to its own
+   line below, instead of wrapping wherever happens to fit (which could
+   split mid-parenthesis, e.g. "(−" / "$10,686)"). */
+.variance-main { white-space: nowrap; }
+.variance-icon { display: inline-block; }
+.variance-delta { display: block; font-weight: 500; opacity: 0.8; white-space: nowrap; }
+
 /* ---------- closed-month read-only Budget/Actual/Variance columns ---------- */
 .col-head-row th {
   font-size: 10.5px;
@@ -1386,7 +1434,6 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   padding: 8px 16px 6px;
   border-bottom: 1px solid var(--hair);
 }
-.variance-cell { min-width: 120px; }
 .chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
 
 .edit-table tr.cogs-avg-row td { padding: 10px 16px 14px; }
