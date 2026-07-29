@@ -402,19 +402,6 @@ const liveDraftNetIncome = computed(() => netIncome({
 const selectedMonthClosed = computed(() => !viewingAnnualTotal.value && isMonthClosed(YEAR, editMonth.value))
 const selectedMonthIsCurrent = computed(() => !viewingAnnualTotal.value && isMonthCurrent(YEAR, editMonth.value))
 
-// Jan-Jun 2026's budget_targets aren't independent plans — they're this
-// restaurant's own actual results, typed into QBO's budget object as each
-// month closed (see CLAUDE.md's Budget tab section), which is why the new
-// Actual vs Budget columns above will always show ~$0 variance for these
-// months specifically. Jun was additionally rounded to the nearest $100
-// (2026-07-28, at the user's request, purely to make the closed-month
-// table read like a normal rounded budget instead of showing actuals down
-// to the penny) — Jan-May are still the exact-cent figures from the
-// original xlsx import. Hardcoded to this known historical window rather
-// than a general "is this budget actuals-derived" flag, since nothing in
-// the schema distinguishes the two today.
-const budgetIsActualsDerived = computed(() => !viewingAnnualTotal.value && editMonth.value <= 6)
-
 const monthActualVsBudgetCards = computed(() => {
   if (!selectedMonthClosed.value) return null
   return (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
@@ -993,9 +980,6 @@ function exportForQuickBooks() {
             Net income (actual): <strong :class="monthActualNetIncome >= 0 ? 'good' : 'critical'">{{ monthActualNetIncome >= 0 ? '+' : '' }}${{ Math.round(monthActualNetIncome).toLocaleString() }}</strong>
             vs. budgeted <strong>${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
           </div>
-          <div v-if="budgetIsActualsDerived" class="quiet-note actuals-derived-note">
-            Jan–Jun {{ YEAR }}'s budget is this restaurant's own actual results for each month, entered as QuickBooks budget figures after each month closed — not an independently-set target, which is why variance above is near zero. Jun is rounded to the nearest $100; Jan–May are shown to the exact cent as originally imported.
-          </div>
         </div>
 
         <div v-if="viewingAnnualTotal" class="live-pace-card">
@@ -1284,7 +1268,6 @@ function exportForQuickBooks() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
-.actuals-derived-note { padding-top: 6px; border-top: 1px dashed var(--hair); }
 
 /* ---------- row filter toggles ---------- */
 .pl-table-card .table-head { padding: 12px 14px 8px; }
