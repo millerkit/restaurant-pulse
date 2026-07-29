@@ -437,6 +437,55 @@ const monthActualNetIncome = computed(() => {
   })
 })
 
+// ---- Net Income row (bottom of the table, every scope) --------------------
+// A derived rollup, not its own account/category, so it's computed here
+// rather than folded into CATEGORIES — always Budgeted, plus Actual (or,
+// for the in-progress current month, Actual-to-date and Projected) wherever
+// actuals exist. Never shown for a future month's actual side, since
+// there's nothing to sync yet — the template gates that off
+// selectedMonthHasActuals/selectedMonthIsCurrent, same as every other
+// actual-side figure on this page.
+const currentMonthActualNetIncome = computed(() => {
+  if (!selectedMonthIsCurrent.value || !selectedMonthHasActuals.value) return null
+  return netIncome({
+    revenue: categoryActualTotal('revenue'),
+    cogs: categoryActualTotal('cogs'),
+    labor: categoryActualTotal('labor'),
+    opex: categoryActualTotal('opex')
+  })
+})
+const currentMonthProjectedNetIncome = computed(() => {
+  if (!selectedMonthIsCurrent.value || !selectedMonthHasActuals.value) return null
+  return netIncome({
+    revenue: categoryProjectedTotal('revenue'),
+    cogs: categoryProjectedTotal('cogs'),
+    labor: categoryProjectedTotal('labor'),
+    opex: categoryProjectedTotal('opex')
+  })
+})
+// Actual side of the Annual Total tab's net income row — mirrors
+// yearLiveNetIncome's budgeted counterpart, but built from
+// realYearCategoryTotal (real daily_line_items summed through the last
+// elapsed month) rather than yearCategoryTotal (budget figures), and null
+// until at least one month has actually synced.
+const yearActualNetIncome = computed(() => {
+  if (yearActualsMonthsWithData.value === 0) return null
+  return netIncome({
+    revenue: realYearCategoryTotal('revenue'),
+    cogs: realYearCategoryTotal('cogs'),
+    labor: realYearCategoryTotal('labor'),
+    opex: realYearCategoryTotal('opex')
+  })
+})
+
+function netIncomeClass(value: number | null): string {
+  if (value === null) return ''
+  return value >= 0 ? 'ni-good' : 'ni-critical'
+}
+function formatNetIncome(value: number): string {
+  return `${value >= 0 ? '+' : '−'}$${Math.abs(Math.round(value)).toLocaleString()}`
+}
+
 // Per-row variance for the read-only table below — one lookup per category
 // (all 5, including 'other') and one per account, built once per render
 // rather than recomputed per template call. 'no-actuals' short-circuits
@@ -643,6 +692,48 @@ const cogsTrailingLabel = computed(() => cogsTrailingMonths.value.map(m => MONTH
 const cogsTrailingFoodPct = computed(() => cogsGroupPctOverMonths(cogsTrailingMonths.value, 'Food'))
 const cogsTrailingBeveragePct = computed(() => cogsGroupPctOverMonths(cogsTrailingMonths.value, 'Beverage'))
 
+// Current group % actually budgeted for the month being edited, so it can be
+// compared against the trailing average below — this is derived from the
+// already-saved budget_targets figures (same source the recompute action
+// itself reads via groupRevenueBudget), not the in-progress unsaved inputs,
+// so switching a leaf account's textbox doesn't flip the button's visibility
+// on every keystroke.
+function currentGroupPct(data: MonthData, group: 'Food' | 'Beverage'): number | null {
+  const revenue = groupRevenueBudget(data, group)
+  if (revenue <= 0) return null
+  const cogs = data.accounts
+    .filter(a => a.category === 'cogs' && a.subcategory === group && a.amount !== null)
+    .reduce((sum, a) => sum + (a.amount || 0), 0)
+  return cogs / revenue
+}
+
+// The button only makes sense to show when it would actually change
+// something — i.e. the month's currently budgeted Food/Beverage COGS % has
+// drifted from the trailing average, or there's a revenue budget but no
+// COGS budget at all yet. A tenth-of-a-point difference isn't worth
+// surfacing (rounding in the recompute's own per-account weighting means an
+// exact match is rare), so this only flags a real divergence.
+const COGS_RECOMPUTE_THRESHOLD = 0.01
+function cogsComparisons() {
+  const data = editMonthData.value
+  if (!data || viewingAnnualTotal.value) return []
+  const out: { trailingPct: number, currentPct: number | null }[] = []
+  for (const group of ['Food', 'Beverage'] as const) {
+    const trailingPct = group === 'Food' ? cogsTrailingFoodPct.value : cogsTrailingBeveragePct.value
+    if (trailingPct === null) continue
+    out.push({ trailingPct, currentPct: currentGroupPct(data, group) })
+  }
+  return out
+}
+// Whether there's even a trailing average to compare against yet (e.g. Jan
+// has no prior months), separate from whether it already matches — the
+// template uses this to avoid claiming a month is "already on pace" when
+// there's really just nothing to compare.
+const cogsHasComparableData = computed(() => cogsComparisons().length > 0)
+const cogsNeedsRecompute = computed(() =>
+  cogsComparisons().some(c => c.currentPct !== null && Math.abs(c.currentPct - c.trailingPct) > COGS_RECOMPUTE_THRESHOLD)
+)
+
 const cogsRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const cogsRecomputeMessage = ref('')
 
@@ -691,27 +782,74 @@ async function recomputeCogsFromTrailingAverage() {
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const saveMessage = ref('')
 
+// Shared by saveBudgets and the unsaved-changes guards below — only leaf
+// accounts have anything to save (every parent account's number is
+// derived, see computedAccountAmount above), and comparison is at
+// whole-dollar precision (not the old 0.005 cent-level epsilon) since the
+// displayed value is already whole dollars — an untouched account whose
+// real stored amount has cents (e.g. Jan-May's exact-cent actuals) must
+// not register as "changed" just because its display dropped the cents.
+function changedTargets(data: MonthData) {
+  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+  for (const acc of data.accounts) {
+    if (!isLeafAccount(acc)) continue
+    const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
+    if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
+      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
+    }
+  }
+  return targets
+}
+
+// Drives the unsaved-changes warning below. Only editable months can have
+// anything to lose — a closed month's cells are read-only and the annual
+// total is a derived read-only rollup, so both are excluded rather than
+// running the comparison against data that was never editable in the
+// first place.
+const hasUnsavedChanges = computed(() => {
+  if (viewingAnnualTotal.value || selectedMonthClosed.value) return false
+  const data = editMonthData.value
+  if (!data) return false
+  return changedTargets(data).length > 0
+})
+
+const UNSAVED_CHANGES_MESSAGE = 'You have unsaved budget edits for this month. Discard them and continue?'
+
+// Every way of leaving the currently-edited month with unsaved changes still
+// in the input boxes: switching to another month tab, jumping to the Total
+// tab, closing/refreshing the browser tab, or navigating to a different page
+// via the shared nav. All four confirm with the user first rather than
+// silently discarding, since editableAccountAmounts (see the watch above)
+// gets wiped and re-seeded from the last-saved data the moment editMonthData
+// changes.
+function selectMonth(month: number) {
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
+  editMonth.value = month
+  viewingAnnualTotal.value = false
+}
+function selectAnnualTotal() {
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
+  viewingAnnualTotal.value = true
+}
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload))
+
+onBeforeRouteLeave(() => {
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return false
+})
+
 async function saveBudgets() {
   saveStatus.value = 'saving'
   try {
     const data = editMonthData.value
     if (!data) throw new Error('Budget data not loaded yet')
-    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-
-    // Only leaf accounts have anything to save — every parent account's
-    // number is derived (see computedAccountAmount above), never entered,
-    // so there's nothing of its own to write. Compared at whole-dollar
-    // precision (not the old 0.005 cent-level epsilon) since the displayed
-    // value is already whole dollars — an untouched account whose real
-    // stored amount has cents (e.g. Jan-May's exact-cent actuals) must not
-    // register as "changed" just because its display dropped the cents.
-    for (const acc of data.accounts) {
-      if (!isLeafAccount(acc)) continue
-      const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
-      if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
-        targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
-      }
-    }
+    const targets = changedTargets(data)
 
     if (targets.length === 0) {
       saveStatus.value = 'idle'
@@ -741,6 +879,22 @@ async function saveBudgets() {
 // comparison read-only instead.
 const actionStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const actionMessage = ref('')
+
+// Every action-result chip (Fill missing, Recompute COGS, Save) is the
+// outcome of an action taken against whichever month was selected at the
+// time — without this they're plain refs with no month of their own, so
+// switching tabs left a stale "done"/"error" chip from the previous month
+// showing under the newly-selected one (e.g. recomputing September's COGS
+// and then clicking over to October would still show September's green
+// confirmation banner there).
+watch(editMonth, () => {
+  cogsRecomputeStatus.value = 'idle'
+  cogsRecomputeMessage.value = ''
+  actionStatus.value = 'idle'
+  actionMessage.value = ''
+  saveStatus.value = 'idle'
+  saveMessage.value = ''
+})
 
 function describeSource(sourceLabel: string, source: 'actuals' | 'budget', sourceClosed: boolean) {
   if (source === 'actuals') return `${sourceLabel} actuals`
@@ -884,12 +1038,12 @@ function exportForQuickBooks() {
               v-for="(name, i) in MONTH_NAMES" :key="name"
               type="button"
               :class="['month-tab', (editMonth === i + 1 && !viewingAnnualTotal) && 'active', !monthHasBudget(i + 1) && 'unbudgeted']"
-              @click="editMonth = i + 1; viewingAnnualTotal = false"
+              @click="selectMonth(i + 1)"
             >{{ name }}</button>
             <button
               type="button"
               :class="['month-tab', 'annual-total-tab', viewingAnnualTotal && 'active']"
-              @click="viewingAnnualTotal = true"
+              @click="selectAnnualTotal"
             >Total</button>
           </div>
           <table class="pl-table edit-table">
@@ -940,6 +1094,14 @@ function exportForQuickBooks() {
                   </tr>
                 </template>
               </template>
+              <tr class="net-income-row">
+                <th scope="row">Net Income (Budgeted)</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
+              </tr>
+              <tr v-if="yearActualNetIncome !== null" class="net-income-row">
+                <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearActualNetIncome)">{{ formatNetIncome(yearActualNetIncome) }}</strong></span></td>
+              </tr>
             </tbody>
             <tbody v-else-if="!selectedMonthClosed">
               <template v-for="cat in CATEGORIES" :key="cat">
@@ -1000,15 +1162,29 @@ function exportForQuickBooks() {
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }})</template>:
                       Food <strong>{{ cogsTrailingFoodPct !== null ? (cogsTrailingFoodPct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Food revenue,
                       Beverage <strong>{{ cogsTrailingBeveragePct !== null ? (cogsTrailingBeveragePct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Beverage revenue.
-                      <button class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
+                      <button v-if="cogsNeedsRecompute" class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
                         Recompute {{ MONTH_NAMES[editMonth - 1] }} COGS from this average
                       </button>
+                      <span v-else-if="cogsRecomputeStatus !== 'done' && cogsHasComparableData" class="chip neutral">Already tracking the trailing average</span>
                       <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
                       <span v-if="cogsRecomputeStatus === 'error'" class="chip warning">{{ cogsRecomputeMessage }}</span>
                     </div>
                   </td>
                 </tr>
               </template>
+              <tr class="net-income-row">
+                <th scope="row">Net Income</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                  <span v-else class="amount-input readonly"><strong :class="netIncomeClass(currentMonthActualNetIncome)">{{ formatNetIncome(currentMonthActualNetIncome) }}</strong></span>
+                </td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                  <span v-else class="amount-input readonly"><strong :class="netIncomeClass(currentMonthProjectedNetIncome)">{{ formatNetIncome(currentMonthProjectedNetIncome) }}</strong></span>
+                </td>
+                <td v-if="selectedMonthIsCurrent" class="variance-cell"></td>
+              </tr>
             </tbody>
             <!-- Closed month: budget and actual are both final, so this is a
                  read-only comparison, not an editor — no input boxes, and no
@@ -1053,18 +1229,28 @@ function exportForQuickBooks() {
                   </tr>
                 </template>
               </template>
+              <tr class="net-income-row">
+                <th scope="row">Net Income</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
+                <td>
+                  <span v-if="monthActualNetIncome === null" class="amount-input readonly muted">—</span>
+                  <span v-else class="amount-input readonly"><strong :class="netIncomeClass(monthActualNetIncome)">{{ formatNetIncome(monthActualNetIncome) }}</strong></span>
+                </td>
+                <td class="variance-cell"></td>
+              </tr>
             </tbody>
           </table>
         </div>
 
         <div v-if="!selectedMonthClosed && !viewingAnnualTotal" class="action-row">
-          <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
           <button
             class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
             :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month in this year'"
             @click="fillMissingFromLastMonth"
           >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
+          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
         </div>
         <div v-else class="action-row">
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
@@ -1227,6 +1413,15 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   padding-left: 0;
   margin-top: 0;
 }
+.edit-table tr.net-income-row th, .edit-table tr.net-income-row td {
+  border-top: 2px solid var(--ink);
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.edit-table tr.net-income-row th { font-weight: 700; color: var(--ink); }
+.edit-table tr.net-income-row .amount-input.readonly { font-weight: 700; }
+.ni-good { color: var(--good); }
+.ni-critical { color: var(--critical); }
 .mini-btn {
   font-size: 11px;
   font-weight: 700;
@@ -1239,7 +1434,7 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .mini-btn:disabled { opacity: 0.5; cursor: default; }
 
-.action-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 .action-btn {
   font-size: 12.5px;
   font-weight: 700;
