@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, YEAR_DAY_FRACTION, type BudgetAccount, type Category, type MonthData, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, currentYearDayFraction, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -8,13 +8,19 @@ const { lastSync, syncFailed } = useSyncStatus()
 const { monthlyData, loadError, loadYear } = useBudgetYear()
 const { monthlyActuals } = useActualsYear()
 
+// Real "as of" month/day the Live Preview card paces against — see
+// currentAsOfMonth/currentAsOfDay in useBudgetData.ts for why this must be
+// the real date, not a frozen narration date.
+const asOfMonth = currentAsOfMonth()
+const asOfDay = currentAsOfDay()
+
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
   return !!data && data.accounts.some(a => a.amount !== null)
 }
 
 // ---- Edit Monthly Budget ------------------------------------------------
-const editMonth = ref(AS_OF_MONTH)
+const editMonth = ref(asOfMonth)
 const viewingAnnualTotal = ref(false)
 
 // Synthesizes a MonthData-shaped object summing each account's budget
@@ -385,8 +391,8 @@ function accountVisible(acc: BudgetAccount): boolean {
 // so this recomputes a compact version of that page's pace cards straight
 // from the draft values above, gated to only the one month where it means
 // anything.
-const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === AS_OF_MONTH)
-const livePaceExpectedPct = computed(() => (AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)) * 100)
+const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === asOfMonth)
+const livePaceExpectedPct = computed(() => (asOfDay / daysInMonth(YEAR, asOfMonth)) * 100)
 // Real actual-to-date from daily_line_items (selectedMonthAccountActuals),
 // matching the per-line-item table below and the Year live preview card,
 // both wired off real data too. noActuals mirrors
@@ -634,7 +640,7 @@ const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] a
     return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: true as const, actual, budget, monthsBudgeted }
   }
   const actualPct = (actual / budget) * 100
-  const status = paceStatus(actualPct, YEAR_DAY_FRACTION * 100, CATEGORY_DIRECTION[cat])
+  const status = paceStatus(actualPct, currentYearDayFraction() * 100, CATEGORY_DIRECTION[cat])
   return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: false as const, actual, budget, monthsBudgeted, actualPct, status }
 }))
 const yearLiveNetIncome = computed(() => netIncome({

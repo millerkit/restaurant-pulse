@@ -22,9 +22,8 @@
 // same way the disabled same-month case would. So an in-progress or future
 // source month always prefers its budget over its own partial actuals,
 // regardless of whether some actuals rows exist for it. This uses the real
-// calendar date, not the app's frozen sample "as-of" narration date (see
-// AS_OF_MONTH in useBudgetData.ts) — daily_line_items/budget_targets are
-// real synced data, not the sample figures shown elsewhere in the UI.
+// calendar date — daily_line_items/budget_targets are real synced data, not
+// the sample figures still shown on the P&L page.
 type MonthRef = { year: number, month: number }
 
 function monthBounds({ year, month }: MonthRef) {

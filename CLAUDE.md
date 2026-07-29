@@ -874,12 +874,31 @@ there's no user-facing availability impact to chase here. Safe to ignore.
 
 ## Not yet done
 
-- Wiring the dashboard UI to the real schema — the Dashboard and P&L pages
-  currently render the same static sample data as the approved mockups, not
-  `useDb()` queries (the Budget tab is the exception — its budget numbers
-  are real, only its actuals are still sample data). `daily_line_items` now
-  has a real path in (see QBO Account + P&L sync below) — this is now
-  purely a UI-wiring task, no longer blocked on data.
+- **Rethink the Budget Pace hero card's signal overload** (raised by the
+  user 2026-07-29, viewing real production numbers post-fix). The Net
+  Income card shows up to four simultaneous good/bad signals — actual $
+  (green/red by sign), a "Behind budget"/"On pace" chip (red/green by
+  actual-vs-budget), projected $ (green/red by sign), and a "projected to
+  miss budget"/"on pace" chip (red/green by projected-vs-budget) — and a
+  real case surfaced where actual was positive (green) but behind budget
+  (red chip), with the projection *also* positive but *still* projected to
+  miss budget. Individually each signal is intentional (see the Design
+  direction section: "a month can be profitable and still be behind
+  budget," kept deliberately separate from the black/red sign) — but four
+  independent good/bad reads stacked on one card, especially when the
+  dollar-sign color and the budget-status color disagree, reads as
+  contradictory rather than nuanced. Needs a design pass, not a data fix —
+  revisit the hierarchy (e.g. lead with one clear headline signal, demote
+  the others) rather than just restating "it's true, both signals are
+  correct."
+- Wiring the P&L page to the real schema — it still renders the same static
+  sample data as the approved mockup, not `useDb()` queries. The Dashboard
+  page was wired to real data (`server/api/dashboard.get.ts`) and no longer
+  needs this; the Budget tab's budget numbers are also real, only its
+  actuals were still sample data (also since resolved — see Budget vs
+  Actual on the Edit Budget page above). `daily_line_items` has a real path
+  in (see QBO Account + P&L sync below) — this is now purely a UI-wiring
+  task, no longer blocked on data.
 - A manual entry flow for `category_benchmarks`
 - Auto-recalculating expense budgets when a revenue estimate is revised
   mid-month (raised, deliberately deferred — the Budget tab ships manual

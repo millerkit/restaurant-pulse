@@ -16,12 +16,8 @@ export type BudgetAccount = {
 }
 export type MonthData = { year: number, month: number, accounts: BudgetAccount[] }
 
-// The sample month/day this whole app is narrated against (matches the
-// Dashboard/P&L pages' "Thu, Jul 16" as-of date), and the only year this
-// restaurant has any budget data for yet.
+// The only year this restaurant has any budget data for yet.
 export const YEAR = 2026
-export const AS_OF_MONTH = 7
-export const AS_OF_DAY = 16
 export const CATEGORIES: Category[] = ['revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense']
 export const CATEGORY_LABEL: Record<Category, string> = { revenue: 'Revenue', cogs: 'COGS', labor: 'Labor', opex: 'Operating Expenses', other_income: 'Other Income', other_expense: 'Other Expense' }
 export const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -82,10 +78,9 @@ export function useBudgetYear() {
 }
 
 // Real calendar-date closedness for daily_line_items/budget_targets — the
-// real synced data these two feed off of, not the app's frozen sample
-// "as-of" narration date (AS_OF_MONTH above), which only describes the
-// still-sample-data Dashboard/P&L/Month-preview figures. Mirrors the same
-// check in server/api/budget/copy-into-month.post.ts.
+// real synced data these two feed off of, not the still-sample-data P&L
+// page's own narration date. Mirrors the same check in
+// server/api/budget/copy-into-month.post.ts.
 export function isMonthClosed(year: number, month: number): boolean {
   const now = new Date()
   return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth() + 1)
@@ -108,6 +103,25 @@ export function monthsElapsedInYear(year: number): number {
   if (year < now.getFullYear()) return 12
   if (year > now.getFullYear()) return 0
   return now.getMonth() + 1
+}
+
+// Real "as of" day/month — the Month view's pace/projection math on Budget
+// Pace and Edit Budget's Live Preview card divides real actual-to-date by
+// how far through the month has really elapsed, so it needs today's actual
+// date, not a frozen narration date (this used to be a fixed AS_OF_MONTH/
+// AS_OF_DAY=Jul 16, left over from when this page showed frozen sample
+// data — pacing real actuals off a stale day-16 fraction nearly doubled
+// every month-end projection once the real month was ~28 days in,
+// confirmed against production 2026-07-29). Clamped to this app's only
+// budgeted year (YEAR), same as monthsElapsedInYear() above, so viewing a
+// year with no real "today" inside it doesn't produce a nonsensical value.
+export function currentAsOfMonth(): number {
+  const now = new Date()
+  return now.getFullYear() === YEAR ? now.getMonth() + 1 : 12
+}
+export function currentAsOfDay(): number {
+  const now = new Date()
+  return now.getFullYear() === YEAR ? now.getDate() : daysInMonth(YEAR, 12)
 }
 
 export type MonthActuals = { month: number, hasData: boolean, totals: Record<Category, number> }
@@ -146,11 +160,17 @@ export const CATEGORY_DIRECTION: Record<Category, Direction> = {
   other_income: 'higher-is-better', other_expense: 'higher-is-worse'
 }
 
-// Same fraction of the year elapsed as the Dashboard's "197 of 365 days
-// elapsed" sample figure — shared here so every page computing a year-pace
-// expectation (Budget Pace's Year toggle, Edit Budget's year live preview)
-// uses the identical number instead of each hardcoding its own copy.
-export const YEAR_DAY_FRACTION = 197 / 365
+// Real fraction of YEAR elapsed so far — replaces the old fixed 197/365
+// (~Jul 16) sample narration fraction for the same reason as
+// currentAsOfMonth/currentAsOfDay above. Shared here so every page
+// computing a year-pace expectation (Budget Pace's Year toggle, Edit
+// Budget's year live preview) uses the identical real number.
+export function currentYearDayFraction(): number {
+  const now = new Date()
+  if (now.getFullYear() < YEAR) return 0
+  if (now.getFullYear() > YEAR) return 1
+  return dayOfYear(YEAR, now.getMonth() + 1, now.getDate()) / daysInYear(YEAR)
+}
 
 export function paceStatus(actualPct: number, expectedPct: number, direction: Direction) {
   const diff = direction === 'higher-is-better' ? expectedPct - actualPct : actualPct - expectedPct
@@ -180,8 +200,8 @@ export function benchmarkStatus(actualPct: number, benchmark: CategoryBenchmark 
 // Net income is never entered directly — no real QBO account represents it
 // (see schema.sql) — so it's always derived as revenue - cogs - labor -
 // opex + other_income - other_expense. other_income/other_expense are
-// optional here (default 0) so callers still on sample data (Dashboard/P&L
-// pages) that don't have those figures at all don't need to pass zeros
+// optional here (default 0) so callers still on sample data (the P&L page)
+// that don't have those figures at all don't need to pass zeros
 // explicitly.
 export function netIncome(actuals: Record<'revenue' | 'cogs' | 'labor' | 'opex', number> & Partial<Record<'other_income' | 'other_expense', number>>) {
   return actuals.revenue - actuals.cogs - actuals.labor - actuals.opex + (actuals.other_income ?? 0) - (actuals.other_expense ?? 0)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, YEAR_DAY_FRACTION, categoryTotals, daysInMonth, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, categoryTotals, currentAsOfDay, currentAsOfMonth, currentYearDayFraction, daysInMonth, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
@@ -8,11 +8,17 @@ const { lastSync, syncFailed } = useSyncStatus()
 const { monthlyData, loadError } = useBudgetYear()
 const { monthlyActuals, loadError: actualsLoadError } = useActualsYear()
 
+// Real "as of" month/day this page paces against — see currentAsOfMonth/
+// currentAsOfDay in useBudgetData.ts for why this must be the real date,
+// not a frozen narration date.
+const asOfMonth = currentAsOfMonth()
+const asOfDay = currentAsOfDay()
+
 function categoryTotalsFor(monthNumbers: number[]) {
   return categoryTotals(monthlyData.value, monthNumbers)
 }
 
-const monthBudget = computed(() => categoryTotalsFor([AS_OF_MONTH]))
+const monthBudget = computed(() => categoryTotalsFor([asOfMonth]))
 const yearBudget = computed(() => categoryTotalsFor(Array.from({ length: 12 }, (_, i) => i + 1)))
 
 // Owner-operator compensation (Executive Chef, Business Manager — see
@@ -34,11 +40,11 @@ function ownerCompensationTotal(monthNumbers: number[]) {
   }
   return total
 }
-const monthOwnerComp = computed(() => ownerCompensationTotal([AS_OF_MONTH]))
+const monthOwnerComp = computed(() => ownerCompensationTotal([asOfMonth]))
 const yearOwnerComp = computed(() => ownerCompensationTotal(Array.from({ length: 12 }, (_, i) => i + 1)))
 const periodOwnerComp = computed(() => selectedPeriod.value === 'month' ? monthOwnerComp.value : yearOwnerComp.value)
 const ownerCompAccountNames = computed(() => {
-  const data = monthlyData.value[AS_OF_MONTH - 1]
+  const data = monthlyData.value[asOfMonth - 1]
   if (!data) return []
   return data.accounts.filter(a => a.category === 'labor' && a.isOwnerCompensation).map(a => a.name)
 })
@@ -53,8 +59,8 @@ const laborExOwnerComp = computed(() => {
 
 const selectedPeriod = ref<'month' | 'year'>('month')
 const periodDayFraction = computed(() => selectedPeriod.value === 'month'
-  ? AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)
-  : YEAR_DAY_FRACTION)
+  ? asOfDay / daysInMonth(YEAR, asOfMonth)
+  : currentYearDayFraction())
 function actualsTotalsFor(monthNumbers: number[]) {
   const totals = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
   for (const m of monthNumbers) {
@@ -69,7 +75,7 @@ function actualsTotalsFor(monthNumbers: number[]) {
   }
   return totals
 }
-const monthActualsTotals = computed(() => actualsTotalsFor([AS_OF_MONTH]))
+const monthActualsTotals = computed(() => actualsTotalsFor([asOfMonth]))
 const yearActualsTotals = computed(() => actualsTotalsFor(Array.from({ length: 12 }, (_, i) => i + 1)))
 const periodActuals = computed(() => selectedPeriod.value === 'month' ? monthActualsTotals.value : yearActualsTotals.value)
 const periodBudget = computed(() => selectedPeriod.value === 'month' ? monthBudget.value : yearBudget.value)
@@ -96,7 +102,7 @@ const budgetNetIncome = computed(() => netIncome(periodBudget.value.totals as an
 // This is the non-destructive alternative to the Edit Budget page's
 // "Update this month from actuals" button actually overwriting budget_targets
 // with a partial-month guess — see edit.vue.
-const monthDayFraction = computed(() => AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH))
+const monthDayFraction = computed(() => asOfDay / daysInMonth(YEAR, asOfMonth))
 const monthProjected = computed(() => {
   const proj = {} as Record<'revenue' | 'cogs' | 'labor' | 'opex' | 'other_income' | 'other_expense', number>
   for (const cat of ['revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense'] as const) {
