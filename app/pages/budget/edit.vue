@@ -717,59 +717,50 @@ async function saveBudgets() {
   }
 }
 
-// ---- Update this month from budget/actuals (seeding another month) -------
-// Two variants of the same underlying operation (copy-into-month sums
-// daily_line_items for one source month and upserts that total into
-// budget_targets for the target month, rounded to the nearest $100 — see
-// copy-into-month.post.ts) — they only differ in which month they read
-// from. Both fall back to the source month's budget when it has no
-// actuals: their real use is seeding an unbudgeted month (e.g. September)
-// from a nearby one, and the nearby source month often won't have actuals
-// either — either because it's also still in progress, or because the QBO
-// sync hasn't reached it yet. Falling back to that month's already-entered
-// budget keeps the button useful either way; the result message says which
-// one it actually used rather than leaving that ambiguous.
-//
-// There's deliberately no third "update this month from its own actuals"
-// action — that would mean overwriting a month's budget with its own
-// result, destroying the ability to ever compare "what we planned" against
-// "what happened" for that month (exactly the loss that made Jan-June's
-// real budget figures useless as a comparison point — see the Actual vs
-// Budget card above). Closed months show that comparison read-only instead.
+// ---- Fill missing accounts from last month --------------------------------
+// Copies last month's per-account figure (actuals if that month has closed,
+// otherwise its own budget — see copy-into-month.post.ts) into every account
+// that has NO budget_targets row yet for the month being edited, rounded to
+// the nearest $10. Accounts that already have a value — e.g. a revenue
+// projection you've already typed in and saved — are left alone; this is a
+// gap-filler, not a whole-month overwrite, so it can't clobber numbers
+// you've deliberately set. There's no "same month last year" variant anymore
+// (dropped 2026-07-29, per the user: not useful in practice) and no "update
+// from its own actuals" action for the same reason as before — that would
+// overwrite a month's budget with its own result, destroying the ability to
+// compare "what we planned" against "what happened." Closed months show that
+// comparison read-only instead.
 const actionStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const actionMessage = ref('')
 
-function describeSource(sourceLabel: string, source: 'actuals' | 'budget') {
-  return source === 'budget' ? `${sourceLabel}'s budget (no actuals synced for ${sourceLabel} yet)` : `${sourceLabel} actuals`
+function describeSource(sourceLabel: string, source: 'actuals' | 'budget', sourceClosed: boolean) {
+  if (source === 'actuals') return `${sourceLabel} actuals`
+  return sourceClosed ? `${sourceLabel}'s budget (no actuals synced for ${sourceLabel} yet)` : `${sourceLabel}'s budget (${sourceLabel} hasn't closed yet, so its actuals aren't a full month)`
 }
 
-async function copyIntoEditMonth(sourceYear: number, sourceMonth: number, sourceLabel: string) {
+async function fillMissingFromLastMonth() {
+  if (!previousMonthLabel.value) return
+  const sourceMonth = editMonth.value - 1
+  const sourceClosed = isMonthClosed(YEAR, sourceMonth)
   actionStatus.value = 'running'
   try {
     const result = await $fetch('/api/budget/copy-into-month', {
       method: 'POST',
-      body: { sourceYear, sourceMonth, targetMonths: [{ year: YEAR, month: editMonth.value }], allowBudgetFallback: true }
+      body: {
+        sourceYear: YEAR, sourceMonth,
+        targetMonths: [{ year: YEAR, month: editMonth.value }],
+        allowBudgetFallback: true, onlyMissing: true, roundTo: 10
+      }
     })
-    actionMessage.value = `Updated ${result.accountsCopied} accounts for ${MONTH_NAMES[editMonth.value - 1]} from ${describeSource(sourceLabel, result.source)}.`
+    actionMessage.value = result.updated > 0
+      ? `Filled in ${result.updated} account(s) with no existing budget for ${MONTH_NAMES[editMonth.value - 1]}, from ${describeSource(previousMonthLabel.value, result.source, sourceClosed)}.`
+      : `Every account already has a budget for ${MONTH_NAMES[editMonth.value - 1]} — nothing to fill in.`
     actionStatus.value = 'done'
     await loadYear()
   } catch (err: any) {
     actionStatus.value = 'error'
     actionMessage.value = err?.data?.statusMessage || err?.message || 'No actuals or budget available yet'
   }
-}
-
-function updateFromLastMonth() {
-  if (!previousMonthLabel.value) return
-  copyIntoEditMonth(YEAR, editMonth.value - 1, previousMonthLabel.value)
-}
-
-// Mechanically this just points the same copy-into-month engine at
-// sourceYear = YEAR - 1 — budget_targets/daily_line_items are keyed by an
-// arbitrary (year, month), not scoped to a single year, so nothing in the
-// data model blocks this.
-function updateFromSameMonthLastYear() {
-  copyIntoEditMonth(YEAR - 1, editMonth.value, `${MONTH_NAMES[editMonth.value - 1]} ${YEAR - 1}`)
 }
 
 function exportForQuickBooks() {
@@ -1060,15 +1051,10 @@ function exportForQuickBooks() {
         <div v-if="!selectedMonthClosed && !viewingAnnualTotal" class="action-row">
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
           <button
-            class="action-btn" :disabled="actionStatus === 'running'"
-            :title="`Uses ${MONTH_NAMES[editMonth - 1]} ${YEAR - 1}'s actuals if synced, otherwise its budget`"
-            @click="updateFromSameMonthLastYear"
-          >Update this month from {{ MONTH_NAMES[editMonth - 1] }} {{ YEAR - 1 }}</button>
-          <button
             class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
-            :title="previousMonthLabel ? `Uses ${previousMonthLabel}'s actuals if synced, otherwise its budget` : 'No prior month in this year'"
-            @click="updateFromLastMonth"
-          >Update this month from {{ previousMonthLabel || '—' }}</button>
+            :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month in this year'"
+            @click="fillMissingFromLastMonth"
+          >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
         <div v-else class="action-row">

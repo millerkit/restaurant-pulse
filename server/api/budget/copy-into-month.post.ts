@@ -41,9 +41,13 @@ function isMonthClosed(year: number, month: number): boolean {
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{
-    sourceYear: number, sourceMonth: number, targetMonths: MonthRef[], accountIds?: number[], allowBudgetFallback?: boolean
+    sourceYear: number, sourceMonth: number, targetMonths: MonthRef[], accountIds?: number[], allowBudgetFallback?: boolean,
+    roundTo?: number, onlyMissing?: boolean
   }>(event)
-  const { sourceYear, sourceMonth, targetMonths, accountIds, allowBudgetFallback } = body || {}
+  const { sourceYear, sourceMonth, targetMonths, accountIds, allowBudgetFallback, onlyMissing } = body || {}
+  // Defaults to the original $100 rounding for callers that don't pass it;
+  // the per-line-item "fill missing" action passes 10 (see edit.vue).
+  const roundTo = body?.roundTo || 100
 
   if (!Number.isInteger(sourceYear) || !Number.isInteger(sourceMonth) || sourceMonth < 1 || sourceMonth > 12) {
     throw createError({ statusCode: 400, statusMessage: 'sourceYear and sourceMonth (1-12) are required' })
@@ -80,10 +84,10 @@ export default defineEventHandler(async (event) => {
       WHERE date BETWEEN ? AND ? ${accountFilter}
       GROUP BY account_id
     `).all(start, end, ...accountFilterArgs) as { accountId: number, total: number }[]
-    // Rounded to the nearest $100 — these are starting points meant to be
-    // edited by hand afterward, not final figures, so cent-level actuals
-    // would be false precision.
-    rows = actuals.map(a => ({ accountId: a.accountId, amount: Math.round(a.total / 100) * 100 }))
+    // Rounded (to $100 by default, or roundTo if the caller passes one) —
+    // these are starting points meant to be edited by hand afterward, not
+    // final figures, so cent-level actuals would be false precision.
+    rows = actuals.map(a => ({ accountId: a.accountId, amount: Math.round(a.total / roundTo) * roundTo }))
   } else if (allowBudgetFallback) {
     source = 'budget'
     rows = db.prepare(`
@@ -103,6 +107,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 422, statusMessage: `No actuals available for ${sourceLabel} yet` })
   }
 
+  // onlyMissing (the per-line-item "fill gaps" action) never touches an
+  // account that already has a budget_targets row for the target month —
+  // e.g. a revenue figure the user already typed in by hand should survive
+  // a click of this button, not get clobbered by the source month's number.
+  const existingQuery = db.prepare(`SELECT account_id FROM budget_targets WHERE year = ? AND month = ? AND amount IS NOT NULL`)
+
   const upsert = db.prepare(`
     INSERT INTO budget_targets (year, month, account_id, amount)
     VALUES (@year, @month, @accountId, @amount)
@@ -111,7 +121,11 @@ export default defineEventHandler(async (event) => {
   const upsertAll = db.transaction(() => {
     let count = 0
     for (const target of targetMonths) {
+      const alreadySet = onlyMissing
+        ? new Set((existingQuery.all(target.year, target.month) as { account_id: number }[]).map(r => r.account_id))
+        : null
       for (const r of rows) {
+        if (alreadySet?.has(r.accountId)) continue
         upsert.run({ year: target.year, month: target.month, accountId: r.accountId, amount: r.amount })
         count++
       }
