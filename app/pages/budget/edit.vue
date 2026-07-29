@@ -238,10 +238,11 @@ function computedAccountProjected(acc: BudgetAccount): number {
 
 // Shared budget-vs-actual comparison used by both the per-line-item table
 // and the summary card below, for any category (leaf account rows reuse
-// their own account's category for the good/bad direction). 'other' has no
-// declared direction (see CATEGORY_DIRECTION) — its variance is shown
-// neutrally, without a color judgment, same as everywhere else 'other' is
-// excluded from directional benchmarking (e.g. netIncome()).
+// their own account's category for the good/bad direction). Every category
+// has a real declared direction now (see CATEGORY_DIRECTION) — other_income/
+// other_expense (split from a single, directionless 'other' 2026-07-29) get
+// a real good/bad judgment like everything else instead of a neutral
+// carve-out.
 //
 // `reference` defaults to `budget` (so referencePct is always 100%) — used
 // as-is for a closed month's real final actual, and for the current
@@ -250,7 +251,6 @@ function computedAccountProjected(acc: BudgetAccount): number {
 // the same way a closed month's actual does.
 function budgetActualVariance(category: Category, budget: number, actual: number, reference: number = budget) {
   if (!budget) return { kind: 'no-budget' as const, budget, actual }
-  if (category === 'other') return { kind: 'neutral' as const, budget, actual, delta: actual - reference }
   const actualPct = (actual / budget) * 100
   const referencePct = (reference / budget) * 100
   const status = paceStatus(actualPct, referencePct, CATEGORY_DIRECTION[category])
@@ -273,11 +273,11 @@ function varianceIcon(v?: Variance): string {
   return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
 }
 function varianceClass(v?: Variance): string {
-  if (!v || v.kind === 'no-actuals' || v.kind === 'no-budget') return ''
-  return v.kind === 'neutral' ? 'v-neutral' : `v-${v.status}`
+  if (!v || v.kind !== 'value') return ''
+  return `v-${v.status}`
 }
 function varianceDeltaLabel(v?: Variance): string {
-  if (!v || (v.kind !== 'value' && v.kind !== 'neutral')) return ''
+  if (!v || v.kind !== 'value') return ''
   const sign = v.delta >= 0 ? '+' : '−'
   return `(${sign}$${Math.abs(Math.round(v.delta)).toLocaleString()})`
 }
@@ -388,8 +388,8 @@ function accountVisible(acc: BudgetAccount): boolean {
 const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === AS_OF_MONTH)
 const livePaceExpectedPct = computed(() => (AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)) * 100)
 // Real actual-to-date from daily_line_items (selectedMonthAccountActuals),
-// not sampleActuals — matches the per-line-item table below and the Year
-// live preview card, both already wired off real data. noActuals mirrors
+// matching the per-line-item table below and the Year live preview card,
+// both wired off real data too. noActuals mirrors
 // monthActualVsBudgetCards' own selectedMonthHasActuals gate below, so a
 // not-yet-synced month reads as "no data" rather than a misleading $0.
 const livePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
@@ -405,8 +405,10 @@ const liveDraftNetIncome = computed(() => netIncome({
   revenue: categoryComputedTotal('revenue'),
   cogs: categoryComputedTotal('cogs'),
   labor: categoryComputedTotal('labor'),
-  opex: categoryComputedTotal('opex')
-}) + categoryComputedTotal('other'))
+  opex: categoryComputedTotal('opex'),
+  other_income: categoryComputedTotal('other_income'),
+  other_expense: categoryComputedTotal('other_expense')
+}))
 
 // ---- Actual vs Budget (closed months) -------------------------------------
 // The Month live-pace preview above only ever applies to the current
@@ -445,8 +447,10 @@ const monthActualNetIncome = computed(() => {
     revenue: categoryActualTotal('revenue'),
     cogs: categoryActualTotal('cogs'),
     labor: categoryActualTotal('labor'),
-    opex: categoryActualTotal('opex')
-  }) + categoryActualTotal('other')
+    opex: categoryActualTotal('opex'),
+    other_income: categoryActualTotal('other_income'),
+    other_expense: categoryActualTotal('other_expense')
+  })
 })
 
 // ---- Net Income row (bottom of the table, every scope) --------------------
@@ -463,8 +467,10 @@ const currentMonthActualNetIncome = computed(() => {
     revenue: categoryActualTotal('revenue'),
     cogs: categoryActualTotal('cogs'),
     labor: categoryActualTotal('labor'),
-    opex: categoryActualTotal('opex')
-  }) + categoryActualTotal('other')
+    opex: categoryActualTotal('opex'),
+    other_income: categoryActualTotal('other_income'),
+    other_expense: categoryActualTotal('other_expense')
+  })
 })
 const currentMonthProjectedNetIncome = computed(() => {
   if (!selectedMonthIsCurrent.value || !selectedMonthHasActuals.value) return null
@@ -472,8 +478,10 @@ const currentMonthProjectedNetIncome = computed(() => {
     revenue: categoryProjectedTotal('revenue'),
     cogs: categoryProjectedTotal('cogs'),
     labor: categoryProjectedTotal('labor'),
-    opex: categoryProjectedTotal('opex')
-  }) + categoryProjectedTotal('other')
+    opex: categoryProjectedTotal('opex'),
+    other_income: categoryProjectedTotal('other_income'),
+    other_expense: categoryProjectedTotal('other_expense')
+  })
 })
 // Actual side of the Annual Total tab's net income row — mirrors
 // yearLiveNetIncome's budgeted counterpart, but built from
@@ -482,16 +490,14 @@ const currentMonthProjectedNetIncome = computed(() => {
 // until at least one month has actually synced.
 const yearActualNetIncome = computed(() => {
   if (yearActualsMonthsWithData.value === 0) return null
-  let otherTotal = 0
-  for (const m of monthlyActuals.value) {
-    if (m.month <= monthsElapsed.value) otherTotal += m.totals.other || 0
-  }
   return netIncome({
     revenue: realYearCategoryTotal('revenue'),
     cogs: realYearCategoryTotal('cogs'),
     labor: realYearCategoryTotal('labor'),
-    opex: realYearCategoryTotal('opex')
-  }) + otherTotal
+    opex: realYearCategoryTotal('opex'),
+    other_income: realYearCategoryTotal('other_income'),
+    other_expense: realYearCategoryTotal('other_expense')
+  })
 })
 
 function netIncomeClass(value: number | null): string {
@@ -503,7 +509,7 @@ function formatNetIncome(value: number): string {
 }
 
 // Per-row variance for the read-only table below — one lookup per category
-// (all 5, including 'other') and one per account, built once per render
+// (all 6) and one per account, built once per render
 // rather than recomputed per template call. 'no-actuals' short-circuits
 // before touching budgetActualVariance so every row in a not-yet-synced
 // closed month shows the same "no data" state instead of a misleading
@@ -569,8 +575,8 @@ const accountProjectedVarianceById = computed(() => {
 // open and falls back to each other month's last-saved amount for the rest.
 //
 // Unlike the Month preview above, the *actual* side here uses real
-// daily_line_items (via useActualsYear), not sampleActuals — this card
-// specifically compares real closed-month results against the draft
+// daily_line_items (via useActualsYear) — this card specifically compares
+// real closed-month results against the draft
 // budget, and using a fake canned year figure next to real Jan-June numbers
 // would be actively misleading rather than just illustrative. It'll show a
 // "no actual data synced" state until a real backfill/sync populates this
@@ -578,7 +584,7 @@ const accountProjectedVarianceById = computed(() => {
 const monthsElapsed = computed(() => monthsElapsedInYear(YEAR))
 const yearActualsMonthsWithData = computed(() => monthlyActuals.value.filter(m => m.month <= monthsElapsed.value && m.hasData).length)
 
-function realYearCategoryTotal(cat: Exclude<Category, 'other'>): number {
+function realYearCategoryTotal(cat: Category): number {
   let total = 0
   for (const m of monthlyActuals.value) {
     if (m.month <= monthsElapsed.value) total += m.totals[cat] || 0
@@ -635,8 +641,10 @@ const yearLiveNetIncome = computed(() => netIncome({
   revenue: yearCategoryTotal('revenue'),
   cogs: yearCategoryTotal('cogs'),
   labor: yearCategoryTotal('labor'),
-  opex: yearCategoryTotal('opex')
-}) + yearCategoryTotal('other'))
+  opex: yearCategoryTotal('opex'),
+  other_income: yearCategoryTotal('other_income'),
+  other_expense: yearCategoryTotal('other_expense')
+}))
 
 // ---- COGS % of revenue (Food/Beverage trailing average) ----------------
 // COGS is fundamentally a variable cost — it scales with revenue, the
@@ -1410,7 +1418,6 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .amount-input.readonly.variance-text.v-warning { color: var(--warning); }
 .amount-input.readonly.variance-text.v-serious { color: var(--serious); }
 .amount-input.readonly.variance-text.v-critical { color: var(--critical); }
-.amount-input.readonly.variance-text.v-neutral { color: var(--ink-2); }
 .amount-input.readonly.variance-text {
   display: inline-flex;
   flex-direction: column;

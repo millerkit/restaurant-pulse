@@ -14,7 +14,8 @@
     "db:backfill-pl": "node --env-file=.env.local scripts/backfill-qbo-pl.mjs",
     "db:seed-benchmarks": "node scripts/seed-category-benchmarks.mjs",
     "db:seed-dev-actuals": "node scripts/seed-dev-actuals.mjs",
-    "db:pull-accounts": "node scripts/pull-accounts-from-prod.mjs"
+    "db:pull-accounts": "node scripts/pull-accounts-from-prod.mjs",
+    "db:migrate-other-categories": "node scripts/migrate-other-categories.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

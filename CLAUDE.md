@@ -247,14 +247,16 @@ changed the shape of this feature significantly:
   fabricating illustrative per-account numbers against this restaurant's
   *real* chart of accounts (unlike the placeholder "Main & Vine" sample data
   elsewhere) seemed like the wrong call. Revisit once real actuals flow in.
-- **A known simplification worth remembering**: `category='other'` collapses
-  QBO's separate "Other Income" and "Other Expense" report sections into one
-  bucket, so there's no reliable sign to net an "other" account against
-  revenue yet, and a brand-new `other` account can't be placed back into the
-  right template section on export (it gets appended at the very end
-  instead). Fine for now since this restaurant's Other Income/Expense
-  accounts are minor, but worth splitting into two categories if that stops
-  being true.
+- **A known simplification worth remembering — resolved 2026-07-29, see that
+  section below**: `category='other'` collapsed QBO's separate "Other
+  Income" and "Other Expense" report sections into one bucket, so there was
+  no reliable sign to net an "other" account against revenue, and a
+  brand-new `other` account couldn't be placed back into the right template
+  section on export (it got appended at the very end instead). Assumed fine
+  since this restaurant's Other Income/Expense accounts were assumed minor —
+  that assumption turned out to be wrong (a real ~$60-70K Grant Income month
+  was being silently excluded from net income), which is what prompted the
+  split into `other_income`/`other_expense`.
 - **Sanity-check flag from the real import, not a bug**: imported July 2026
   budget shows Labor at ~80% of Revenue ($102,089 vs. $127,469) — verified
   independently against the raw xlsx cells, so it's a property of the
@@ -759,6 +761,72 @@ resolved by hand (keep whichever row had real `budget_targets`/
 `daily_line_items` history, or — where neither side had history — whichever
 already carried a `qbo_account_id`; deactivate the other, transferring its
 `qbo_account_id` onto the kept row first if needed).
+
+## Splitting 'other' into other_income/other_expense — 2026-07-29
+
+Closes a real gap flagged while wiring the Budget Pace page off real actuals
+(previous section): net income everywhere in the app was silently excluding
+`category='other'` entirely (the "known simplification" flagged 2026-07-22,
+assumed minor). It wasn't minor — June 2026 actual/budgeted `other` is
+~$60-70K, almost all "Grant Income," which means Year-to-date net income was
+understating the true bottom line by roughly $70K. Verified directly against
+the real `accounts` table: `other` was mixing genuinely income-shaped
+accounts (Grant Income, Insurance Proceeds, Gain on Asset Sale, Interest
+Income, Credit card rewards, Misc Refunds & Credits, Cancellation of Debt
+Income) with expense-shaped ones (Depreciation, Penalties & Settlements,
+Reconciliation Discrepancies, Miscellaneous) with no sign to tell them apart
+— exactly the risk the 2026-07-22 note called out.
+
+The fix needed no new heuristic: QBO's own `AccountType` ("Other Income" vs.
+"Other Expense") was already being fetched by `qbo-account-sync.ts` and
+`import-budget-xlsx.mjs`'s section headers — both scripts were just
+collapsing that distinction into one `category='other'` value instead of
+keeping it. `accounts.category`'s CHECK constraint now allows
+`other_income`/`other_expense` instead of `other`; both scripts assign the
+correct one directly from QBO's own signal, so no name-based guessing is
+needed for any *future* account. `netIncome()` (`useBudgetData.ts`) is now
+`revenue - cogs - labor - opex + other_income - other_expense`, with
+`other_income`/`other_expense` optional (default 0) so the Dashboard/P&L
+pages' still-sample-data callers don't need to pass them. `CATEGORY_DIRECTION`
+now covers all six categories (other_income: higher-is-better, other_expense:
+higher-is-worse) — the Edit Budget page's per-row variance coloring
+(`budgetActualVariance`) no longer needs a neutral carve-out for `other`,
+since both new categories have a real direction like everything else.
+
+**Existing `other` rows were migrated by hand, not re-derived from QBO**:
+`scripts/migrate-other-categories.mjs` rebuilds the `accounts` table (SQLite
+can't `ALTER` a CHECK constraint in place — rename, recreate with the new
+constraint, copy rows, drop old) and reclassifies the ~19 existing `other`
+rows using a fixed, hand-verified name list (there's no stored QBO
+`AccountType` to re-derive it from after the fact). Idempotent — checks
+`sqlite_master`'s stored CHECK constraint text before doing anything. Run
+via `npm run db:migrate-other-categories`; verified against local dev
+(295 accounts, 0 orphaned `parent_account_id`/`budget_targets`/
+`daily_line_items` references after migration) before being run against
+production.
+
+The Budget Pace page (`app/pages/budget/index.vue`) surfaces this
+transparently rather than adding a new pace card: since `other_income`/
+`other_expense` are now already folded into the Net Income figure via
+`netIncome()`, a small note under it shows the net other amount only when
+it's actually nonzero ("Includes net $X in other income/expense..."),
+without cluttering the four existing Revenue/COGS/Labor/Opex cards. The
+Overspending drill-down and pace cards deliberately still only cover
+cogs/labor/opex — other income/expense isn't a "spending pace" concept the
+same way. The Edit Budget page's account tree, by contrast, now shows
+"Other Income" and "Other Expense" as two ordinary expandable category
+sections (same generic `CATEGORIES`-driven rendering every other category
+already used) — real editable budget line items, not just a rolled-up net
+figure.
+
+`server/api/budget/export.get.ts`'s QBO export could now, in principle,
+place a brand-new `other_income`/`other_expense` account into the correct
+template section instead of always appending at the very end — deliberately
+not built, since doing that would mean inserting a row mid-sheet and
+shifting every row below it, risking the template's own formulas, for what
+in practice is a rare edge case (only affects an account added to QBO after
+the template was last captured). Left as documented, with the user able to
+reposition the row in Excel if it matters to them.
 
 ## Running it
 

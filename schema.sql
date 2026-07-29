@@ -24,7 +24,7 @@ CREATE TABLE accounts (
   account_number     TEXT,                   -- QBO account number, e.g. "6012" (some built-in QBO accounts have none)
   parent_account_id  INTEGER REFERENCES accounts(id),  -- reconstructs the COA's sub-account nesting
   name               TEXT NOT NULL,          -- QBO account name, e.g. "Garde Manger Cook"
-  category           TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other')),
+  category           TEXT NOT NULL CHECK (category IN ('revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense')),
   subcategory        TEXT,                   -- optional finer bucket, e.g. "BOH", "FOH", "Food", "Beverage"
   -- Only meaningful for category='opex': rent/insurance/loan interest are
   -- 'fixed' (not controllable month to month, so not worth benchmarking);
@@ -72,9 +72,11 @@ CREATE INDEX idx_daily_line_items_account ON daily_line_items(account_id);
 -- There is deliberately no 'net_income' row here — QBO has no real "Net
 -- Income" account (see the Total Net Income row in a QBO budget export,
 -- which is a computed subtotal, not an account), so budgeted net income is
--- always derived as revenue - cogs - labor - opex (+/- other), never
--- entered directly, so it can't drift out of sync with the category budgets
--- it's made of.
+-- always derived as revenue - cogs - labor - opex + other_income -
+-- other_expense, never entered directly, so it can't drift out of sync with
+-- the category budgets it's made of. (category was a single 'other' bucket
+-- until 2026-07-29, when it was split into other_income/other_expense so
+-- each account's real sign is known instead of guessed — see CLAUDE.md.)
 CREATE TABLE budget_targets (
   id          INTEGER PRIMARY KEY,
   year        INTEGER NOT NULL,

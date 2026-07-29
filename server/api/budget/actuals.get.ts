@@ -28,7 +28,7 @@ export default defineEventHandler((event) => {
   const months = Array.from({ length: 12 }, (_, i) => ({
     month: i + 1,
     hasData: false,
-    totals: { revenue: 0, cogs: 0, labor: 0, opex: 0, other: 0 } as Record<string, number>
+    totals: { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 } as Record<string, number>
   }))
   for (const r of rows) {
     const m = months[r.month - 1]

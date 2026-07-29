@@ -54,7 +54,7 @@ function walkToTopLevelAncestor(account: QboAccount, byQboId: Map<string, QboAcc
 }
 
 interface Categorization {
-  category: 'revenue' | 'cogs' | 'labor' | 'opex' | 'other'
+  category: 'revenue' | 'cogs' | 'labor' | 'opex' | 'other_income' | 'other_expense'
   subcategory: string | null
   costBehavior: 'fixed' | 'variable' | null
 }
@@ -69,8 +69,9 @@ function categorizeNewAccount(qboAccount: QboAccount, byQboId: Map<string, QboAc
     case 'Cost of Goods Sold':
       return { category: 'cogs', subcategory: cogsSubcategory(qboAccount.Name), costBehavior: null }
     case 'Other Income':
+      return { category: 'other_income', subcategory: null, costBehavior: null }
     case 'Other Expense':
-      return { category: 'other', subcategory: null, costBehavior: null }
+      return { category: 'other_expense', subcategory: null, costBehavior: null }
     case 'Expense': {
       const top = walkToTopLevelAncestor(qboAccount, byQboId)
       const parent = qboAccount.ParentRef ? byQboId.get(qboAccount.ParentRef.value) ?? null : null

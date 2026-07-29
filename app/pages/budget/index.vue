@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { AS_OF_DAY, AS_OF_MONTH, CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, YEAR_DAY_FRACTION, categoryTotals, daysInMonth, netIncome, paceStatus, sampleActuals, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { AS_OF_DAY, AS_OF_MONTH, CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, YEAR_DAY_FRACTION, categoryTotals, daysInMonth, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
 const { lastSync, syncFailed } = useSyncStatus()
 const { monthlyData, loadError } = useBudgetYear()
+const { monthlyActuals, loadError: actualsLoadError } = useActualsYear()
 
 function categoryTotalsFor(monthNumbers: number[]) {
   return categoryTotals(monthlyData.value, monthNumbers)
@@ -19,9 +20,9 @@ const yearBudget = computed(() => categoryTotalsFor(Array.from({ length: 12 }, (
 // net income, but a hired-staff industry benchmark was never built
 // assuming the owners are on payroll, so we show labor % both ways rather
 // than picking one silently. Only the budget side of this is real — actual
-// stays a single lump sample figure until per-account actuals exist
-// (daily_line_items is empty until the QBO sync is wired to the UI), so
-// there's no way to split actual labor by account yet.
+// labor is still a single lump real figure (daily_line_items has real
+// per-account data now, but nothing here breaks it out by account yet), so
+// there's no way to split actual labor by owner-comp vs. not yet.
 function ownerCompensationTotal(monthNumbers: number[]) {
   let total = 0
   for (const m of monthNumbers) {
@@ -54,11 +55,36 @@ const selectedPeriod = ref<'month' | 'year'>('month')
 const periodDayFraction = computed(() => selectedPeriod.value === 'month'
   ? AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH)
   : YEAR_DAY_FRACTION)
-const periodActuals = computed(() => sampleActuals[selectedPeriod.value])
+function actualsTotalsFor(monthNumbers: number[]) {
+  const totals = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
+  for (const m of monthNumbers) {
+    const data = monthlyActuals.value[m - 1]
+    if (!data) continue
+    totals.revenue += data.totals.revenue
+    totals.cogs += data.totals.cogs
+    totals.labor += data.totals.labor
+    totals.opex += data.totals.opex
+    totals.other_income += data.totals.other_income
+    totals.other_expense += data.totals.other_expense
+  }
+  return totals
+}
+const monthActualsTotals = computed(() => actualsTotalsFor([AS_OF_MONTH]))
+const yearActualsTotals = computed(() => actualsTotalsFor(Array.from({ length: 12 }, (_, i) => i + 1)))
+const periodActuals = computed(() => selectedPeriod.value === 'month' ? monthActualsTotals.value : yearActualsTotals.value)
 const periodBudget = computed(() => selectedPeriod.value === 'month' ? monthBudget.value : yearBudget.value)
 
-// Net income the same formula the sample data on the other two pages
-// already satisfies exactly — see netIncome() in useBudgetData.ts.
+// Other income/expense (grants, insurance proceeds, depreciation, etc. —
+// split from a single 'other' bucket 2026-07-29 so each account's real QBO
+// sign is known instead of guessed) is already folded into actualNetIncome/
+// budgetNetIncome below via netIncome()'s own other_income/other_expense
+// terms. This is just a transparency note — surfaced only when material —
+// since neither figure otherwise appears anywhere else on this page (no
+// pace card, no overspending row) the way revenue/cogs/labor/opex do.
+const periodOtherNet = computed(() => periodActuals.value.other_income - periodActuals.value.other_expense)
+
+// Net income uses the same derivation on all three pages — see netIncome()
+// in useBudgetData.ts.
 const actualNetIncome = computed(() => netIncome(periodActuals.value))
 const budgetNetIncome = computed(() => netIncome(periodBudget.value.totals as any))
 
@@ -72,9 +98,9 @@ const budgetNetIncome = computed(() => netIncome(periodBudget.value.totals as an
 // with a partial-month guess — see edit.vue.
 const monthDayFraction = computed(() => AS_OF_DAY / daysInMonth(YEAR, AS_OF_MONTH))
 const monthProjected = computed(() => {
-  const proj = {} as Record<Exclude<Category, 'other'>, number>
-  for (const cat of ['revenue', 'cogs', 'labor', 'opex'] as const) {
-    proj[cat] = sampleActuals.month[cat] / monthDayFraction.value
+  const proj = {} as Record<'revenue' | 'cogs' | 'labor' | 'opex' | 'other_income' | 'other_expense', number>
+  for (const cat of ['revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense'] as const) {
+    proj[cat] = monthActualsTotals.value[cat] / monthDayFraction.value
   }
   return proj
 })
@@ -154,13 +180,12 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
           <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
           <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
         </div>
-        <span class="sample-tag">Actuals are sample data — budgets are real</span>
       </div>
     </header>
 
-    <div v-if="loadError" class="drill-card">
+    <div v-if="loadError || actualsLoadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>
-      <span class="quiet-note">{{ loadError }}</span>
+      <span class="quiet-note">{{ loadError || actualsLoadError }}</span>
     </div>
 
     <template v-else>
@@ -183,7 +208,10 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
               </span>
             </div>
             <div :class="['figure', actualNetIncome >= 0 ? 'good' : 'critical']">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
-            <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex, derived, not entered directly)</div>
+            <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex)</div>
+            <div v-if="periodOtherNet !== 0" class="caption">
+              Includes {{ periodOtherNet >= 0 ? 'net' : 'a net cost of' }} ${{ Math.abs(Math.round(periodOtherNet)).toLocaleString() }} in other income/expense (grants, insurance proceeds, depreciation, etc.) — not broken out below
+            </div>
             <div v-if="selectedPeriod === 'month'" class="caption projection-line">
               Projected month-end (at this pace): <strong :class="projectedNetIncome >= 0 ? 'good' : 'critical'">{{ projectedNetIncome >= 0 ? '+' : '' }}${{ Math.round(projectedNetIncome).toLocaleString() }}</strong>
               <span :class="['chip', projectedNetIncome >= budgetNetIncome ? 'good' : 'serious']">{{ projectedNetIncome >= budgetNetIncome ? '✓ on pace to hit budget' : '▲ projected to miss budget' }}</span>
@@ -230,7 +258,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
       <section>
         <div class="section-head">
           <div class="section-label">Overspending</div>
-          <div class="section-note">Category-level for now — per-account detail needs real actuals from QuickBooks, not yet wired to this UI</div>
+          <div class="section-note">Category-level only — per-account drill-down isn't built yet (see "Not yet done" in CLAUDE.md)</div>
         </div>
 
         <div v-if="budgetFlagged" class="drill-card">
@@ -264,8 +292,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
     </div>
 
     <footer>
-      <span>Actuals: illustrative sample data &middot; Budgets: real data imported from QuickBooks' budget export</span>
-      <span>{{ site.restaurantName }} Performance Pulse</span>
+      <span>Actuals: real data synced nightly from QuickBooks &middot; Budgets: real data imported from QuickBooks' budget export</span>
     </footer>
   </div>
 </template>
@@ -328,7 +355,11 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .runway-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 .runway-head .name { font-size: 14px; font-weight: 700; }
 .runway-head .nums { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.runway-track { position: relative; height: 22px; border-radius: 8px; background: var(--surface-alt); overflow: visible; }
+/* margin-top clears room for .runway-expected::after's "today's pace" label
+   below, which sits 22px above this track's own top (-4px tick position +
+   -18px label offset) — the .runway-card flex gap alone (10px) wasn't
+   enough, so the label overlapped .runway-head's actual/budget text above. */
+.runway-track { position: relative; height: 22px; margin-top: 14px; border-radius: 8px; background: var(--surface-alt); overflow: visible; }
 .runway-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 8px; }
 .runway-fill.good { background: var(--good); }
 .runway-fill.warning { background: var(--warning); }

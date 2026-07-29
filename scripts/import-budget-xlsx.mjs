@@ -44,8 +44,8 @@ const SECTION_CATEGORY = {
   'Income': 'revenue',
   'Cost of Goods Sold': 'cogs',
   'Expense': 'expense',
-  'Other Income': 'other',
-  'Other Expense': 'other'
+  'Other Income': 'other_income',
+  'Other Expense': 'other_expense'
 }
 
 // First-pass judgment call, editable after import: which top-level opex

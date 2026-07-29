@@ -82,11 +82,14 @@ export default defineEventHandler(async (event) => {
   // Accounts added since the template was captured (new QBO accounts from a
   // later sync, or edits made only in this app). QBO's own Guidelines sheet
   // explicitly permits adding rows, so append them — at the very end of the
-  // sheet rather than trying to re-derive which of "Other Income" vs. "Other
-  // Expense" a category='other' account belongs to (that distinction isn't
-  // preserved once collapsed into one category — see CLAUDE.md). Good enough
-  // to get the numbers into QBO; the user can reposition the row in Excel if
-  // the section placement matters to them.
+  // sheet rather than inserting into the middle (a mid-sheet row insert
+  // would shift every row below it and risk breaking the template's own
+  // formulas). Since category='other' was split into other_income/
+  // other_expense (2026-07-29, see CLAUDE.md), each of these accounts' real
+  // QBO section actually is known now — just not worth the row-shifting
+  // risk to act on for what's normally a rare edge case. Good enough to get
+  // the numbers into QBO; the user can reposition the row in Excel if the
+  // section placement matters to them.
   function depthOf(accountId: number): number {
     let depth = 0
     let current = accountsById.get(accountId)
