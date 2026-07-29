@@ -107,21 +107,21 @@ function pctOfOpexGroup(row: OpexRow) {
             </tr>
             <tr>
               <th scope="row">COGS</th>
-              <td><span class="amount">$10,600</span><span class="pct critical">33.3% of rev.</span></td>
-              <td><span class="amount">$39,200</span><span class="pct critical">33.1% of rev.</span></td>
-              <td><span class="amount">$480,400</span><span class="pct good">29.8% of rev.</span></td>
+              <td><span class="amount critical">$10,600</span><span class="pct critical">33.3% of rev.</span></td>
+              <td><span class="amount critical">$39,200</span><span class="pct critical">33.1% of rev.</span></td>
+              <td><span class="amount good">$480,400</span><span class="pct good">29.8% of rev.</span></td>
             </tr>
             <tr>
               <th scope="row">Labor</th>
-              <td><span class="amount">$9,950</span><span class="pct good">31.3% of rev.</span></td>
-              <td><span class="amount">$37,200</span><span class="pct good">31.4% of rev.</span></td>
-              <td><span class="amount">$498,100</span><span class="pct good">30.9% of rev.</span></td>
+              <td><span class="amount good">$9,950</span><span class="pct good">31.3% of rev.</span></td>
+              <td><span class="amount good">$37,200</span><span class="pct good">31.4% of rev.</span></td>
+              <td><span class="amount good">$498,100</span><span class="pct good">30.9% of rev.</span></td>
             </tr>
             <tr class="subtotal">
               <th scope="row">Prime cost <span class="hint">(COGS + labor)</span></th>
-              <td><span class="amount">$20,550</span><span class="pct serious">64.6% of rev.</span></td>
-              <td><span class="amount">$76,400</span><span class="pct serious">64.5% of rev.</span></td>
-              <td><span class="amount">$978,500</span><span class="pct good">60.7% of rev.</span></td>
+              <td><span class="amount serious">$20,550</span><span class="pct serious">64.6% of rev.</span></td>
+              <td><span class="amount serious">$76,400</span><span class="pct serious">64.5% of rev.</span></td>
+              <td><span class="amount good">$978,500</span><span class="pct good">60.7% of rev.</span></td>
             </tr>
             <tr>
               <th scope="row">Operating expenses <span class="hint">(see drill-down)</span></th>
@@ -344,6 +344,14 @@ table.pl-table {
 .pl-table tbody tr.total th,
 .pl-table tbody tr.total td { border-top: 1px solid var(--hair); padding-top: 14px; }
 .pl-table .amount { font-weight: 600; }
+/* The dollar figure itself picks up the same good/serious/critical color as
+   the benchmark % beneath it (matching the Edit Budget page's colored
+   variance figures) — never color-alone since the icon on .pct right below
+   already satisfies that rule for this row. */
+.pl-table .amount.good { color: var(--good); }
+.pl-table .amount.warning { color: var(--warning); }
+.pl-table .amount.serious { color: var(--serious); }
+.pl-table .amount.critical { color: var(--critical); }
 .pl-table .pct { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
 /* Never color-alone: a checkmark marks "within benchmark", a triangle marks
    any degree of "above benchmark" — the good/not-good shape distinction
@@ -443,7 +451,12 @@ table.pl-table {
   background: var(--surface-alt);
 }
 .rank-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; }
-.rank-fill.neutral { background: var(--ink-3); opacity: 0.5; }
+/* These bars show share-of-group (% of labor / fixed / variable), not a
+   good/bad judgment, so they deliberately don't use the reserved status
+   palette (good/warning/serious/critical) — using --accent (the app's
+   existing neutral-emphasis color, e.g. the active period tab) instead of
+   flat gray keeps them legible without implying a benchmark verdict. */
+.rank-fill.neutral { background: var(--accent); opacity: 0.55; }
 .rank-fill.serious { background: var(--serious); }
 .rank-fill.critical { background: var(--critical); }
 .rank-value { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
