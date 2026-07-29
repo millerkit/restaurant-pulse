@@ -322,7 +322,6 @@ function meterStatusLabel(status: string | null) {
 
       <footer>
         <span>Data source: QuickBooks Online, synced nightly &middot; guest-economics figures are sample data (Toast not yet connected)</span>
-        <span>{{ site.restaurantName }} Performance Dashboard</span>
       </footer>
     </template>
   </div>

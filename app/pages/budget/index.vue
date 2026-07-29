@@ -265,7 +265,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 
     <footer>
       <span>Actuals: illustrative sample data &middot; Budgets: real data imported from QuickBooks' budget export</span>
-      <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
+      <span>{{ site.restaurantName }} Performance Pulse</span>
     </footer>
   </div>
 </template>

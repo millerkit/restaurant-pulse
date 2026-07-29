@@ -1268,7 +1268,6 @@ function exportForQuickBooks() {
 
     <footer>
       <span>Actuals: real data synced from QuickBooks (daily_line_items) &middot; Budgets: real data imported from QuickBooks' budget export</span>
-      <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
     </footer>
   </div>
 </template>

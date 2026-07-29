@@ -263,7 +263,6 @@ function pctOfOpexGroup(row: OpexRow) {
 
     <footer>
       <span>Data source: QuickBooks Online, synced nightly &middot; figures shown are illustrative sample data</span>
-      <span>{{ site.restaurantName }} Performance Dashboard — v0 mockup</span>
     </footer>
   </div>
 </template>
