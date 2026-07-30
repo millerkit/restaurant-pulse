@@ -173,7 +173,7 @@ function meterStatusLabel(status: string | null) {
               <span v-if="monthView?.hasBudget" :class="['chip', monthView.revenue!.status]">{{ paceLabel(monthView.revenue!.status) }}</span>
               <span v-else class="chip warning">No budget set</span>
             </div>
-            <div :class="['figure', (monthView?.actualNet ?? 0) >= 0 ? 'good' : 'critical']">{{ (monthView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(monthView?.actualNet ?? 0).toLocaleString() }}</div>
+            <div class="figure">{{ (monthView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(monthView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
               Net income, month-to-date
               <template v-if="monthView?.hasBudget">— vs ${{ Math.round(monthView.budgetNet!).toLocaleString() }} budgeted, {{ monthView.revenue!.status === 'good' ? 'running ahead of' : 'running behind' }} the monthly budget pace (see below)</template>
@@ -186,7 +186,7 @@ function meterStatusLabel(status: string | null) {
               <span v-if="yearView?.hasBudget" :class="['chip', yearView.revenue!.status]">{{ paceLabel(yearView.revenue!.status) }}</span>
               <span v-else class="chip warning">No budget set</span>
             </div>
-            <div :class="['figure', (yearView?.actualNet ?? 0) >= 0 ? 'good' : 'critical']">{{ (yearView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(yearView?.actualNet ?? 0).toLocaleString() }}</div>
+            <div class="figure">{{ (yearView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(yearView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
               Net income, year-to-date
               <template v-if="yearView?.hasBudget">— vs ${{ Math.round(yearView.budgetNet!).toLocaleString() }} budgeted, {{ yearView.revenue!.status === 'good' ? 'running ahead of' : 'running behind' }} the annual budget pace</template>
@@ -366,9 +366,8 @@ function meterStatusLabel(status: string | null) {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+  color: var(--ink);
 }
-.hero-card .figure.good { color: var(--good); }
-.hero-card .figure.critical { color: var(--critical); }
 .hero-card .caption { font-size: 12px; color: var(--ink-3); }
 
 /* ---------- comparison strip ---------- */

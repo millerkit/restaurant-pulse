@@ -954,25 +954,41 @@ always correct. Since `fly.toml` already keeps the machine warm 24/7
 ever happens during a deploy itself, never during normal operation — so
 there's no user-facing availability impact to chase here. Safe to ignore.
 
+## Net Income hero card signal overload — resolved 2026-07-30
+
+Raised by the user 2026-07-29, viewing real production numbers: the Net
+Income card (Dashboard and Budget Pace both have one) stacked up to four
+simultaneous good/bad color signals on one card — actual $ (green/red by
+sign), a "Behind budget"/"On pace" chip (red/green by actual-vs-budget),
+projected $ (green/red by sign, Budget Pace only), and a "projected to miss
+budget"/"on pace" chip (red/green by projected-vs-budget) — and a real case
+surfaced where actual was positive (green) but behind budget (red chip),
+reading as contradictory rather than nuanced even though each signal was
+individually correct (see the Design direction section: "a month can be
+profitable and still be behind budget," kept deliberately separate from the
+black/red sign).
+
+**Fix**: both dollar figures (actual and, on the Budget Pace page,
+projected) now render in neutral ink (`var(--ink)`) always, dropping the
+`good`/`critical` sign-based coloring entirely. The pace chip(s) — "Ahead of
+pace"/"Behind pace" on the Dashboard, "On/ahead of budget"/"Behind budget"
+and "on pace to hit budget"/"projected to miss budget" on the Budget Pace
+page — are now the only colored signal on the card, since "are we on pace"
+is the more decision-driving question for this restaurant (it's the reason
+the Budget tab exists at all — see the Budget tab section above). The raw
+positive/negative read is still fully available as text (the `+` prefix and
+the number itself), just no longer fighting the pace chip for attention via
+a second, independent color axis. Applied identically to
+[`app/pages/index.vue`](app/pages/index.vue) and
+[`app/pages/budget/index.vue`](app/pages/budget/index.vue) (the dead
+`.figure.good`/`.figure.critical`/`.projection-line strong.good`/`.critical`
+CSS rules were removed from both, not just left unused). Verified visually
+in the browser on both pages after the change — the same real numbers that
+prompted this (green dollar figure next to a red "Behind pace" chip) now
+read as one clear headline instead of two disagreeing ones.
+
 ## Not yet done
 
-- **Rethink the Budget Pace hero card's signal overload** (raised by the
-  user 2026-07-29, viewing real production numbers post-fix). The Net
-  Income card shows up to four simultaneous good/bad signals — actual $
-  (green/red by sign), a "Behind budget"/"On pace" chip (red/green by
-  actual-vs-budget), projected $ (green/red by sign), and a "projected to
-  miss budget"/"on pace" chip (red/green by projected-vs-budget) — and a
-  real case surfaced where actual was positive (green) but behind budget
-  (red chip), with the projection *also* positive but *still* projected to
-  miss budget. Individually each signal is intentional (see the Design
-  direction section: "a month can be profitable and still be behind
-  budget," kept deliberately separate from the black/red sign) — but four
-  independent good/bad reads stacked on one card, especially when the
-  dollar-sign color and the budget-status color disagree, reads as
-  contradictory rather than nuanced. Needs a design pass, not a data fix —
-  revisit the hierarchy (e.g. lead with one clear headline signal, demote
-  the others) rather than just restating "it's true, both signals are
-  correct."
 - Wiring the P&L page to the real schema — it still renders the same static
   sample data as the approved mockup, not `useDb()` queries. The Dashboard
   page was wired to real data (`server/api/dashboard.get.ts`) and no longer

@@ -213,13 +213,13 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
                 {{ actualNetIncome >= budgetNetIncome ? 'On/ahead of budget' : 'Behind budget' }}
               </span>
             </div>
-            <div :class="['figure', actualNetIncome >= 0 ? 'good' : 'critical']">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
+            <div class="figure">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
             <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex)</div>
             <div v-if="periodOtherNet !== 0" class="caption">
               Includes {{ periodOtherNet >= 0 ? 'net' : 'a net cost of' }} ${{ Math.abs(Math.round(periodOtherNet)).toLocaleString() }} in other income/expense (grants, insurance proceeds, depreciation, etc.) — not broken out below
             </div>
             <div v-if="selectedPeriod === 'month'" class="caption projection-line">
-              Projected month-end (at this pace): <strong :class="projectedNetIncome >= 0 ? 'good' : 'critical'">{{ projectedNetIncome >= 0 ? '+' : '' }}${{ Math.round(projectedNetIncome).toLocaleString() }}</strong>
+              Projected month-end (at this pace): <strong>{{ projectedNetIncome >= 0 ? '+' : '' }}${{ Math.round(projectedNetIncome).toLocaleString() }}</strong>
               <span :class="['chip', projectedNetIncome >= budgetNetIncome ? 'good' : 'serious']">{{ projectedNetIncome >= budgetNetIncome ? '✓ on pace to hit budget' : '▲ projected to miss budget' }}</span>
             </div>
           </div>
@@ -324,13 +324,9 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .hero-card.anchor { background: var(--accent-wash); border-color: transparent; }
 .hero-card .hero-top { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .hero-card .period { font-size: 13px; font-weight: 600; color: var(--ink-2); }
-.hero-card .figure { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-.hero-card .figure.good { color: var(--good); }
-.hero-card .figure.critical { color: var(--critical); }
+.hero-card .figure { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--ink); }
 .hero-card .caption { font-size: 12px; color: var(--ink-3); }
 .hero-card .caption.projection-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
-.hero-card .caption.projection-line strong.good { color: var(--good); }
-.hero-card .caption.projection-line strong.critical { color: var(--critical); }
 
 /* ---------- period pill selector (copied from pl.vue) ---------- */
 .period-tabs { display: flex; gap: 6px; }
