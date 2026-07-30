@@ -113,22 +113,31 @@ export default defineEventHandler((event) => {
     periods[p] = { start, end, days, totals: categoryTotalsForRange(start, end) }
   }
 
-  // A subcategory is flagged when it rose sharply vs. the prior equivalent
-  // period — >=50% up and at least $200 of real dollar increase, so a tiny
-  // account (e.g. $40 -> $70) doesn't get flagged for statistical noise.
+  // A subcategory is flagged when it varied significantly vs. the prior
+  // equivalent period — >=50% change (either direction) and at least $200 of
+  // real dollar movement, so a tiny account (e.g. $40 -> $70) doesn't get
+  // flagged for statistical noise. A subcategory with nothing in the prior
+  // period is flagged as "new" once it clears the same $200 materiality bar
+  // — there's no prior amount to compute a meaningful percentage against.
+  // Symmetric (not increase-only) since a cost dropping sharply — e.g. an
+  // expense that stopped posting — is just as worth surfacing as one rising.
   function flagRows(rows: { label: string, total: number }[], comparison: Map<string, number>) {
     return rows.map(r => {
       const prev = comparison.get(r.label) ?? 0
-      const increase = r.total - prev
-      const flagged = prev > 0 && increase >= 200 && r.total >= prev * 1.5
-      return { label: r.label, amount: r.total, comparisonAmount: prev, flagged }
+      const delta = r.total - prev
+      if (prev <= 0) {
+        return { label: r.label, amount: r.total, comparisonAmount: prev, flagged: r.total >= 200, pctChange: null }
+      }
+      const pctChange = (delta / prev) * 100
+      const flagged = Math.abs(delta) >= 200 && Math.abs(delta) >= prev * 0.5
+      return { label: r.label, amount: r.total, comparisonAmount: prev, flagged, pctChange }
     })
   }
 
   const drilldowns: Record<Period, {
-    labor: { label: string, amount: number, comparisonAmount: number, flagged: boolean }[]
-    opexFixed: { label: string, amount: number, comparisonAmount: number, flagged: boolean }[]
-    opexVariable: { label: string, amount: number, comparisonAmount: number, flagged: boolean }[]
+    labor: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
+    opexFixed: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
+    opexVariable: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
     revenueDays: { date: string, comparisonDate: string, actual: number, comparison: number }[]
   }> = {} as any
 
