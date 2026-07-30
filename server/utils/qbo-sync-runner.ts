@@ -35,11 +35,23 @@ export async function runNightlySync(dateOverride?: string) {
     const targetDate = dateOverride ?? isoDateNDaysAgo(1)
     const plResult = await syncPlForDateRange(targetDate, targetDate)
 
-    const rowsSynced = accountResult.inserted + accountResult.updated + accountResult.deactivated + accountResult.reactivated + plResult.rowsSynced
+    // Toast is a separate POS system, not a QBO endpoint, but folded into
+    // the same nightly run/sync_runs row rather than a second scheduler —
+    // one "as of" freshness signal for the whole dashboard, not two. Only
+    // runs if Toast credentials are configured, so an environment without
+    // them (e.g. local dev before .env.local is filled in) doesn't fail
+    // the whole sync.
+    const { toast } = useRuntimeConfig()
+    let toastResult: { covers: number; laborHours: number } | null = null
+    if (toast.clientId && toast.clientSecret && toast.apiHostname && toast.restaurantGuid) {
+      toastResult = await syncToastMetricsForDate(toast, targetDate)
+    }
+
+    const rowsSynced = accountResult.inserted + accountResult.updated + accountResult.deactivated + accountResult.reactivated + plResult.rowsSynced + (toastResult ? 1 : 0)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'success', rows_synced = ? WHERE id = ?`)
       .run(new Date().toISOString(), rowsSynced, runId)
 
-    return { accountResult, plResult, rowsSynced }
+    return { accountResult, plResult, toastResult, rowsSynced }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'error', error_message = ? WHERE id = ?`)

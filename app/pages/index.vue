@@ -91,14 +91,17 @@ const vsLastYear = computed(() => ({
   date: data.value?.lastNight.lastYear.date
 }))
 
-// Toast POS isn't integrated into this app yet (see scripts/toast-scope-check.mjs
-// — a one-off credential check, not a real sync) — covers/avg check/sales-per-
-// labor-hour have no real data source, so these stay sample figures,
-// explicitly labeled as such below, until that integration exists.
-const lastNightCovers = 178
-const lastNightLaborHours = 58.0
-const avgCheck = computed(() => lastNightRevenue.value / lastNightCovers)
-const salesPerLaborHour = computed(() => lastNightRevenue.value / lastNightLaborHours)
+// Toast POS metrics (covers, labor hours) — real data as of the nightly
+// sync's Toast step (server/utils/toast-metrics-sync.ts), null if last
+// night's date hasn't synced yet (Toast not configured, or the sync ran
+// before it was). Revenue still comes from QBO, not Toast, matching how
+// this app treats Toast as a guest-count/labor-hours source only, not a
+// second revenue feed.
+const toastSynced = computed(() => data.value?.toast != null)
+const lastNightCovers = computed(() => data.value?.toast?.covers ?? null)
+const lastNightLaborHours = computed(() => data.value?.toast?.laborHours ?? null)
+const avgCheck = computed(() => lastNightCovers.value ? lastNightRevenue.value / lastNightCovers.value : null)
+const salesPerLaborHour = computed(() => lastNightLaborHours.value ? lastNightRevenue.value / lastNightLaborHours.value : null)
 
 // ---- cost pace meters (COGS / labor / prime cost, month-to-date) --------
 const benchmarkByCategory = computed(() => Object.fromEntries((data.value?.benchmarks ?? []).map((b: any) => [b.category, b])))
@@ -228,21 +231,21 @@ function meterStatusLabel(status: string | null) {
         <div class="stat-row">
           <div class="compare-card">
             <div class="date-label">Covers</div>
-            <div class="amount">{{ lastNightCovers }}</div>
+            <div class="amount">{{ toastSynced ? lastNightCovers : '—' }}</div>
             <div class="vs-label">Guests served, {{ formatWeekdayDate(data.asOfDate) }}</div>
           </div>
           <div class="compare-card">
             <div class="date-label">Average Check</div>
-            <div class="amount">${{ avgCheck.toFixed(2) }}</div>
-            <div class="vs-label">${{ lastNightRevenue.toLocaleString() }} &middot; {{ lastNightCovers }} covers</div>
+            <div class="amount">{{ avgCheck !== null ? `$${avgCheck.toFixed(2)}` : '—' }}</div>
+            <div class="vs-label">${{ lastNightRevenue.toLocaleString() }}<template v-if="toastSynced"> &middot; {{ lastNightCovers }} covers</template></div>
           </div>
           <div class="compare-card anchor">
             <div class="date-label">Sales / Labor Hour</div>
-            <div class="amount">${{ salesPerLaborHour.toFixed(2) }}</div>
-            <div class="vs-label">{{ lastNightLaborHours.toFixed(1) }} labor hours worked</div>
+            <div class="amount">{{ salesPerLaborHour !== null ? `$${salesPerLaborHour.toFixed(2)}` : '—' }}</div>
+            <div class="vs-label">{{ toastSynced ? `${lastNightLaborHours!.toFixed(1)} labor hours worked` : 'No Toast data synced for this date' }}</div>
           </div>
         </div>
-        <div class="toast-note">Toast POS isn't connected yet — covers, average check, and sales/labor-hour above are sample figures, not live data.</div>
+        <div v-if="!toastSynced" class="toast-note">Toast data hasn't synced for {{ formatWeekdayDate(data.asOfDate) }} yet — covers, average check, and sales/labor-hour will show once it does.</div>
       </section>
 
       <!-- COGS / labor vs revenue -->
@@ -321,7 +324,7 @@ function meterStatusLabel(status: string | null) {
       </div>
 
       <footer>
-        <span>Data source: QuickBooks Online, synced nightly &middot; guest-economics figures are sample data (Toast not yet connected)</span>
+        <span>Data source: QuickBooks Online + Toast POS, both synced nightly</span>
       </footer>
     </template>
   </div>

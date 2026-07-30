@@ -828,6 +828,84 @@ in practice is a rare edge case (only affects an account added to QBO after
 the template was last captured). Left as documented, with the user able to
 reposition the row in Excel if it matters to them.
 
+## Toast POS integration — covers and sales/labor-hour — 2026-07-30
+
+Closes the last real gap in the Dashboard's guest-economics row (covers,
+average check, sales/labor-hour), which had been sample constants pending a
+Toast connection (see `scripts/toast-scope-check.mjs`, deleted now that its
+question is answered — the credentials already provisioned for Urban
+Hearth's e-commerce site do have Orders and Labor API scope; only the
+Employees API is forbidden, and it isn't needed here).
+
+- **Two new real numbers, one new table.** `daily_toast_metrics` (`date`
+  PK, `covers`, `labor_hours`, `synced_at`) is deliberately its own table,
+  not folded into `daily_line_items` — these are POS-sourced counts with no
+  `accounts` row to join against, not GL amounts. Revenue for average check
+  still comes from QBO (`daily_line_items`), not Toast — Toast is a
+  guest-count/labor-hours source only, not a second revenue feed.
+- **`numberOfGuests` lives on the order, not the check** — a real gotcha
+  caught by pulling one live day's data before writing the sync (same
+  discipline as the QBO `AccountType` string-format check): every check's
+  own `numberOfGuests` came back `null` for this restaurant (spot-checked
+  against 2026-07-29, 36 checks, 0 with a value), while the *order* object
+  that owns those checks had a reliable non-null `numberOfGuests` on all 34
+  non-deleted orders that day (summing to 74 covers). `covers` is the sum
+  of each non-deleted order's `numberOfGuests`.
+- **Labor hours use Toast's own `regularHours`/`overtimeHours` fields on
+  each time entry**, not a manual `outDate - inDate` diff — Toast already
+  accounts for breaks and rounding in those fields (verified the two
+  methods roughly agree, but the computed fields are the more correct
+  source of truth, not something this app should re-derive).
+- **Auth is a machine-client login, much simpler than QBO's OAuth**
+  (`server/utils/toast.ts`): client id/secret in, a short-lived bearer
+  token out, cached in memory (no persisted token row — there's no
+  refresh-token rotation the way QBO has). Mirrors `qbo.ts`'s retry/error
+  patterns (`ToastAuthError` for real 4xx auth failures, transient 5xx
+  retried) at a smaller scale.
+- **Folded into the same nightly run as QBO**
+  (`server/utils/qbo-sync-runner.ts`), not a second scheduler — one
+  `sync_runs` row and one "as of" freshness signal for the whole dashboard.
+  Only runs if all four `TOAST_*` env vars are set, so an environment
+  without Toast configured (e.g. a fresh local dev checkout) doesn't fail
+  the QBO half of the sync.
+- **Dashboard falls back cleanly when a date hasn't synced yet** — verified
+  by testing both states directly against local dev: covers/average
+  check/sales-per-labor-hour show `—` with a "Toast data hasn't synced for
+  \<date\> yet" note (not a zero, which would misreport), and go back to
+  real numbers once `daily_toast_metrics` has that date's row.
+- **Historical backfill** (`scripts/backfill-toast-metrics.mjs`,
+  `npm run db:backfill-toast`, added 2026-07-30) — same idempotent,
+  resumable shape as `scripts/backfill-qbo-pl.mjs`, but chunked one
+  business date at a time rather than by month: Toast's `ordersBulk`/
+  `timeEntries` endpoints only take a single `businessDate`, unlike QBO's
+  Reports API which accepts a date range directly. Tracks the longest run
+  of consecutive "no orders, no time entries" days and flags it in the
+  final summary (at 14+ days) rather than silently writing what might be a
+  meaningless zero — a day with genuinely nothing from Toast could mean a
+  real closed day (Urban Hearth is closed Mondays) or a day before this
+  Toast account/location had any data at all, and the API response looks
+  identical either way. **Only needs to go back to 2026-06-20** — the
+  opening day at the new location, confirmed by the user rather than
+  defaulting to the script's generic 2-year lookback (which would have
+  reached back into the old location's data, or before this Toast account
+  existed at all).
+- **Production is fully live as of 2026-07-30**: `TOAST_*` and
+  `NUXT_TOAST_*` Fly secrets set, code deployed, `daily_toast_metrics`
+  table added to the production volume via `fly ssh console` ahead of the
+  deploy (schema changes to an existing volume aren't picked up by
+  `fly deploy` itself — same manual-migration posture as
+  `scripts/migrate-other-categories.mjs`). Verified three ways: a manual
+  `POST /api/qbo/sync` returned a real `toastResult` (`covers: 74,
+  laborHours: 151.57` for 2026-07-29, matching the local numbers exactly);
+  `/api/dashboard` served that same data back; and the historical backfill
+  was re-run directly inside the production container (`fly ssh console
+  -C "node scripts/backfill-toast-metrics.mjs ..."`, since the script
+  resolves its db path relative to its own location and Toast's secrets
+  are already in the container's environment) for 2026-06-20 through
+  2026-07-29 — all 40 days matched local dev's numbers byte-for-byte,
+  including the same Monday-closed pattern (near-zero covers, skeleton
+  labor hours).
+
 ## Running it
 
 - `npm install`
@@ -847,6 +925,10 @@ reposition the row in Excel if it matters to them.
   ProfitAndLoss report. See QBO Account + P&L sync below. Needs an account
   sync to have run first (`qbo_account_id` populated) — the nightly
   scheduler or `POST /api/qbo/sync` does this automatically.
+- `npm run db:backfill-toast -- [--since=YYYY-MM-DD] [--until=YYYY-MM-DD]` —
+  one-time historical backfill of `daily_toast_metrics` from Toast's Orders
+  and Labor APIs, one business date at a time. See Toast POS integration
+  below.
 - `npm run dev` — all three pages are the real app now, not the static
   mockup files (which still exist under `design/` for reference)
 
@@ -914,7 +996,6 @@ there's no user-facing availability impact to chase here. Safe to ignore.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
   SQL on the two owner accounts) and to split *actual* labor by owner-comp
   the same way the budget side already is (needs real per-account actuals)
-
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model
@@ -928,6 +1009,9 @@ there's no user-facing availability impact to chase here. Safe to ignore.
 - [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav
 - [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
 - [`server/utils/db.ts`](server/utils/db.ts) — `useDb()` helper for server routes/API endpoints
+- [`server/utils/toast.ts`](server/utils/toast.ts) — Toast POS auth/fetch helper
+- [`server/utils/toast-metrics-sync.ts`](server/utils/toast-metrics-sync.ts) — covers + labor-hours sync
+- [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast backfill
 - [`server/api/budget/`](server/api/budget/) — budget read/write, copy-actuals, and QBO export routes
 - [`scripts/init-db.mjs`](scripts/init-db.mjs) — creates the SQLite file from `schema.sql`
 - [`scripts/import-budget-xlsx.mjs`](scripts/import-budget-xlsx.mjs) — one-time seed of accounts + budget from a real QBO budget export

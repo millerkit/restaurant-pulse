@@ -19,6 +19,12 @@ export default defineNuxtConfig({
       syncHour: Number(process.env.QBO_SYNC_HOUR ?? 3),
       syncMinute: Number(process.env.QBO_SYNC_MINUTE ?? 4)
     },
+    toast: {
+      clientId: process.env.TOAST_CLIENT_ID,
+      clientSecret: process.env.TOAST_CLIENT_SECRET,
+      apiHostname: process.env.TOAST_API_HOSTNAME,
+      restaurantGuid: process.env.TOAST_RESTAURANT_GUID
+    },
     basicAuth: {
       user: process.env.BASIC_AUTH_USER,
       pass: process.env.BASIC_AUTH_PASS

@@ -79,6 +79,13 @@ export default defineEventHandler((event) => {
 
   const lastSyncRow = db.prepare('SELECT status, finished_at AS finishedAt FROM sync_runs ORDER BY id DESC LIMIT 1').get() as { status: string, finishedAt: string | null } | undefined
 
+  // Toast POS metrics (covers, labor hours) for last night — see
+  // daily_toast_metrics in schema.sql. Null if Toast hasn't synced this
+  // date yet (not connected, or the sync ran before Toast credentials
+  // were configured) — the client falls back to its own "not available"
+  // state rather than a fabricated number.
+  const toastRow = db.prepare('SELECT covers, labor_hours AS laborHours FROM daily_toast_metrics WHERE date = ?').get(asOfDate) as { covers: number, laborHours: number } | undefined
+
   return {
     asOfDate,
     asOfYear,
@@ -99,6 +106,7 @@ export default defineEventHandler((event) => {
       actuals: categoryTotalsForRange(yearStart, asOfDate),
       budget: budgetTotalsForMonths(asOfYear, Array.from({ length: 12 }, (_, i) => i + 1))
     },
-    benchmarks
+    benchmarks,
+    toast: toastRow ?? null
   }
 })

@@ -119,6 +119,28 @@ CREATE TABLE qbo_tokens (
   updated_at                TEXT NOT NULL
 );
 
+-- One row per business date, pulled from Toast POS — covers (guest count)
+-- and total labor hours, the two figures the Dashboard needs for average
+-- check and sales/labor-hour that QBO has no equivalent of (see
+-- server/utils/toast-metrics-sync.ts). Deliberately its own table rather
+-- than shoehorned into daily_line_items: these aren't GL account amounts,
+-- they're POS-sourced counts with a different unit and no accounts row to
+-- join against.
+--
+-- covers is the sum of each order's own numberOfGuests (Toast's
+-- check-level numberOfGuests field was found to be null on every check for
+-- this restaurant when spot-checked against a real day — order-level is
+-- the reliable field). labor_hours is the sum of regularHours +
+-- overtimeHours across that day's labor/v1/timeEntries — fields Toast
+-- already computes per entry (accounting for breaks/rounding), rather than
+-- this app re-deriving hours from raw clock-in/out timestamps.
+CREATE TABLE daily_toast_metrics (
+  date         TEXT PRIMARY KEY,   -- ISO 8601, e.g. '2026-07-29' (matches daily_line_items.date)
+  covers       INTEGER NOT NULL,
+  labor_hours  REAL NOT NULL,
+  synced_at    TEXT NOT NULL
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.
