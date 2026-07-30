@@ -67,6 +67,25 @@ export default defineEventHandler((event) => {
     return totals
   }
 
+  // Revenue budget by month, for the year view's "expected pace" line.
+  // The flat calendar-day fraction used elsewhere (dayOfYear/daysInYear)
+  // assumes revenue accrues evenly across all 12 months, which understates
+  // or overstates pace whenever a month's budgeted revenue is seasonally
+  // uneven (e.g. a much higher October target) — the client combines this
+  // with the elapsed-days fraction of the current month to build a true
+  // cumulative-budget-through-today figure instead. null for an unbudgeted
+  // month (treated as 0 by the client, same as budgetTotalsForMonths).
+  function monthlyRevenueBudgets(year: number): (number | null)[] {
+    const rows = db.prepare(`
+      SELECT bt.month AS month, SUM(bt.amount) AS total
+      FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+      WHERE bt.year = ? AND a.category = 'revenue'
+      GROUP BY bt.month
+    `).all(year) as { month: number, total: number }[]
+    const byMonth = new Map(rows.map(r => [r.month, r.total]))
+    return Array.from({ length: 12 }, (_, i) => byMonth.get(i + 1) ?? null)
+  }
+
   const monthStart = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}-01`
   const yearStart = `${asOfYear}-01-01`
   const lastWeekDate = isoDaysBefore(asOfDate, 7)
@@ -104,7 +123,8 @@ export default defineEventHandler((event) => {
     },
     yearToDate: {
       actuals: categoryTotalsForRange(yearStart, asOfDate),
-      budget: budgetTotalsForMonths(asOfYear, Array.from({ length: 12 }, (_, i) => i + 1))
+      budget: budgetTotalsForMonths(asOfYear, Array.from({ length: 12 }, (_, i) => i + 1)),
+      monthlyRevenueBudget: monthlyRevenueBudgets(asOfYear)
     },
     benchmarks,
     toast: toastRow ?? null

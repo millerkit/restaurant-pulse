@@ -987,6 +987,68 @@ in the browser on both pages after the change — the same real numbers that
 prompted this (green dollar figure next to a red "Behind pace" chip) now
 read as one clear headline instead of two disagreeing ones.
 
+## Year revenue pace now seasonality-aware, not a flat calendar line — 2026-07-30
+
+Raised by the user viewing the Dashboard's "2026 revenue" runway card
+(34.7% of expected pace): does the pace calc account for months with a
+much higher budgeted revenue (e.g. October)? It didn't — `yearDayFraction`
+(`dayOfYear/daysInYear`) assumed revenue accrues in equal daily slices
+across all 12 months, comparing actual-to-date against a flat share of the
+**annual** budget total regardless of how unevenly that total is actually
+distributed across individual months.
+
+This wasn't a hypothetical edge case for Urban Hearth specifically: the
+real monthly revenue budgets jump from ~$75-104K/month (Jan-Jun, the old,
+smaller location) to $263K-$320K/month (Jul onward, the new space) — the
+flat line was judging July 28 against 57.3% of the *annual* total, which
+bakes in six months' worth of small-location revenue as if it were spread
+evenly, understating how far ahead the new-location months should already
+be pulling the pace. **Fixed**: `server/api/dashboard.get.ts` now also
+returns `yearToDate.monthlyRevenueBudget` (a 12-entry array from
+`budget_targets`, `null` for an unbudgeted month). The client
+(`app/pages/index.vue`'s `yearExpectedRevenueToDate`) sums each
+fully-elapsed month's own budget plus a pro-rated slice of the current
+month (same elapsed-days-in-month logic the month view already used) to
+get a true cumulative-budget-through-today figure, and the year view's
+`expectedPct` is now this cumulative figure ÷ the annual total, instead of
+the flat day fraction. October's higher budget still isn't counted as
+"expected" until October actually arrives — it only changes what counts as
+expected *before* then, which is the point: a seasonally back-loaded annual
+number shouldn't make the middle of the year look artificially further
+behind than it really is. Verified against real local data: this changed
+the year card from "34.7% of expected pace" to "54.9%" — matching a
+hand-calculated check (cumulative expected revenue through Jul 28 ≈
+$767,494 vs. the old flat-line's ≈$1,215,297) — a materially fairer number,
+not just a rounding difference. The month view was untouched — it already
+compares against that single month's own budget, so it never had this
+flattening problem to begin with.
+
+**Extended to the Budget Pace page's year view same day** (revenue, COGS,
+labor, opex all four — not just revenue, since none of the four escape the
+same flat-day-fraction assumption there). No server change needed here:
+`useBudgetYear()` already fetches every month's own per-account budget via
+`/api/budget/targets` for the Edit Budget page's account tree, so
+[`app/pages/budget/index.vue`](app/pages/budget/index.vue)'s new
+`yearExpectedToDate` computed builds the same cumulative-through-today
+figure entirely from data already on the client (`categoryTotalsFor` over
+the already-elapsed months, plus a pro-rated current month) — no new API
+route. `expectedAmountFor(cat, budget)` replaces the flat
+`periodDayFraction`-based expected amount in both `paceCards` (the runway
+bars + status chips) and `overspendingCategories` (the "$X over expected
+pace" figures), for the year view only — month view is untouched, same
+reasoning as the Dashboard fix. Verified against real local data down to
+the dollar: Opex's "$60,208 over expected pace" and COGS's "$76,106 over
+expected pace" both matched a hand-calculation built directly from
+`/api/budget/targets`'s raw monthly figures. One real gotcha hit while
+verifying: this page's `asOfMonth`/`asOfDay` (`currentAsOfMonth()`/
+`currentAsOfDay()` in `useBudgetData.ts`) are the real wall-clock date, not
+the Dashboard's last-synced-data date — those two "as of" dates can
+genuinely differ (Jul 30 real-world vs. Jul 28 last sync in this session)
+and a verification calc using the wrong one was off by ~$750 before
+switching to the right one, which is a mismatch between two *already*
+intentionally-different "as of" concepts (see `currentAsOfMonth`'s own
+comment), not a bug introduced by this fix.
+
 ## Not yet done
 
 - Wiring the P&L page to the real schema — it still renders the same static

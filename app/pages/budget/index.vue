@@ -61,6 +61,33 @@ const selectedPeriod = ref<'month' | 'year'>('month')
 const periodDayFraction = computed(() => selectedPeriod.value === 'month'
   ? asOfDay / daysInMonth(YEAR, asOfMonth)
   : currentYearDayFraction())
+
+// Cumulative budget-through-today per category, built from each fully-
+// elapsed month's own budget plus a pro-rated slice of the current month
+// — not a flat calendar-day share of the annual total (currentYearDayFraction
+// above), which assumes each category's budget accrues evenly across all
+// 12 months. Same fix as the Dashboard's year revenue pace (see CLAUDE.md's
+// "Year revenue pace now seasonality-aware" section), applied here to all
+// four pace-card categories rather than just revenue.
+const yearExpectedToDate = computed(() => {
+  const priorMonths = Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
+  const priorTotals = categoryTotalsFor(priorMonths).totals
+  const currentMonthTotals = categoryTotalsFor([asOfMonth]).totals
+  const frac = asOfDay / daysInMonth(YEAR, asOfMonth)
+  const result = {} as Record<'revenue' | 'cogs' | 'labor' | 'opex', number>
+  for (const cat of ['revenue', 'cogs', 'labor', 'opex'] as const) {
+    result[cat] = priorTotals[cat] + currentMonthTotals[cat] * frac
+  }
+  return result
+})
+
+// Dollar amount that should have accrued by today for a category's budget
+// — seasonality-aware for the year view, the existing flat within-month
+// fraction for the month view (no finer-grained-than-monthly budget exists
+// to do better there).
+function expectedAmountFor(cat: 'revenue' | 'cogs' | 'labor' | 'opex', budget: number) {
+  return selectedPeriod.value === 'year' ? yearExpectedToDate.value[cat] : budget * periodDayFraction.value
+}
 function actualsTotalsFor(monthNumbers: number[]) {
   const totals = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
   for (const m of monthNumbers) {
@@ -116,10 +143,10 @@ const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const)
   const actual = periodActuals.value[cat]
   const budget = periodBudget.value.totals[cat]
   const monthsBudgeted = periodBudget.value.monthsBudgeted[cat]
-  const expectedPct = periodDayFraction.value * 100
   if (!budget) {
     return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true, actual, budget, monthsBudgeted, projection: null }
   }
+  const expectedPct = (expectedAmountFor(cat, budget) / budget) * 100
   const actualPct = (actual / budget) * 100
   const status = paceStatus(actualPct, expectedPct, CATEGORY_DIRECTION[cat])
   // Compares the projected month-end total against 100% of budget (will we
@@ -154,11 +181,11 @@ const overspendingCategories = computed(() => (['cogs', 'labor', 'opex'] as cons
     const actual = periodActuals.value[cat]
     const budget = periodBudget.value.totals[cat]
     if (!budget) return null
-    const expectedPct = periodDayFraction.value * 100
+    const expectedAmount = expectedAmountFor(cat, budget)
+    const expectedPct = (expectedAmount / budget) * 100
     const actualPct = (actual / budget) * 100
     const overPct = actualPct - expectedPct
     if (overPct <= 0) return null
-    const expectedAmount = budget * (periodDayFraction.value)
     // Labor's budget denominator includes owner compensation (real cash
     // cost, but not what a hired-staff benchmark assumes) — surface that
     // so "Labor is over pace" isn't read as "the team is overstaffed" when

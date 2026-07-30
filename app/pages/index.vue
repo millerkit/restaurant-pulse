@@ -46,6 +46,25 @@ const asOfMonthDayLabel = computed(() => data.value ? `${MONTH_NAMES[data.value.
 const monthDayFraction = computed(() => data.value ? data.value.asOfDay / daysInMonth(data.value.asOfYear, data.value.asOfMonth) : 0)
 const yearDayFraction = computed(() => data.value ? dayOfYear(data.value.asOfYear, data.value.asOfMonth, data.value.asOfDay) / daysInYear(data.value.asOfYear) : 0)
 
+// Cumulative budgeted revenue through today, built from each month's own
+// budget (server/api/dashboard.get.ts's monthlyRevenueBudget) rather than
+// a flat dayOfYear/daysInYear share of the annual total — a flat line
+// assumes revenue accrues evenly across all 12 months, which misjudges
+// pace whenever a month (e.g. a much higher October) is budgeted
+// seasonally. Unbudgeted months contribute 0, same as budgetTotalsForMonths
+// treats a month with no budget_targets rows.
+const yearExpectedRevenueToDate = computed(() => {
+  if (!data.value) return 0
+  const budgets = data.value.yearToDate.monthlyRevenueBudget ?? []
+  const { asOfYear, asOfMonth, asOfDay } = data.value
+  let expected = 0
+  for (let m = 1; m < asOfMonth; m++) {
+    expected += budgets[m - 1] ?? 0
+  }
+  expected += (budgets[asOfMonth - 1] ?? 0) * (asOfDay / daysInMonth(asOfYear, asOfMonth))
+  return expected
+})
+
 function buildPeriod(period: 'month' | 'year') {
   if (!data.value) return null
   const p = period === 'month' ? data.value.month : data.value.yearToDate
@@ -56,7 +75,9 @@ function buildPeriod(period: 'month' | 'year') {
   }
   const budgetNet = netIncome(p.budget as any)
   const actualPct = (p.actuals.revenue / p.budget.revenue) * 100
-  const expectedPct = dayFraction * 100
+  const expectedPct = period === 'year'
+    ? (yearExpectedRevenueToDate.value / p.budget.revenue) * 100
+    : dayFraction * 100
   const status = paceStatus(actualPct, expectedPct, CATEGORY_DIRECTION.revenue)
   return {
     actualNet, budgetNet, hasBudget: true as const, dayFraction,
