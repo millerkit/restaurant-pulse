@@ -63,15 +63,28 @@ export default defineEventHandler((event) => {
   const monthRows = allLoanRows.filter(r => r.payment_date >= monthStart && r.payment_date <= monthEnd)
   const yearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEnd)
 
-  // Reserve target: the sum of catch-up interest across all 10 loans —
-  // widened 2026-07-31 from the original 7-loan-only target ($50,562.50) to
-  // also cover Jones & Miller's catch-up ($2,276.30), at the user's request,
-  // since nothing else in this app was funding that piece. Computed from
-  // loan_schedule rather than hardcoded so it can't drift from the actual
-  // imported schedule.
-  const reserveTarget = allLoanRows
-    .filter(r => r.payment_type === 'catch_up')
-    .reduce((s, r) => s + r.interest, 0)
+  // Reserve target: the one-time catch-up interest due Dec 20, 2026 across
+  // the 7 original investor loans only — $50,562.50. Reverted 2026-07-31
+  // from a brief widening to $52,838.80 (all 10 loans, including Jones &
+  // Miller's own catch-up) — that widening double-counted Jones & Miller's
+  // piece once the real running-balance simulation below was built: their
+  // catch-up is now modeled as a scheduled withdrawal paid out of the
+  // reserve around Aug 15 (a pass-through, not money held until December),
+  // so folding it into a single static "amount to keep saved" overstated
+  // what actually needs to still be sitting in the account by Dec 20.
+  // Computed from loan_schedule rather than hardcoded so it can't drift
+  // from the actual imported schedule; catchUpDate is pulled the same way.
+  const catchUpRows = allLoanRows.filter(r => r.payment_type === 'catch_up' && r.loan_key !== 'jones' && r.loan_key !== 'miller')
+  const reserveTarget = catchUpRows.reduce((s, r) => s + r.interest, 0)
+  const catchUpDate = catchUpRows[0]?.payment_date ?? null
+
+  // Every loan_schedule row that's actually paid out of this same 1005
+  // Loan Payment Reserve account — Jones & Miller's full schedule (their
+  // catch-up AND every ongoing regular payment, per the user's 2026-07-31
+  // decision to fund their monthly payments from here too), NOT the
+  // original 7 loans' regular monthly payments (those still come from
+  // normal operating cash — only their one-time catch-up above does).
+  const reserveFundedRows = allLoanRows.filter(r => r.loan_key === 'jones' || r.loan_key === 'miller')
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
@@ -95,13 +108,35 @@ export default defineEventHandler((event) => {
     // no plan has ever been declared.
     const lastPositive = [...toDate].reverse().find(t => t.amount > 0)
     const currentWeeklyAmount = plan?.weekly_amount ?? lastPositive?.amount ?? null
-    let projectedCompletionDate: string | null = null
-    if (remaining > 0 && currentWeeklyAmount) {
-      const weeksNeeded = Math.ceil(remaining / currentWeeklyAmount)
-      const start = nextMonday(asOfIso)
-      const d = new Date(`${start}T00:00:00Z`)
-      d.setUTCDate(d.getUTCDate() + (weeksNeeded - 1) * 7)
-      projectedCompletionDate = d.toISOString().slice(0, 10)
+
+    // Real running-balance projection — replaces the old naive "remaining
+    // ÷ weekly amount" division, which ignored the Jones & Miller draws
+    // entirely and so was always too optimistic once those started coming
+    // out of this same account (see CLAUDE.md's "Declared weekly reserve
+    // plan" section — the manual version of exactly this calculation).
+    // Simulates every Monday deposit from the next Monday through
+    // catchUpDate, interleaved chronologically with every reserve-funded
+    // withdrawal due in that window, so the projected balance right before
+    // the Dec 20 payment reflects what will actually be left after
+    // servicing Jones & Miller along the way.
+    let projectedBalanceAtCatchUp: number | null = null
+    let onPaceForCatchUp: boolean | null = null
+    let catchUpShortfall: number | null = null
+    if (currentWeeklyAmount && catchUpDate && catchUpDate > asOfIso) {
+      const deposits: { date: string, amount: number }[] = []
+      for (let d = nextMonday(asOfIso); d <= catchUpDate; ) {
+        if (d < catchUpDate) deposits.push({ date: d, amount: currentWeeklyAmount }) // a same-day deposit wouldn't arrive before the payment
+        const next = new Date(`${d}T00:00:00Z`)
+        next.setUTCDate(next.getUTCDate() + 7)
+        d = next.toISOString().slice(0, 10)
+      }
+      const withdrawals = reserveFundedRows
+        .filter(r => r.payment_date > asOfIso && r.payment_date < catchUpDate)
+        .map(r => ({ date: r.payment_date, amount: -r.total_payment }))
+      const events = [...deposits, ...withdrawals].sort((a, b) => a.date.localeCompare(b.date))
+      projectedBalanceAtCatchUp = events.reduce((bal, e) => bal + e.amount, saved)
+      onPaceForCatchUp = projectedBalanceAtCatchUp >= reserveTarget
+      catchUpShortfall = Math.max(0, reserveTarget - projectedBalanceAtCatchUp)
     }
 
     return {
@@ -109,7 +144,10 @@ export default defineEventHandler((event) => {
       saved,
       remaining,
       currentWeeklyAmount,
-      projectedCompletionDate,
+      catchUpDate,
+      projectedBalanceAtCatchUp,
+      onPaceForCatchUp,
+      catchUpShortfall,
       complete: remaining <= 0,
       transfers: toDate.map(t => ({ date: t.transfer_date, amount: t.amount, note: t.note }))
     }

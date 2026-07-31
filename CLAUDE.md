@@ -1207,17 +1207,53 @@ which would have made the projection show $400/week instead.
   to the old last-positive-transfer inference only if no plan has ever been
   declared. `reserve_transfers` remains the sole source of truth for
   "saved so far" — this table only feeds the forward-looking projection.
-- **The app's projection still doesn't model scheduled *withdrawals*** (the
-  Jones & Miller monthly payments now also coming out of this account) —
-  `projectedCompletionDate` is still a simple "remaining ÷ weekly amount"
-  calculation, not a full running-balance simulation against
-  `loan_schedule`'s known future outflows. The more accurate number (worked
-  out by hand with the user for this specific plan: $4,011.77/week is the
-  precise break-even, and the $400 top-up + flat $4,000/week they chose
-  lands at $53,014.60 available by Dec 15, comfortably covering the Dec 20
-  catch-up) currently lives only in that conversation, not in the app
-  itself. Worth building if the reserve keeps being used to fund ongoing
-  loan payments rather than just the one-time catch-up — see Not yet done.
+- **Real running-balance projection, built same day**: the naive
+  "remaining ÷ weekly amount" projection above was replaced within hours —
+  see "Real running-balance reserve projection" below.
+
+## Real running-balance reserve projection — 2026-07-31
+
+Closes the gap the section above flagged as "not yet done" — the naive
+`remaining ÷ weeklyAmount` projection ignored the Jones & Miller draws
+entirely, so it was always too optimistic once those started coming out of
+the same reserve account (it showed a projected completion date of Oct 26,
+when the hand-verified answer, worked out earlier the same day, was that
+$53,014.60 would actually be available by Dec 15).
+
+- **`reserveProgress()` (`server/api/cashflow.get.ts`) now simulates a real
+  event timeline** — every Monday deposit at `currentWeeklyAmount` from the
+  next Monday through `catchUpDate` (Dec 20, 2026, read from
+  `loan_schedule` rather than hardcoded), interleaved chronologically with
+  every `loan_schedule` row actually paid from this reserve account
+  (`reserveFundedRows`: Jones & Miller's full schedule — catch-up and every
+  regular monthly payment, since the user is funding both from here — but
+  *not* the original 7 loans' regular monthly payments, which still come
+  from normal operating cash). The result is `projectedBalanceAtCatchUp`,
+  `onPaceForCatchUp`, and `catchUpShortfall` — verified against the exact
+  by-hand figures from earlier the same day ($400 top-up + flat
+  $4,000/week → $53,164.60 projected, on pace) and against a deliberately
+  under-funded $2,000/week scenario (correctly flagged as $37,397.90 short).
+- **`target` reverted from $52,838.80 back to $50,562.50** (7-loan-only
+  catch-up) — the earlier widening to include Jones & Miller's own
+  catch-up double-counted it once this simulation existed: J&M's catch-up
+  is now a scheduled *withdrawal* the simulation accounts for directly
+  (money passes through the account around Aug 15, it isn't held until
+  December), so folding its dollar amount into a single static "keep this
+  much saved" target overstated what actually needs to still be sitting in
+  the account specifically on Dec 20.
+- **`projectedCompletionDate` was removed rather than fixed** — with
+  withdrawals interleaved, the running balance can cross above the target
+  and dip back below it more than once (a real oscillation, not a bug: the
+  balance passes $50,562.50 after an early December deposit, then drops
+  back under it when the Dec 15 Jones & Miller payment goes out), so "the
+  date it's done" doesn't have one honest answer the way it did under the
+  old non-interleaved assumption. `catchUpDate` + `onPaceForCatchUp` +
+  `catchUpShortfall` answer the question the user actually has ("will I be
+  ready by Dec 20, and by how much") without that ambiguity.
+- **Still a bounded simulation, not a general-purpose one** — it only
+  models the window between today and `catchUpDate`. It doesn't project
+  what happens to the account after Dec 20, when Jones & Miller's monthly
+  payments keep coming out indefinitely — see "Not yet done" below.
 
 ## Not yet done
 
@@ -1248,11 +1284,11 @@ which would have made the projection show $400/week instead.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
   SQL on the two owner accounts) and to split *actual* labor by owner-comp
   the same way the budget side already is (needs real per-account actuals)
-- A real running-balance cash flow simulation for the reserve projection
-  (against `loan_schedule`'s known future outflows — e.g. Jones & Miller's
-  monthly payments now also being funded from the reserve account), instead
-  of the current simple "remaining ÷ weekly amount" estimate — see
-  "Declared weekly reserve plan" above.
+- Extending the reserve running-balance simulation past `catchUpDate` (Dec
+  20, 2026) — it currently only projects through the one-time catch-up
+  payment; it doesn't project whether the reserve can keep sustaining
+  Jones & Miller's monthly payments indefinitely afterward — see "Real
+  running-balance reserve projection" above.
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model

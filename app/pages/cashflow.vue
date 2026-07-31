@@ -15,7 +15,11 @@ type CashFlowResponse = {
   month: number
   thisMonth: PeriodFigures
   thisYear: PeriodFigures
-  reserve: { target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, projectedCompletionDate: string | null, complete: boolean, transfers: ReserveTransfer[] }
+  reserve: {
+    target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
+    catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
+    transfers: ReserveTransfer[]
+  }
   upcomingPayments: Payment[]
 }
 
@@ -241,7 +245,22 @@ async function submitPlan() {
             <span v-if="data.reserve.complete" class="chip good">Target reached</span>
             <span v-else>{{ fmt(data.reserve.remaining) }} remaining</span>
             <span v-if="data.reserve.currentWeeklyAmount">Current pace: {{ fmt(data.reserve.currentWeeklyAmount) }}/week</span>
-            <span v-if="!data.reserve.complete && data.reserve.projectedCompletionDate">Projected: {{ fmtDate(data.reserve.projectedCompletionDate) }}</span>
+          </div>
+
+          <div v-if="data.reserve.catchUpDate && data.reserve.projectedBalanceAtCatchUp !== null" class="catchup-projection">
+            <div class="runway-head">
+              <span class="name">Projected balance on {{ fmtDate(data.reserve.catchUpDate) }}</span>
+              <span :class="['chip', data.reserve.onPaceForCatchUp ? 'good' : 'critical']">
+                {{ data.reserve.onPaceForCatchUp ? 'On pace' : 'Behind pace' }}
+              </span>
+            </div>
+            <div class="section-note">
+              Simulated from real transfers + the current planned weekly amount, minus Jones &amp; Miller's catch-up and every monthly payment due from this account before then.
+              Projected: <strong>{{ fmt(data.reserve.projectedBalanceAtCatchUp) }}</strong> vs. the {{ fmt(data.reserve.target) }} needed.
+              <template v-if="!data.reserve.onPaceForCatchUp && data.reserve.catchUpShortfall">
+                Short by <strong>{{ fmt(data.reserve.catchUpShortfall) }}</strong> at the current pace.
+              </template>
+            </div>
           </div>
 
           <div class="transfer-history">
@@ -356,6 +375,8 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .runway-fill.warning { background: var(--warning); }
 .runway-foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); }
 
+.catchup-projection { border-top: 1px solid var(--hair); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.catchup-projection .section-note { line-height: 1.5; }
 .transfer-history { border-top: 1px dashed var(--hair); padding-top: 8px; }
 .toggle-link { font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; user-select: none; }
 .cf-table.transfers { margin-top: 8px; }
