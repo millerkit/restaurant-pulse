@@ -85,8 +85,9 @@ export async function runNightlySync(dateOverride?: string) {
     // silently dropped that day forever, since nothing ever looked
     // further back than exactly one day. dateOverride (an explicit
     // single-date re-sync, e.g. for troubleshooting one day) bypasses this
-    // entirely and stays single-day, as before.
-    let startDate = endDate
+    // entirely and stays single-day here — but see MIN_QBO_LOOKBACK_DAYS
+    // below, which widens the actual QBO request regardless.
+    let catchUpStartDate = endDate
     if (!dateOverride) {
       const row = db.prepare(`SELECT MAX(date) as maxDate FROM daily_line_items`).get() as { maxDate: string | null }
       if (row.maxDate) {
@@ -94,15 +95,37 @@ export async function runNightlySync(dateOverride?: string) {
         // Never later than endDate: if daily_line_items is already caught
         // up (or somehow ahead), fall back to re-syncing just yesterday
         // rather than passing an inverted range to QBO.
-        startDate = dayAfter <= endDate ? dayAfter : endDate
+        catchUpStartDate = dayAfter <= endDate ? dayAfter : endDate
       }
     }
-    // One Reports API call for the whole range — fine for the realistic
-    // catch-up window this is meant to cover (a missed night or two); a
-    // gap of months would want scripts/backfill-qbo-pl.mjs's month-chunked
-    // approach instead (see its own comment on why one giant range isn't
-    // reliable at that size).
-    const plResult = await syncPlForDateRange(startDate, endDate)
+
+    // QBO's ProfitAndLoss Reports API silently omits an account's row
+    // entirely (not even a $0 row) when that account has no non-zero
+    // activity within the requested date range — confirmed live against
+    // production: a 3-day request returned ~15 accounts/day, but the same
+    // three days requested as part of a full-month range returned the
+    // normal ~99/day. Payroll (posted biweekly, not daily) is the account
+    // most exposed to this — it looks "inactive" in almost any short
+    // window and vanishes from the response instead of coming back as a
+    // real zero. This is exactly what the original catch-up fix above
+    // made worse: once caught up, every steady-state night requests just a
+    // 1-day window, which is the failure case every single time. Since
+    // syncPlForDateRange upserts (ON CONFLICT DO UPDATE), there's no
+    // downside to always requesting a wider trailing window than the
+    // strict catch-up gap needs — MIN_QBO_LOOKBACK_DAYS is a pragmatic
+    // floor picked from what was actually observed to work (3 days:
+    // broken; 30 days: correct), not a documented QBO threshold, so it's
+    // deliberately generous rather than tuned to the minimum that happened
+    // to work in this one test.
+    const MIN_QBO_LOOKBACK_DAYS = 30
+    const minLookbackStart = addDaysToIsoDate(endDate, -MIN_QBO_LOOKBACK_DAYS)
+    const qboStartDate = catchUpStartDate < minLookbackStart ? catchUpStartDate : minLookbackStart
+
+    // One Reports API call for the whole range — fine for the window this
+    // covers (30+ days); a gap of months would want
+    // scripts/backfill-qbo-pl.mjs's month-chunked approach instead (see its
+    // own comment on why one giant range isn't reliable at that size).
+    const plResult = await syncPlForDateRange(qboStartDate, endDate)
 
     // Toast is a separate POS system, not a QBO endpoint, but folded into
     // the same nightly run/sync_runs row rather than a second scheduler —
@@ -112,11 +135,14 @@ export async function runNightlySync(dateOverride?: string) {
     // the whole sync. Toast's own APIs only take a single businessDate
     // (see scripts/backfill-toast-metrics.mjs), so a multi-day catch-up
     // range means one call per day here, same chunking the backfill script
-    // already does.
+    // already does. Deliberately uses catchUpStartDate, not the wider
+    // QBO-padded qboStartDate above — Toast doesn't have QBO's
+    // narrow-range row-dropping problem, so padding it would just mean up
+    // to 30 redundant single-day API calls every night for no benefit.
     let toastResult: { covers: number; laborHours: number; daysSynced: number } | null = null
     if (toast.clientId && toast.clientSecret && toast.apiHostname && toast.restaurantGuid) {
       toastResult = { covers: 0, laborHours: 0, daysSynced: 0 }
-      for (let date = startDate; date <= endDate; date = addDaysToIsoDate(date, 1)) {
+      for (let date = catchUpStartDate; date <= endDate; date = addDaysToIsoDate(date, 1)) {
         const dayResult = await syncToastMetricsForDate(toast, date)
         toastResult.covers += dayResult.covers
         toastResult.laborHours += dayResult.laborHours
