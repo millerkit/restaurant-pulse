@@ -173,6 +173,26 @@ CREATE TABLE loan_schedule (
   UNIQUE (loan_key, payment_date, payment_type)
 );
 
+-- Real, actual transfers into the QBO 1005 Loan Payment Reserve account,
+-- toward the loan_schedule catch-up-interest target (see CLAUDE.md's Debt
+-- Service / Cash Flow tab section). Deliberately NOT derived from a fixed
+-- $/week schedule assumption — a real gap caught 2026-07-31: the app
+-- originally assumed every planned Monday transfer happened at a fixed
+-- $2,200, but two of the real transfers (7/13, 7/20) were reversed the same
+-- week (the user needed the cash for bills), and the weekly amount itself
+-- later changed to $2,500 starting 7/27. No bank feed exists to detect any
+-- of this automatically, so this table is manually recorded (via the Cash
+-- Flow tab's "Record a transfer" form) and is the sole source of truth for
+-- "how much is actually saved" — amount is signed so a reversal is just
+-- another row (a negative one) rather than a special case, and multiple
+-- rows may share a transfer_date (a same-day transfer + reversal, e.g.).
+CREATE TABLE reserve_transfers (
+  id             INTEGER PRIMARY KEY,
+  transfer_date  TEXT NOT NULL,   -- ISO 8601, e.g. '2026-07-27'
+  amount         REAL NOT NULL,   -- negative = reversal/withdrawal
+  note           TEXT
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.

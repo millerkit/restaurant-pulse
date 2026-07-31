@@ -9,26 +9,19 @@
 // the requested year's, so the page can offer a Month/Year toggle without a
 // second round trip (mirrors /api/budget/targets' per-month shape, just
 // bundled instead of fetched 12x).
-const RESERVE_WEEKLY_AMOUNT = 2200
-const RESERVE_START = '2026-07-13' // first Monday transfer (see CLAUDE.md)
-const RESERVE_END = '2026-12-14'   // last Monday transfer before the Dec 20 catch-up
-
-function mondaysBetween(startIso: string, endIso: string): string[] {
-  const out: string[] = []
-  const d = new Date(`${startIso}T00:00:00Z`)
-  const end = new Date(`${endIso}T00:00:00Z`)
-  while (d <= end) {
-    out.push(d.toISOString().slice(0, 10))
-    d.setUTCDate(d.getUTCDate() + 7)
-  }
-  return out
-}
-// All 23 planned reserve transfer dates, computed once — Section 6 of the
-// source brief describes this as "every Monday, Jul 13 – Dec 14 2026",
-// which this reproduces exactly (verified: 23 Mondays, matching the brief).
-const RESERVE_TRANSFER_DATES = mondaysBetween(RESERVE_START, RESERVE_END)
-
 type LoanRow = { loan_key: string, lender: string, payment_date: string, payment_type: 'catch_up' | 'regular', interest: number, principal: number, total_payment: number }
+type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null }
+
+// Next Monday on/after asOfIso (asOfIso itself if it's already a Monday) —
+// used to project a completion date from the current pace, since real
+// transfers land on Mondays (see CLAUDE.md's reserve_transfers note).
+function nextMonday(asOfIso: string): string {
+  const d = new Date(`${asOfIso}T00:00:00Z`)
+  const day = d.getUTCDay() // 0=Sun..6=Sat
+  const daysUntilMonday = (8 - day) % 7
+  d.setUTCDate(d.getUTCDate() + daysUntilMonday)
+  return d.toISOString().slice(0, 10)
+}
 
 export default defineEventHandler((event) => {
   const query = getQuery(event)
@@ -70,36 +63,58 @@ export default defineEventHandler((event) => {
   const monthRows = allLoanRows.filter(r => r.payment_date >= monthStart && r.payment_date <= monthEnd)
   const yearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEnd)
 
-  // Reserve target: dynamically the sum of catch-up interest for the 7
-  // original investor loans only (excludes Jones & Miller's separate, much
-  // smaller Aug 2026 catch-up, which the source brief's reserve plan
-  // doesn't fund) — computed from loan_schedule rather than hardcoded so it
-  // can't drift from the actual imported schedule.
+  // Reserve target: the sum of catch-up interest across all 10 loans —
+  // widened 2026-07-31 from the original 7-loan-only target ($50,562.50) to
+  // also cover Jones & Miller's catch-up ($2,276.30), at the user's request,
+  // since nothing else in this app was funding that piece. Computed from
+  // loan_schedule rather than hardcoded so it can't drift from the actual
+  // imported schedule.
   const reserveTarget = allLoanRows
-    .filter(r => r.payment_type === 'catch_up' && r.loan_key !== 'jones' && r.loan_key !== 'miller')
+    .filter(r => r.payment_type === 'catch_up')
     .reduce((s, r) => s + r.interest, 0)
 
+  const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
+
+  // Real, actual transfers only — see schema.sql's reserve_transfers
+  // comment for why this replaced a fixed $/week schedule assumption (two
+  // of the real Jul transfers were reversed the same week; the weekly
+  // amount itself changed later). amount is signed, so a reversal nets out
+  // naturally rather than needing special-casing here.
   function reserveProgress(asOfIso: string) {
-    const transfersDone = RESERVE_TRANSFER_DATES.filter(d => d <= asOfIso)
-    const transfersRemaining = RESERVE_TRANSFER_DATES.filter(d => d > asOfIso)
-    const saved = transfersDone.length * RESERVE_WEEKLY_AMOUNT
-    const nextTransferDate = transfersRemaining[0] ?? null
+    const toDate = allTransfers.filter(t => t.transfer_date <= asOfIso)
+    const saved = toDate.reduce((s, t) => s + t.amount, 0)
+    const remaining = Math.max(0, reserveTarget - saved)
+
+    // Projection uses the most recent *positive* transfer as "the current
+    // weekly rate" — a reversal shouldn't reset what the ongoing plan is.
+    const lastPositive = [...toDate].reverse().find(t => t.amount > 0)
+    const currentWeeklyAmount = lastPositive?.amount ?? null
+    let projectedCompletionDate: string | null = null
+    if (remaining > 0 && currentWeeklyAmount) {
+      const weeksNeeded = Math.ceil(remaining / currentWeeklyAmount)
+      const start = nextMonday(asOfIso)
+      const d = new Date(`${start}T00:00:00Z`)
+      d.setUTCDate(d.getUTCDate() + (weeksNeeded - 1) * 7)
+      projectedCompletionDate = d.toISOString().slice(0, 10)
+    }
+
     return {
-      weeklyAmount: RESERVE_WEEKLY_AMOUNT,
       target: reserveTarget,
-      totalPlanned: RESERVE_TRANSFER_DATES.length * RESERVE_WEEKLY_AMOUNT,
-      transfersDone: transfersDone.length,
-      transfersTotal: RESERVE_TRANSFER_DATES.length,
       saved,
-      nextTransferDate,
-      onTrack: saved >= transfersDone.length * RESERVE_WEEKLY_AMOUNT // always true; kept for shape symmetry with pace cards elsewhere
+      remaining,
+      currentWeeklyAmount,
+      projectedCompletionDate,
+      complete: remaining <= 0,
+      transfers: toDate.map(t => ({ date: t.transfer_date, amount: t.amount, note: t.note }))
     }
   }
-  // How much reserve was transferred *within* the requested month/year, for
-  // the Free Cash Flow subtraction below — distinct from cumulative
-  // progress-to-date above.
+  // How much reserve was transferred (net) *within* the requested
+  // month/year, for the Free Cash Flow subtraction below — distinct from
+  // cumulative progress-to-date above.
   function reserveTransferredInRange(startIso: string, endIso: string) {
-    return RESERVE_TRANSFER_DATES.filter(d => d >= startIso && d <= endIso).length * RESERVE_WEEKLY_AMOUNT
+    return allTransfers
+      .filter(t => t.transfer_date >= startIso && t.transfer_date <= endIso)
+      .reduce((s, t) => s + t.amount, 0)
   }
 
   // Net income + depreciation actuals from the real QBO-synced data, same

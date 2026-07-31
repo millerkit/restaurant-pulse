@@ -1137,6 +1137,54 @@ debt service, with `Free Cash Flow = Net Income + Depreciation − Principal
   target: exactly $50,562.50), and a live `/api/cashflow` + `/cashflow`
   request against production both returned 200 with real numbers.
 
+## Reserve transfers are real data, not a schedule assumption — 2026-07-31
+
+The reserve savings section originally assumed every planned Monday
+transfer happened at a fixed $2,200/week (Jul 13 – Dec 14 2026, per the
+source brief's Section 6). The user reported this was wrong on two counts:
+the Jul 13 and Jul 20 transfers were both reversed the same week (the money
+was needed for bills), and the weekly amount itself changed to $2,500
+starting Jul 27 — so the app's "3 transfers × $2,200 = $6,600 saved" was
+overstating reality by $4,100 (actual: $2,500, from the one surviving
+Jul 27 transfer). There's no bank feed to detect any of this, so a fixed-
+schedule assumption was never going to stay correct.
+
+- **`reserve_transfers`** (schema.sql) is a new table — real, manually
+  recorded transfers (and reversals, as a signed negative amount on their
+  own row) into QBO's 1005 Loan Payment Reserve account. This replaces the
+  old computed-from-a-constant `RESERVE_TRANSFER_DATES`/
+  `RESERVE_WEEKLY_AMOUNT` logic in `server/api/cashflow.get.ts` entirely —
+  "saved" is now always `SUM(reserve_transfers.amount)`, not an assumption.
+  Seeded (both local dev and production) with the real Jul history: +2200/
+  -2200 on both 7/13 and 7/20 (net zero, matching the reversals), +2500 on
+  7/27 — net $2,500 saved, matching what the user reported.
+- **The Cash Flow tab now has a "Record a transfer" form** (date, amount,
+  optional reversal checkbox, optional note) posting to the new
+  `POST /api/cashflow/reserve-transfer` route — this needs updating weekly
+  going forward, unlike everything else on this tab (which is either
+  QBO-synced or a one-time schedule import), so a form beats another
+  hand-SQL-only field like `is_owner_compensation`.
+- **Reserve target widened to include Jones & Miller**, at the user's
+  request while fixing this: $52,838.80 (all 10 loans' catch-up interest),
+  up from the original 7-loan-only $50,562.50 — the source brief's reserve
+  plan never funded Jones & Miller's separate, smaller Aug 2026 catch-up
+  ($2,276.30), and the user now wants this reserve to cover it too. Still
+  computed from `loan_schedule` (just without the loan_key exclusion), so
+  it can't drift from the imported schedule.
+- **"Current weekly amount" and the projected completion date are derived
+  from the most recent transfer, not a separately hand-set config value**
+  — `reserveProgress()`'s `currentWeeklyAmount` is the most recent
+  *positive* transfer (a reversal doesn't reset what the ongoing plan is),
+  projected forward at that rate every Monday until the target is hit. This
+  is a real risk signal worth watching: at $2,500/week from here, the
+  projected completion date lands one day *after* the Dec 20 catch-up is
+  actually due — the reserve plan is not currently on pace to be ready in
+  time at this reduced rate.
+- **Not yet done**: no reconciliation against a real bank feed (this is
+  still 100% manually entered) and no edit/delete UI for a mis-entered
+  transfer — a wrong entry has to be corrected with an offsetting row for
+  now, the same reversal mechanism used for a real reversal.
+
 ## Not yet done
 
 - Confirming the SBA loan's real QBO liability account number directly
@@ -1177,6 +1225,7 @@ debt service, with `Free Cash Flow = Net Income + Depreciation − Principal
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
 - [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
+- [`server/api/cashflow/reserve-transfer.post.ts`](server/api/cashflow/reserve-transfer.post.ts) — records a real reserve transfer (or reversal)
 - [`scripts/import-debt-schedule.mjs`](scripts/import-debt-schedule.mjs) — one-time seed of `loan_schedule` from the debt amortization workbooks
 - [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
 - [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav

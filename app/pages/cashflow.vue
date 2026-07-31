@@ -9,12 +9,13 @@ type PeriodFigures = {
   debtService: { principal: number, interest: number, catchUpInterest: number, totalCashOut: number, payments: Payment[] }
   freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, reserveTransfers: number, principal: number, catchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
+type ReserveTransfer = { date: string, amount: number, note: string | null }
 type CashFlowResponse = {
   year: number
   month: number
   thisMonth: PeriodFigures
   thisYear: PeriodFigures
-  reserve: { weeklyAmount: number, target: number, totalPlanned: number, transfersDone: number, transfersTotal: number, saved: number, nextTransferDate: string | null }
+  reserve: { target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, projectedCompletionDate: string | null, complete: boolean, transfers: ReserveTransfer[] }
   upcomingPayments: Payment[]
 }
 
@@ -48,6 +49,36 @@ function fmtDate(iso: string) {
 }
 
 const reservePct = computed(() => data.value ? Math.min(100, (data.value.reserve.saved / data.value.reserve.target) * 100) : 0)
+
+// ---- Record a transfer -------------------------------------------------
+function todayIso() { return new Date().toISOString().slice(0, 10) }
+const transferForm = ref({ date: todayIso(), amount: null as number | null, note: '', isReversal: false })
+const transferSubmitting = ref(false)
+const transferError = ref<string | null>(null)
+const showTransferHistory = ref(false)
+
+async function submitTransfer() {
+  transferError.value = null
+  const rawAmount = transferForm.value.amount
+  if (rawAmount === null || !Number.isFinite(rawAmount) || rawAmount === 0) {
+    transferError.value = 'Enter a non-zero amount'
+    return
+  }
+  const amount = transferForm.value.isReversal ? -Math.abs(rawAmount) : Math.abs(rawAmount)
+  transferSubmitting.value = true
+  try {
+    await $fetch('/api/cashflow/reserve-transfer', {
+      method: 'POST',
+      body: { date: transferForm.value.date, amount, note: transferForm.value.note || undefined }
+    })
+    transferForm.value = { date: todayIso(), amount: null, note: '', isReversal: false }
+    await load()
+  } catch (err: any) {
+    transferError.value = err?.data?.statusMessage || err?.message || 'Failed to record transfer'
+  } finally {
+    transferSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -170,7 +201,7 @@ const reservePct = computed(() => data.value ? Math.min(100, (data.value.reserve
       <section>
         <div class="section-head">
           <div class="section-label">Loan Reserve Savings Plan</div>
-          <div class="section-note">Weekly ${{ data.reserve.weeklyAmount.toLocaleString() }} transfers funding the Dec 20, 2026 catch-up</div>
+          <div class="section-note">Real transfers only — no bank feed, so this is only as current as what's recorded below</div>
         </div>
         <div class="drill-card">
           <div class="runway-head">
@@ -181,10 +212,40 @@ const reservePct = computed(() => data.value ? Math.min(100, (data.value.reserve
             <div :class="['runway-fill', reservePct >= 100 ? 'good' : 'warning']" :style="{ width: reservePct + '%' }"></div>
           </div>
           <div class="runway-foot">
-            <span>{{ data.reserve.transfersDone }} of {{ data.reserve.transfersTotal }} transfers made</span>
-            <span v-if="data.reserve.nextTransferDate">Next transfer: {{ fmtDate(data.reserve.nextTransferDate) }}</span>
-            <span v-else class="chip good">All transfers complete</span>
+            <span v-if="data.reserve.complete" class="chip good">Target reached</span>
+            <span v-else>{{ fmt(data.reserve.remaining) }} remaining</span>
+            <span v-if="data.reserve.currentWeeklyAmount">Current pace: {{ fmt(data.reserve.currentWeeklyAmount) }}/week</span>
+            <span v-if="!data.reserve.complete && data.reserve.projectedCompletionDate">Projected: {{ fmtDate(data.reserve.projectedCompletionDate) }}</span>
           </div>
+
+          <div class="transfer-history">
+            <span class="toggle-link" @click="showTransferHistory = !showTransferHistory">
+              {{ showTransferHistory ? 'Hide' : 'Show' }} {{ data.reserve.transfers.length }} recorded transfer{{ data.reserve.transfers.length === 1 ? '' : 's' }}
+            </span>
+            <table v-if="showTransferHistory" class="cf-table transfers">
+              <thead><tr><th>Date</th><th>Amount</th><th>Note</th></tr></thead>
+              <tbody>
+                <tr v-for="(t, i) in data.reserve.transfers" :key="i">
+                  <td>{{ fmtDate(t.date) }}</td>
+                  <td :class="t.amount < 0 ? 'negative' : ''">{{ fmt(t.amount) }}</td>
+                  <td class="note">{{ t.note || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <form class="transfer-form" @submit.prevent="submitTransfer">
+            <div class="transfer-form-row">
+              <label>Date<input type="date" v-model="transferForm.date" required /></label>
+              <label>Amount<input type="number" step="0.01" min="0.01" v-model.number="transferForm.amount" placeholder="2500.00" required /></label>
+              <label class="reversal"><input type="checkbox" v-model="transferForm.isReversal" /> Reversal / withdrawal</label>
+            </div>
+            <input type="text" v-model="transferForm.note" placeholder="Note (optional)" class="transfer-note" />
+            <div class="transfer-form-row">
+              <button type="submit" :disabled="transferSubmitting">{{ transferSubmitting ? 'Recording…' : 'Record transfer' }}</button>
+              <span v-if="transferError" class="chip critical">{{ transferError }}</span>
+            </div>
+          </form>
         </div>
       </section>
     </template>
@@ -258,6 +319,35 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .runway-fill.good { background: var(--good); }
 .runway-fill.warning { background: var(--warning); }
 .runway-foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); }
+
+.transfer-history { border-top: 1px dashed var(--hair); padding-top: 8px; }
+.toggle-link { font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; user-select: none; }
+.cf-table.transfers { margin-top: 8px; }
+.cf-table.transfers th, .cf-table.transfers td { padding: 6px 10px; font-size: 12px; white-space: normal; }
+.cf-table.transfers td.negative { color: var(--critical); }
+.cf-table.transfers td.note { color: var(--ink-3); }
+
+.transfer-form {
+  display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--hair); padding-top: 12px;
+}
+.transfer-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.transfer-form label {
+  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
+}
+.transfer-form label.reversal { flex-direction: row; align-items: center; gap: 6px; font-weight: 500; }
+.transfer-form input[type="date"], .transfer-form input[type="number"] {
+  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink); width: 150px;
+}
+.transfer-form input.transfer-note {
+  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink); width: 100%;
+}
+.transfer-form button {
+  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
+  background: var(--accent); color: white; cursor: pointer;
+}
+.transfer-form button:disabled { opacity: 0.6; cursor: default; }
 
 @media (max-width: 760px) {
   .cf-table th, .cf-table td { padding: 8px 10px; }
