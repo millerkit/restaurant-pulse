@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
-const { lastSync, syncFailed } = useSyncStatus()
-const { monthlyData, loadError } = useBudgetYear()
-const { monthlyActuals, loadError: actualsLoadError } = useActualsYear()
+const { monthlyData, loadError, loadYear } = useBudgetYear()
+const { monthlyActuals, loadError: actualsLoadError, loadActualsYear } = useActualsYear()
 
 // Real "as of" month/day this page paces against — see currentAsOfMonth/
 // currentAsOfDay in useBudgetData.ts for why this must be the real date,
 // not a frozen narration date.
 const asOfMonth = currentAsOfMonth()
 const asOfDay = currentAsOfDay()
+const asOfLabel = `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 
 function categoryTotalsFor(monthNumbers: number[]) {
   return categoryTotals(monthlyData.value, monthNumbers)
@@ -228,19 +228,12 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 
 <template>
   <div>
-    <header>
-      <div>
-        <h1>{{ site.restaurantName }} — Budget Pace</h1>
-        <div class="sub">Are we going to earn enough to hit budget? &middot; {{ YEAR }}</div>
-      </div>
-      <div class="as-of">
-        <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
-        <div class="sync-line">
-          <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
-          <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
-        </div>
-      </div>
-    </header>
+    <PageHeader
+      page-name="Budget Pace"
+      :description="`Are we going to earn enough to hit budget? · ${YEAR}`"
+      :as-of-label="asOfLabel"
+      @synced="loadYear(); loadActualsYear()"
+    />
 
     <div v-if="loadError || actualsLoadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>

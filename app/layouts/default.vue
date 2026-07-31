@@ -5,7 +5,7 @@
       <NuxtLink to="/pl" exact-active-class="active">P&amp;L</NuxtLink>
       <NuxtLink to="/pl/drilldowns" exact-active-class="active">Drill-Downs</NuxtLink>
       <NuxtLink to="/budget" exact-active-class="active">Budget Pace</NuxtLink>
-      <NuxtLink to="/budget/edit" exact-active-class="active">Monthly P&L Budget</NuxtLink>
+      <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
     </nav>
     <slot />

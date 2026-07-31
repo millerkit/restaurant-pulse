@@ -4,7 +4,7 @@ import { MONTH_NAMES, benchmarkStatus, type CategoryBenchmark } from '~/composab
 
 useHead({ title: `${site.restaurantName} — P&L Drill-Downs` })
 
-const { data, pending, error } = await useFetch('/api/pl')
+const { data, pending, error, refresh } = await useFetch('/api/pl')
 
 type Period = 'week' | 'month' | 'year'
 const PERIOD_LABEL: Record<Period, string> = { week: 'week', month: 'month', year: 'year' }
@@ -22,17 +22,6 @@ function formatWeekdayDate(s: string, includeYear = false) {
   const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
   return `${weekday}, ${month} ${d.getUTCDate()}${includeYear ? ` ${d.getUTCFullYear()}` : ''}`
 }
-function formatSyncTime(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  const now = new Date()
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `today, ${time}`
-  if (d.toDateString() === yesterday.toDateString()) return `yesterday, ${time}`
-  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`
-}
 function addDaysIso(dateStr: string, n: number): string {
   const d = parseIsoDate(dateStr)
   d.setUTCDate(d.getUTCDate() + n)
@@ -47,9 +36,6 @@ function weekdayUTC(dateStr: string): number {
 function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
-
-const syncFailed = computed(() => data.value?.lastSync?.status === 'error')
-const lastSyncLabel = computed(() => formatSyncTime(data.value?.lastSync?.finishedAt ?? null))
 
 const benchmarkByCategory = computed(() => {
   const map: Record<string, CategoryBenchmark> = {}
@@ -234,20 +220,12 @@ const revenueCallout = computed(() => {
     </div>
 
     <template v-else>
-      <header>
-        <div>
-          <h1>{{ site.restaurantName }} — Drill-Downs</h1>
-          <div class="sub">What's driving Labor, Operating Cost, and Revenue &middot; reporting through last night's close ({{ formatWeekdayDate(data.asOfDate) }})</div>
-        </div>
-        <div class="as-of">
-          <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
-          <div class="sync-line">
-            <template v-if="syncFailed">Sync failed — showing data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-            <template v-else-if="lastSyncLabel">Last synced from QuickBooks: <strong>{{ lastSyncLabel }}</strong></template>
-            <template v-else>Data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        page-name="Drill-Downs"
+        :description="`What's driving Labor, Operating Cost, and Revenue · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
+        :as-of-label="formatWeekdayDate(data.asOfDate)"
+        @synced="refresh()"
+      />
 
       <!-- Shared period toggle for all three drill-down sections below —
            one control, not three, so it reads as "change the period for

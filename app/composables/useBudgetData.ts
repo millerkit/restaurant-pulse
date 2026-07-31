@@ -294,11 +294,3 @@ export function benchmarkStatus(actualPct: number, benchmark: CategoryBenchmark 
 export function netIncome(actuals: Record<'revenue' | 'cogs' | 'labor' | 'opex', number> & Partial<Record<'other_income' | 'other_expense', number>>) {
   return actuals.revenue - actuals.cogs - actuals.labor - actuals.opex + (actuals.other_income ?? 0) - (actuals.other_expense ?? 0)
 }
-
-// Shaped like a sync_runs row so this collapses into a real useDb() query
-// later without changing the template logic — see schema.sql.
-export function useSyncStatus() {
-  const lastSync = { status: 'success' as 'success' | 'error', finishedAt: 'today, 3:04 AM', dataThroughDate: 'Jul 16' }
-  const syncFailed = computed(() => lastSync.status === 'error')
-  return { lastSync, syncFailed }
-}

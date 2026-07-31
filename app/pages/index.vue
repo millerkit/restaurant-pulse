@@ -4,7 +4,7 @@ import { CATEGORY_DIRECTION, MONTH_NAMES, benchmarkStatus, daysInMonth, daysInYe
 
 useHead({ title: `${site.restaurantName} — Daily Performance` })
 
-const { data, pending, error } = await useFetch('/api/dashboard')
+const { data, pending, error, refresh } = await useFetch('/api/dashboard')
 
 // ---- date/time formatting (all daily_line_items dates are UTC-anchored
 // ISO strings, e.g. '2026-07-27' — parsed/formatted in UTC throughout so a
@@ -21,21 +21,6 @@ function formatWeekdayDate(s: string, includeYear = false) {
   const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
   return `${weekday}, ${month} ${d.getUTCDate()}${includeYear ? ` ${d.getUTCFullYear()}` : ''}`
 }
-function formatSyncTime(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  const now = new Date()
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `today, ${time}`
-  if (d.toDateString() === yesterday.toDateString()) return `yesterday, ${time}`
-  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`
-}
-
-const syncFailed = computed(() => data.value?.lastSync?.status === 'error')
-const neverSynced = computed(() => !data.value?.lastSync)
-const lastSyncLabel = computed(() => formatSyncTime(data.value?.lastSync?.finishedAt ?? null))
 const asOfMonthDayLabel = computed(() => data.value ? `${MONTH_NAMES[data.value.asOfMonth - 1]} ${data.value.asOfDay}` : '')
 
 // ---- month / year net income + revenue pace -----------------------------
@@ -173,20 +158,12 @@ function meterStatusLabel(status: string | null) {
     </div>
 
     <template v-else>
-      <header>
-        <div>
-          <h1>{{ site.restaurantName }} — Daily Performance</h1>
-          <div class="sub">{{ formatLongDate(data.asOfDate) }} &middot; reporting through last night's close</div>
-        </div>
-        <div class="as-of">
-          <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : neverSynced ? 'Never synced' : 'Sync healthy' }}</span>
-          <div class="sync-line">
-            <template v-if="syncFailed">Sync failed — showing data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-            <template v-else-if="lastSyncLabel">Last synced from QuickBooks: <strong>{{ lastSyncLabel }}</strong></template>
-            <template v-else>Data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        page-name="Daily Performance"
+        :description="`${formatLongDate(data.asOfDate)} · reporting through last night's close`"
+        :as-of-label="formatWeekdayDate(data.asOfDate)"
+        @synced="refresh()"
+      />
 
       <!-- Are we in the red or black, and are we on pace? -->
       <section>

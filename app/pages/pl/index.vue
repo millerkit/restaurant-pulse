@@ -4,7 +4,7 @@ import { benchmarkStatus, netIncome, type CategoryBenchmark } from '~/composable
 
 useHead({ title: `${site.restaurantName} — P&L` })
 
-const { data, pending, error } = await useFetch('/api/pl')
+const { data, pending, error, refresh } = await useFetch('/api/pl')
 
 type Period = 'week' | 'month' | 'year'
 
@@ -24,21 +24,6 @@ function formatMonthDay(s: string) {
   const d = parseIsoDate(s)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
-function formatSyncTime(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  const now = new Date()
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `today, ${time}`
-  if (d.toDateString() === yesterday.toDateString()) return `yesterday, ${time}`
-  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`
-}
-
-const syncFailed = computed(() => data.value?.lastSync?.status === 'error')
-const lastSyncLabel = computed(() => formatSyncTime(data.value?.lastSync?.finishedAt ?? null))
-
 function rangeLabel(period: Period) {
   const p = data.value?.periods[period]
   if (!p) return ''
@@ -91,20 +76,12 @@ const yearRow = computed(() => periodRow('year'))
     </div>
 
     <template v-else>
-      <header>
-        <div>
-          <h1>{{ site.restaurantName }} — P&amp;L</h1>
-          <div class="sub">Week, month, and year to date &middot; reporting through last night's close ({{ formatWeekdayDate(data.asOfDate) }})</div>
-        </div>
-        <div class="as-of">
-          <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
-          <div class="sync-line">
-            <template v-if="syncFailed">Sync failed — showing data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-            <template v-else-if="lastSyncLabel">Last synced from QuickBooks: <strong>{{ lastSyncLabel }}</strong></template>
-            <template v-else>Data through <strong>{{ formatWeekdayDate(data.asOfDate) }}</strong></template>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        :page-name="'P&L'"
+        :description="`Week, month, and year to date · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
+        :as-of-label="formatWeekdayDate(data.asOfDate)"
+        @synced="refresh()"
+      />
 
       <!-- High-level P&L, three periods side by side -->
       <section>

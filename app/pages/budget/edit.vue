@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
-const { lastSync, syncFailed } = useSyncStatus()
 const { monthlyData, loadError, loadYear } = useBudgetYear()
-const { monthlyActuals } = useActualsYear()
+const { monthlyActuals, loadActualsYear } = useActualsYear()
 
 // Real "as of" month/day the Live Preview card paces against — see
 // currentAsOfMonth/currentAsOfDay in useBudgetData.ts for why this must be
 // the real date, not a frozen narration date.
 const asOfMonth = currentAsOfMonth()
 const asOfDay = currentAsOfDay()
+const asOfLabel = `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
@@ -965,19 +965,12 @@ function exportForQuickBooks() {
 
 <template>
   <div>
-    <header>
-      <div>
-        <h1>{{ site.restaurantName }} — Edit Budget</h1>
-        <div class="sub">Edit any month's budget, update from actuals, or export for QuickBooks &middot; {{ YEAR }}</div>
-      </div>
-      <div class="as-of">
-        <span :class="['chip', syncFailed ? 'critical' : 'good']">{{ syncFailed ? 'Sync failed' : 'Sync healthy' }}</span>
-        <div class="sync-line">
-          <template v-if="!syncFailed">Last synced from QuickBooks: <strong>{{ lastSync.finishedAt }}</strong></template>
-          <template v-else>Sync failed — showing data through <strong>{{ lastSync.dataThroughDate }}</strong></template>
-        </div>
-      </div>
-    </header>
+    <PageHeader
+      page-name="Edit Budget"
+      :description="`Edit any month's budget, update from actuals, or export for QuickBooks · ${YEAR}`"
+      :as-of-label="asOfLabel"
+      @synced="loadYear(); loadActualsYear()"
+    />
 
     <div v-if="loadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>
