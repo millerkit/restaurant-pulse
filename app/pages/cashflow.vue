@@ -282,7 +282,7 @@ async function submitPlan() {
           <form class="transfer-form" @submit.prevent="submitTransfer">
             <div class="transfer-form-row">
               <label>Date<input type="date" v-model="transferForm.date" required /></label>
-              <label>Amount<input type="number" step="0.01" min="0.01" v-model.number="transferForm.amount" placeholder="2500.00" required /></label>
+              <label>Amount<input type="number" step="0.01" min="0.01" v-model.number="transferForm.amount" placeholder="4000.00" required /></label>
               <label class="reversal"><input type="checkbox" v-model="transferForm.isReversal" /> Reversal / withdrawal</label>
             </div>
             <input type="text" v-model="transferForm.note" placeholder="Note (optional)" class="transfer-note" />

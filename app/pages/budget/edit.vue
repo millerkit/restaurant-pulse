@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, currentYearDayFraction, daysInMonth, isMonthClosed, isMonthCurrent, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -598,24 +598,17 @@ function realYearCategoryTotal(cat: Category): number {
   return total
 }
 
-function yearCategoryTotal(cat: Category): number {
-  let total = 0
-  for (let m = 1; m <= 12; m++) {
-    // While viewing the Annual Total tab, editMonthData/categoryComputedTotal
-    // already point at the annual aggregate, not a single month's draft —
-    // substituting it into one month's slot here would double-count that
-    // month's total into the whole year. There's also no "unsaved draft" to
-    // fold in during annual view (nothing renders an input), so every month
-    // just reads its own stored value like the non-substituted branch below.
-    if (!viewingAnnualTotal.value && m === editMonth.value) {
-      total += categoryComputedTotal(cat)
-      continue
-    }
-    const data = monthlyData.value[m - 1]
-    if (!data) continue
-    total += data.accounts.filter(a => a.category === cat && a.amount !== null).reduce((sum, a) => sum + (a.amount || 0), 0)
-  }
-  return total
+// Budgeted total for one month/category, substituting this tab's
+// in-progress (unsaved) draft for whichever month is currently open — while
+// viewing the Annual Total tab, editMonthData/categoryComputedTotal already
+// point at the annual aggregate, not a single month's draft, so
+// substituting it into one month's slot here would double-count that
+// month's total into the whole year; there's also no "unsaved draft" to
+// fold in during annual view (nothing renders an input), so every month
+// just reads its own stored value via monthCategoryBudget in that case.
+function getMonthCategoryBudgetLive(month: number, cat: Category): number | null {
+  if (!viewingAnnualTotal.value && month === editMonth.value) return categoryComputedTotal(cat)
+  return monthCategoryBudget(monthlyData.value[month - 1], cat)
 }
 
 function yearMonthsBudgeted(cat: Category): number {
@@ -631,26 +624,35 @@ function yearMonthsBudgeted(cat: Category): number {
   return count
 }
 
+// Year total is the hybrid target (budget where set, actual fallback for a
+// fully-elapsed unbudgeted month) rather than a plain sum of whatever
+// budget_targets rows exist — same fix, and same reasoning, as the Budget
+// Pace page's yearBudget (app/pages/budget/index.vue) and the Dashboard's
+// year revenue pace. Without it, this card compared a full-year actual
+// (realYearCategoryTotal, all elapsed months) against a partial-year
+// budget (whatever months happened to have budget_targets rows), producing
+// a wildly inflated or deflated pace percentage.
+const yearHybridTotals = computed(() => hybridYearTotals(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+// Cumulative target-through-today, seasonality-aware (see
+// hybridYearExpectedToDate) — replaces the flat currentYearDayFraction()
+// this card used previously, bringing it in line with the Budget Pace
+// page's own year view and the Dashboard.
+const yearHybridExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth, asOfDay))
+
 const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = realYearCategoryTotal(cat)
-  const budget = yearCategoryTotal(cat)
+  const budget = yearHybridTotals.value[cat]
   const monthsBudgeted = yearMonthsBudgeted(cat)
   if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const, noActuals: false as const, actual, budget, monthsBudgeted }
   if (yearActualsMonthsWithData.value === 0) {
     return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: true as const, actual, budget, monthsBudgeted }
   }
   const actualPct = (actual / budget) * 100
-  const status = paceStatus(actualPct, currentYearDayFraction() * 100, CATEGORY_DIRECTION[cat])
+  const expectedPct = (yearHybridExpectedToDate.value[cat] / budget) * 100
+  const status = paceStatus(actualPct, expectedPct, CATEGORY_DIRECTION[cat])
   return { category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const, noActuals: false as const, actual, budget, monthsBudgeted, actualPct, status }
 }))
-const yearLiveNetIncome = computed(() => netIncome({
-  revenue: yearCategoryTotal('revenue'),
-  cogs: yearCategoryTotal('cogs'),
-  labor: yearCategoryTotal('labor'),
-  opex: yearCategoryTotal('opex'),
-  other_income: yearCategoryTotal('other_income'),
-  other_expense: yearCategoryTotal('other_expense')
-}))
+const yearLiveNetIncome = computed(() => netIncome(yearHybridTotals.value))
 
 // ---- COGS % of revenue (Food/Beverage trailing average) ----------------
 // COGS is fundamentally a variable cost — it scales with revenue, the

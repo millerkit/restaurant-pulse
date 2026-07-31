@@ -12,7 +12,7 @@
 // "As of" is the latest date actually present in daily_line_items, not
 // "yesterday" — keeps this correct if a nightly sync is ever missed, rather
 // than pointing at a day with no data.
-const EMPTY_TOTALS = { revenue: 0, cogs: 0, labor: 0, opex: 0, other: 0 }
+const EMPTY_TOTALS = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
 
 function isoDaysBefore(dateStr: string, n: number): string {
   const d = new Date(`${dateStr}T00:00:00Z`)
@@ -67,24 +67,81 @@ export default defineEventHandler((event) => {
     return totals
   }
 
-  // Revenue budget by month, for the year view's "expected pace" line.
-  // The flat calendar-day fraction used elsewhere (dayOfYear/daysInYear)
-  // assumes revenue accrues evenly across all 12 months, which understates
-  // or overstates pace whenever a month's budgeted revenue is seasonally
-  // uneven (e.g. a much higher October target) — the client combines this
-  // with the elapsed-days fraction of the current month to build a true
-  // cumulative-budget-through-today figure instead. null for an unbudgeted
-  // month (treated as 0 by the client, same as budgetTotalsForMonths).
-  function monthlyRevenueBudgets(year: number): (number | null)[] {
-    const rows = db.prepare(`
-      SELECT bt.month AS month, SUM(bt.amount) AS total
-      FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
-      WHERE bt.year = ? AND a.category = 'revenue'
-      GROUP BY bt.month
-    `).all(year) as { month: number, total: number }[]
-    const byMonth = new Map(rows.map(r => [r.month, r.total]))
-    return Array.from({ length: 12 }, (_, i) => byMonth.get(i + 1) ?? null)
+  // Per-category, per-month budget and actual figures for the year, used to
+  // build a hybrid annual target: budgeted months use their budget, but a
+  // month with no budget row at all (e.g. this restaurant's Jan-Jun 2026,
+  // never budgeted in this app — the old, smaller location) falls back to
+  // that month's own real actual once the month is fully elapsed, rather
+  // than fabricating a number that was never actually planned. A future or
+  // in-progress unbudgeted month still contributes nothing — there's no
+  // actual yet to fall back to, same as before this fix.
+  function monthlyCategoryFigures(year: number, source: 'budget_targets' | 'daily_line_items') {
+    const rows = source === 'budget_targets'
+      ? db.prepare(`
+          SELECT a.category AS category, bt.month AS month, SUM(bt.amount) AS total
+          FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+          WHERE bt.year = ?
+          GROUP BY a.category, bt.month
+        `).all(year) as { category: string, month: number, total: number }[]
+      : db.prepare(`
+          SELECT a.category AS category, CAST(strftime('%m', dli.date) AS INTEGER) AS month, SUM(dli.amount) AS total
+          FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+          WHERE strftime('%Y', dli.date) = ?
+          GROUP BY a.category, month
+        `).all(String(year)) as { category: string, month: number, total: number }[]
+    const result = {} as Record<keyof typeof EMPTY_TOTALS, (number | null)[]>
+    for (const cat of Object.keys(EMPTY_TOTALS) as (keyof typeof EMPTY_TOTALS)[]) {
+      result[cat] = Array.from({ length: 12 }, () => null)
+    }
+    for (const r of rows) {
+      const cat = r.category as keyof typeof EMPTY_TOTALS
+      if (result[cat]) result[cat][r.month - 1] = r.total
+    }
+    return result
   }
+
+  function hybridAnnualTarget(
+    budgets: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    actuals: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    asOfMonth: number
+  ) {
+    const totals = { ...EMPTY_TOTALS }
+    for (const cat of Object.keys(EMPTY_TOTALS) as (keyof typeof EMPTY_TOTALS)[]) {
+      let sum = 0
+      for (let m = 1; m <= 12; m++) {
+        const budget = budgets[cat][m - 1]
+        if (budget != null) { sum += budget; continue }
+        if (m < asOfMonth) sum += actuals[cat][m - 1] ?? 0
+      }
+      totals[cat] = sum
+    }
+    return totals
+  }
+
+  // Revenue target by month, for the year view's "expected pace" line —
+  // same hybrid logic as hybridAnnualTarget (budget where set, actual
+  // fallback for a fully-elapsed unbudgeted month, null/0 otherwise). The
+  // flat calendar-day fraction used elsewhere (dayOfYear/daysInYear) is
+  // still wrong for the reason documented previously: it assumes revenue
+  // accrues evenly across all 12 months, which misjudges pace whenever a
+  // month's budgeted revenue is seasonally uneven — the client combines
+  // this with the elapsed-days fraction of the current month to build a
+  // true cumulative-target-through-today figure instead.
+  function monthlyRevenueTarget(
+    budgets: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    actuals: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    asOfMonth: number
+  ): (number | null)[] {
+    return Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1
+      if (budgets.revenue[i] != null) return budgets.revenue[i]
+      if (m < asOfMonth) return actuals.revenue[i] ?? 0
+      return null
+    })
+  }
+
+  const monthlyBudgetsByCategory = monthlyCategoryFigures(asOfYear, 'budget_targets')
+  const monthlyActualsByCategory = monthlyCategoryFigures(asOfYear, 'daily_line_items')
 
   const monthStart = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}-01`
   const yearStart = `${asOfYear}-01-01`
@@ -123,8 +180,10 @@ export default defineEventHandler((event) => {
     },
     yearToDate: {
       actuals: categoryTotalsForRange(yearStart, asOfDate),
-      budget: budgetTotalsForMonths(asOfYear, Array.from({ length: 12 }, (_, i) => i + 1)),
-      monthlyRevenueBudget: monthlyRevenueBudgets(asOfYear)
+      budget: hybridAnnualTarget(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
+      monthlyRevenueBudget: monthlyRevenueTarget(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
+      unbudgetedPastMonthCount: Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
+        .filter(m => monthlyBudgetsByCategory.revenue[m - 1] == null).length
     },
     benchmarks,
     toast: toastRow ?? null

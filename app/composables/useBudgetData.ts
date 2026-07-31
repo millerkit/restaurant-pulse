@@ -53,6 +53,94 @@ export function categoryTotals(monthlyData: MonthData[], monthNumbers: number[])
   return { totals, monthsBudgeted }
 }
 
+// A single month's budgeted total for one category, or null if that
+// category has no budget_targets rows at all that month (as opposed to a
+// real $0) — the null/0 distinction is what the hybrid helpers below use to
+// decide whether to fall back to actuals.
+export function monthCategoryBudget(monthData: MonthData | undefined, cat: Category): number | null {
+  if (!monthData) return null
+  let sum = 0
+  let any = false
+  for (const acc of monthData.accounts) {
+    if (acc.category !== cat || acc.amount === null) continue
+    sum += acc.amount
+    any = true
+  }
+  return any ? sum : null
+}
+
+// Per-category, per-month hybrid target: a month's own budget where one was
+// entered (via getMonthCategoryBudget — a callback rather than a plain
+// MonthData[] read so the Edit Budget page can substitute its own
+// in-progress unsaved draft for whichever month it's currently editing),
+// falling back to that month's real actual once the month is fully elapsed
+// and was never budgeted at all (e.g. this restaurant's Jan-Jun 2026,
+// budgeted only from Jul onward after the move) — never fabricates a
+// number for an in-progress or future unbudgeted month. Same reasoning as
+// the Dashboard's year revenue pace fix (see CLAUDE.md), generalized to
+// all four P&L categories and shared by both budget pages instead of each
+// reimplementing it.
+export function hybridMonthlyCategoryTargets(
+  getMonthCategoryBudget: (month: number, cat: Category) => number | null,
+  monthlyActuals: MonthActuals[],
+  asOfMonth: number
+): Record<Category, (number | null)[]> {
+  const result = {} as Record<Category, (number | null)[]>
+  for (const cat of CATEGORIES) result[cat] = Array.from({ length: 12 }, () => null)
+  for (let m = 1; m <= 12; m++) {
+    const actualsData = monthlyActuals[m - 1]
+    for (const cat of CATEGORIES) {
+      const budgeted = getMonthCategoryBudget(m, cat)
+      if (budgeted != null) {
+        result[cat][m - 1] = budgeted
+      } else if (m < asOfMonth) {
+        result[cat][m - 1] = actualsData?.totals[cat] ?? 0
+      }
+    }
+  }
+  return result
+}
+
+// Hybrid annual total per category — sum of hybridMonthlyCategoryTargets.
+// The current month's full budgeted amount counts in full here (not
+// prorated) since this represents the whole year's target, same as the
+// per-month figures for future budgeted months; proration only applies to
+// hybridYearExpectedToDate below.
+export function hybridYearTotals(
+  getMonthCategoryBudget: (month: number, cat: Category) => number | null,
+  monthlyActuals: MonthActuals[],
+  asOfMonth: number
+): Record<Category, number> {
+  const targets = hybridMonthlyCategoryTargets(getMonthCategoryBudget, monthlyActuals, asOfMonth)
+  const totals = {} as Record<Category, number>
+  for (const cat of CATEGORIES) totals[cat] = targets[cat].reduce((sum, v) => sum + (v ?? 0), 0)
+  return totals
+}
+
+// Cumulative hybrid target through today — seasonality-aware (built from
+// each month's own target rather than a flat day-of-year share of the
+// annual total, same reasoning as the Dashboard's year revenue pace fix),
+// and using the hybrid (budget-or-actual-fallback) figure for each fully
+// elapsed month so an unbudgeted past month doesn't understate "expected"
+// the same way it doesn't understate the annual total above.
+export function hybridYearExpectedToDate(
+  getMonthCategoryBudget: (month: number, cat: Category) => number | null,
+  monthlyActuals: MonthActuals[],
+  asOfMonth: number,
+  asOfDay: number
+): Record<Category, number> {
+  const targets = hybridMonthlyCategoryTargets(getMonthCategoryBudget, monthlyActuals, asOfMonth)
+  const frac = asOfDay / daysInMonth(YEAR, asOfMonth)
+  const result = {} as Record<Category, number>
+  for (const cat of CATEGORIES) {
+    let sum = 0
+    for (let m = 1; m < asOfMonth; m++) sum += targets[cat][m - 1] ?? 0
+    sum += (targets[cat][asOfMonth - 1] ?? 0) * frac
+    result[cat] = sum
+  }
+  return result
+}
+
 export function useBudgetYear() {
   const monthlyData = ref<MonthData[]>([])
   const loadError = ref<string | null>(null)

@@ -46,13 +46,17 @@ const asOfMonthDayLabel = computed(() => data.value ? `${MONTH_NAMES[data.value.
 const monthDayFraction = computed(() => data.value ? data.value.asOfDay / daysInMonth(data.value.asOfYear, data.value.asOfMonth) : 0)
 const yearDayFraction = computed(() => data.value ? dayOfYear(data.value.asOfYear, data.value.asOfMonth, data.value.asOfDay) / daysInYear(data.value.asOfYear) : 0)
 
-// Cumulative budgeted revenue through today, built from each month's own
-// budget (server/api/dashboard.get.ts's monthlyRevenueBudget) rather than
+// Cumulative revenue target through today, built from each month's own
+// figure (server/api/dashboard.get.ts's monthlyRevenueBudget) rather than
 // a flat dayOfYear/daysInYear share of the annual total — a flat line
 // assumes revenue accrues evenly across all 12 months, which misjudges
 // pace whenever a month (e.g. a much higher October) is budgeted
-// seasonally. Unbudgeted months contribute 0, same as budgetTotalsForMonths
-// treats a month with no budget_targets rows.
+// seasonally. Each month's figure is its budget where one was set, or its
+// own actual revenue for a fully-elapsed month that was never budgeted
+// (e.g. Jan-Jun 2026, the old location, budgeted only from Jul onward) —
+// using real actuals there instead of fabricating a target for months
+// nobody ever planned. A still-in-progress or future unbudgeted month
+// contributes 0, same as before.
 const yearExpectedRevenueToDate = computed(() => {
   if (!data.value) return 0
   const budgets = data.value.yearToDate.monthlyRevenueBudget ?? []
@@ -329,6 +333,9 @@ function meterStatusLabel(status: string | null) {
             <span>$0</span>
             <span :class="['chip', yearView.revenue!.status]">{{ yearView.revenue!.paceOfExpectedPct !== null ? `${yearView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
             <span>${{ Math.round(yearView.revenue!.target).toLocaleString() }}</span>
+          </div>
+          <div class="quiet-note" v-if="data.yearToDate.unbudgetedPastMonthCount > 0">
+            {{ data.yearToDate.unbudgetedPastMonthCount }} month{{ data.yearToDate.unbudgetedPastMonthCount === 1 ? '' : 's' }} this year {{ data.yearToDate.unbudgetedPastMonthCount === 1 ? 'has' : 'have' }} no revenue budget set — the annual target above uses actual revenue for those months instead.
           </div>
         </div>
         <div v-else class="drill-card quiet">

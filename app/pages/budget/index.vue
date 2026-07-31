@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, categoryTotals, currentAsOfDay, currentAsOfMonth, currentYearDayFraction, daysInMonth, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
+import { CATEGORY_DIRECTION, CATEGORY_LABEL, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, netIncome, paceStatus, useActualsYear, useBudgetYear, useSyncStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
@@ -19,7 +19,22 @@ function categoryTotalsFor(monthNumbers: number[]) {
 }
 
 const monthBudget = computed(() => categoryTotalsFor([asOfMonth]))
-const yearBudget = computed(() => categoryTotalsFor(Array.from({ length: 12 }, (_, i) => i + 1)))
+// Year total is the hybrid target (budget where set, actual fallback for a
+// fully-elapsed unbudgeted month — see hybridYearTotals) rather than a
+// plain sum of whatever budget_targets rows exist. Without this, a year
+// with only some months budgeted (e.g. this restaurant's Jan-Jun 2026,
+// budgeted only from Jul onward after the move) compares a full-year
+// actual against a partial-year target, producing a wildly inflated pace
+// percentage even though each underlying number is individually correct —
+// same bug as the Dashboard's year revenue pace, fixed the same way here
+// for all four categories. monthsBudgeted (the literal, non-fallback count
+// used by the "X of 12 months budgeted" note below) still comes from the
+// plain categoryTotals — that note should only ever point at genuinely
+// unbudgeted months, not ones a fallback happens to be covering for.
+const yearBudget = computed(() => ({
+  totals: hybridYearTotals(getMonthCategoryBudget, monthlyActuals.value, asOfMonth),
+  monthsBudgeted: categoryTotalsFor(Array.from({ length: 12 }, (_, i) => i + 1)).monthsBudgeted
+}))
 
 // Owner-operator compensation (Executive Chef, Business Manager — see
 // schema.sql) carve-out: real cash cost, so it stays in total labor $ and
@@ -58,28 +73,25 @@ const laborExOwnerComp = computed(() => {
 })
 
 const selectedPeriod = ref<'month' | 'year'>('month')
-const periodDayFraction = computed(() => selectedPeriod.value === 'month'
-  ? asOfDay / daysInMonth(YEAR, asOfMonth)
-  : currentYearDayFraction())
+const periodDayFraction = computed(() => asOfDay / daysInMonth(YEAR, asOfMonth))
 
-// Cumulative budget-through-today per category, built from each fully-
-// elapsed month's own budget plus a pro-rated slice of the current month
-// — not a flat calendar-day share of the annual total (currentYearDayFraction
-// above), which assumes each category's budget accrues evenly across all
-// 12 months. Same fix as the Dashboard's year revenue pace (see CLAUDE.md's
-// "Year revenue pace now seasonality-aware" section), applied here to all
-// four pace-card categories rather than just revenue.
-const yearExpectedToDate = computed(() => {
-  const priorMonths = Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
-  const priorTotals = categoryTotalsFor(priorMonths).totals
-  const currentMonthTotals = categoryTotalsFor([asOfMonth]).totals
-  const frac = asOfDay / daysInMonth(YEAR, asOfMonth)
-  const result = {} as Record<'revenue' | 'cogs' | 'labor' | 'opex', number>
-  for (const cat of ['revenue', 'cogs', 'labor', 'opex'] as const) {
-    result[cat] = priorTotals[cat] + currentMonthTotals[cat] * frac
-  }
-  return result
-})
+// Looks up a single month's budgeted total for one category directly from
+// the loaded budget_targets data — no draft/unsaved-edit substitution here
+// (that's only a concern on the Edit Budget page), so this is just a thin
+// wrapper around monthCategoryBudget.
+function getMonthCategoryBudget(month: number, cat: Category) {
+  return monthCategoryBudget(monthlyData.value[month - 1], cat)
+}
+
+// Cumulative target-through-today per category, built from each fully-
+// elapsed month's own budget (or, if that month was never budgeted, its own
+// real actual — see hybridMonthlyCategoryTargets in useBudgetData.ts) plus
+// a pro-rated slice of the current month's budget — not a flat calendar-day
+// share of the annual total, which assumes each category's budget accrues
+// evenly across all 12 months. Same fix as the Dashboard's year revenue
+// pace (see CLAUDE.md's "Year revenue pace now seasonality-aware" section),
+// applied here to all four pace-card categories rather than just revenue.
+const yearExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudget, monthlyActuals.value, asOfMonth, asOfDay))
 
 // Dollar amount that should have accrued by today for a category's budget
 // — seasonality-aware for the year view, the existing flat within-month
@@ -139,12 +151,26 @@ const monthProjected = computed(() => {
 })
 const projectedNetIncome = computed(() => netIncome(monthProjected.value))
 
+// How many of this year's already-elapsed months have no budget row for
+// this category — distinct from monthsBudgeted's complement, since a
+// *future* unbudgeted month doesn't get an actual-fallback (there's no
+// actual yet) and shouldn't be described as "using actuals" in the note
+// below.
+function unbudgetedPastMonths(cat: Category): number {
+  let count = 0
+  for (let m = 1; m < asOfMonth; m++) {
+    if (getMonthCategoryBudget(m, cat) == null) count++
+  }
+  return count
+}
+
 const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = periodActuals.value[cat]
   const budget = periodBudget.value.totals[cat]
   const monthsBudgeted = periodBudget.value.monthsBudgeted[cat]
+  const unbudgetedPast = selectedPeriod.value === 'year' ? unbudgetedPastMonths(cat) : 0
   if (!budget) {
-    return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true, actual, budget, monthsBudgeted, projection: null }
+    return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true, actual, budget, monthsBudgeted, unbudgetedPast, projection: null }
   }
   const expectedPct = (expectedAmountFor(cat, budget) / budget) * 100
   const actualPct = (actual / budget) * 100
@@ -162,7 +188,7 @@ const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const)
       })()
     : null
   return {
-    category: cat, label: CATEGORY_LABEL[cat], noBudget: false, actual, budget, monthsBudgeted,
+    category: cat, label: CATEGORY_LABEL[cat], noBudget: false, actual, budget, monthsBudgeted, unbudgetedPast,
     fillPct: Math.min(100, actualPct), expectedPct, status,
     paceLabel: `${actualPct.toFixed(1)}% of ${selectedPeriod.value === 'month' ? 'month' : 'year'} budget`,
     projection
@@ -276,7 +302,11 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
                 Projected month-end: <strong>${{ Math.round(card.projection.projected).toLocaleString() }}</strong>
                 <span :class="['chip', card.projection.projectedStatus]">{{ card.projection.projectedStatus === 'good' ? '✓' : (card.projection.delta >= 0 ? '▲' : '▼') }} {{ card.projection.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.projection.delta)).toLocaleString() }} vs budget</span>
               </div>
-              <div v-if="selectedPeriod === 'year' && card.monthsBudgeted < 12" class="section-note">Only {{ card.monthsBudgeted }} of 12 months budgeted so far — edit them on the Edit Budget tab</div>
+              <div v-if="selectedPeriod === 'year' && card.monthsBudgeted < 12" class="section-note">
+                Only {{ card.monthsBudgeted }} of 12 months budgeted so far
+                <template v-if="card.unbudgetedPast > 0">— {{ card.unbudgetedPast }} already-elapsed month{{ card.unbudgetedPast === 1 ? '' : 's' }} above use{{ card.unbudgetedPast === 1 ? 's' : '' }} actual revenue/spend instead of a budget</template>
+                — edit remaining months on the Edit Budget tab
+              </div>
               <div v-if="card.category === 'labor' && laborExOwnerComp" class="section-note">
                 Includes ${{ Math.round(laborExOwnerComp.ownerComp).toLocaleString() }} owner compensation ({{ ownerCompAccountNames.join(', ') }}).
                 Excluding it: ${{ Math.round(laborExOwnerComp.budgetExOwnerComp).toLocaleString() }} budget<template v-if="laborExOwnerComp.actualPctExOwnerComp !== null">, {{ laborExOwnerComp.actualPctExOwnerComp.toFixed(1) }}% of that pace</template>.
