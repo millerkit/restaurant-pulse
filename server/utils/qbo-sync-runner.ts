@@ -3,10 +3,27 @@
 // trigger route (server/api/qbo/sync.post.ts), so there's exactly one
 // place that decides what a sync run does and how sync_runs bookkeeping
 // works.
-function isoDateNDaysAgo(n: number): string {
-  const d = new Date()
-  d.setUTCDate(d.getUTCDate() - n)
-  return d.toISOString().slice(0, 10)
+
+// "Yesterday" needs to be a real IANA-zone-aware local calendar date, not
+// a raw UTC one — the container's clock is UTC, and computing "yesterday"
+// via plain UTC arithmetic can land on the wrong local day depending on
+// what time it is. Mirrors server/plugins/qbo-nightly-sync.ts's own
+// toLocalDateParts logic (kept separate rather than shared/imported —
+// small enough, and this file has no existing dependency on that plugin).
+function localToday(timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date())
+  const get = (type: string) => parts.find(p => p.type === type)!.value
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function addDaysToIsoDate(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
 }
 
 // Cheap overlap guard — sufficient for this single-process Fly app
@@ -16,6 +33,29 @@ function isoDateNDaysAgo(n: number): string {
 let syncInProgress = false
 
 export async function runNightlySync(dateOverride?: string) {
+  const { qbo, toast } = useRuntimeConfig()
+  // QBO_ENVIRONMENT defaults to 'sandbox' (nuxt.config.ts) and every
+  // non-production deploy — including local dev, which can never hold a
+  // real production OAuth connection at all (Intuit's production keys only
+  // accept a public HTTPS redirect URI) — is left on that default. A
+  // sandbox connection is a *different* real QBO company, not "no
+  // connection," and it's genuinely harmful to run this against: QBO
+  // account IDs are small per-company sequential integers, so a sandbox
+  // sync can coincidentally collide with real production qbo_account_id
+  // values already in the local accounts table and silently overwrite
+  // real account names/numbers with unrelated sandbox data (see CLAUDE.md's
+  // "Local dev's QBO connection" section — this refusal is the fix for a
+  // real incident, not a hypothetical). Simulating Urban Hearth's data in
+  // the sandbox isn't worth the effort, so this is a hard block, not an
+  // opt-in toggle — bypass it by changing QBO_ENVIRONMENT locally if you
+  // genuinely mean to.
+  if (qbo.environment !== 'production') {
+    throw createError({
+      statusCode: 412,
+      statusMessage: `QBO sync refused: this environment's QBO_ENVIRONMENT is "${qbo.environment}", not "production". Syncing against the sandbox can corrupt real account data via ID collisions — see CLAUDE.md.`
+    })
+  }
+
   if (syncInProgress) {
     throw createError({ statusCode: 409, statusMessage: 'A sync is already running' })
   }
@@ -32,22 +72,59 @@ export async function runNightlySync(dateOverride?: string) {
     // local accounts row (and thus a valid qbo_account_id match target)
     // before its own P&L data is processed.
     const accountResult = await syncQboAccounts()
-    const targetDate = dateOverride ?? isoDateNDaysAgo(1)
-    const plResult = await syncPlForDateRange(targetDate, targetDate)
+
+    // Never syncs "today" itself — the day isn't over yet, same as before
+    // this change. Local-timezone-aware (see localToday) rather than raw
+    // UTC arithmetic, so this can't land on the wrong calendar day
+    // depending on what time it is in UTC.
+    const endDate = dateOverride ?? addDaysToIsoDate(localToday(qbo.syncTimeZone), -1)
+
+    // Catch up from the day after whatever's already in daily_line_items,
+    // not just "yesterday" — a fixed single-day target meant a missed
+    // night (an error, a restart, a gap before the app was even running)
+    // silently dropped that day forever, since nothing ever looked
+    // further back than exactly one day. dateOverride (an explicit
+    // single-date re-sync, e.g. for troubleshooting one day) bypasses this
+    // entirely and stays single-day, as before.
+    let startDate = endDate
+    if (!dateOverride) {
+      const row = db.prepare(`SELECT MAX(date) as maxDate FROM daily_line_items`).get() as { maxDate: string | null }
+      if (row.maxDate) {
+        const dayAfter = addDaysToIsoDate(row.maxDate, 1)
+        // Never later than endDate: if daily_line_items is already caught
+        // up (or somehow ahead), fall back to re-syncing just yesterday
+        // rather than passing an inverted range to QBO.
+        startDate = dayAfter <= endDate ? dayAfter : endDate
+      }
+    }
+    // One Reports API call for the whole range — fine for the realistic
+    // catch-up window this is meant to cover (a missed night or two); a
+    // gap of months would want scripts/backfill-qbo-pl.mjs's month-chunked
+    // approach instead (see its own comment on why one giant range isn't
+    // reliable at that size).
+    const plResult = await syncPlForDateRange(startDate, endDate)
 
     // Toast is a separate POS system, not a QBO endpoint, but folded into
     // the same nightly run/sync_runs row rather than a second scheduler —
     // one "as of" freshness signal for the whole dashboard, not two. Only
     // runs if Toast credentials are configured, so an environment without
     // them (e.g. local dev before .env.local is filled in) doesn't fail
-    // the whole sync.
-    const { toast } = useRuntimeConfig()
-    let toastResult: { covers: number; laborHours: number } | null = null
+    // the whole sync. Toast's own APIs only take a single businessDate
+    // (see scripts/backfill-toast-metrics.mjs), so a multi-day catch-up
+    // range means one call per day here, same chunking the backfill script
+    // already does.
+    let toastResult: { covers: number; laborHours: number; daysSynced: number } | null = null
     if (toast.clientId && toast.clientSecret && toast.apiHostname && toast.restaurantGuid) {
-      toastResult = await syncToastMetricsForDate(toast, targetDate)
+      toastResult = { covers: 0, laborHours: 0, daysSynced: 0 }
+      for (let date = startDate; date <= endDate; date = addDaysToIsoDate(date, 1)) {
+        const dayResult = await syncToastMetricsForDate(toast, date)
+        toastResult.covers += dayResult.covers
+        toastResult.laborHours += dayResult.laborHours
+        toastResult.daysSynced++
+      }
     }
 
-    const rowsSynced = accountResult.inserted + accountResult.updated + accountResult.deactivated + accountResult.reactivated + plResult.rowsSynced + (toastResult ? 1 : 0)
+    const rowsSynced = accountResult.inserted + accountResult.updated + accountResult.deactivated + accountResult.reactivated + plResult.rowsSynced + (toastResult?.daysSynced ?? 0)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'success', rows_synced = ? WHERE id = ?`)
       .run(new Date().toISOString(), rowsSynced, runId)
 

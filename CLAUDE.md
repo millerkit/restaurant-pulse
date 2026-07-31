@@ -724,10 +724,17 @@ budget numbers to local dev and production and comparing results:
   having the boot check also consult `sync_runs` (which survives
   restarts) before firing — `alreadySucceededToday()` in that file.
 
-Local dev still can't hold its own QBO connection — Intuit's production
-OAuth keys only accept a public HTTPS redirect URI, so `localhost` was
-never going to be a viable OAuth target, independent of any of the above.
-Instead, **`npm run db:pull-accounts`** (`scripts/pull-accounts-from-prod.mjs`)
+Local dev still can't hold its own connection to Urban Hearth's *production*
+QBO company — Intuit's production OAuth keys only accept a public HTTPS
+redirect URI, so `localhost` was never going to be a viable target for
+those, independent of any of the above. **It can and does hold a working
+connection to Intuit's sandbox company, though** — a real login, just to a
+different, unrelated business (Intuit's own demo data, historically a
+landscaping company), not "no connection at all." See "Local dev QBO sync
+guard" below for why that distinction matters and what it broke.
+
+Instead, for a real chart of accounts locally, **`npm run db:pull-accounts`**
+(`scripts/pull-accounts-from-prod.mjs`)
 does a one-way, on-demand pull of just the `accounts` table from the
 production Fly volume into local dev over `fly ssh console` (the container
 image has no `sqlite3` CLI, so it shells out to a small script using the
@@ -1254,6 +1261,89 @@ $53,014.60 would actually be available by Dec 15).
   models the window between today and `catchUpDate`. It doesn't project
   what happens to the account after Dec 20, when Jones & Miller's monthly
   payments keep coming out indefinitely — see "Not yet done" below.
+
+## QBO sync catch-up range + local dev sandbox guard — 2026-07-31
+
+Prompted by a user report that a QBO sync run in production was missing
+labor costs from that same day's payroll. Two separate real bugs, found in
+sequence:
+
+- **`runNightlySync()` only ever synced a single fixed date: "yesterday."**
+  (`server/utils/qbo-sync-runner.ts`) `targetDate = dateOverride ??
+  isoDateNDaysAgo(1)`, then `syncPlForDateRange(targetDate, targetDate)` —
+  called identically by the nightly scheduler and the manual "Sync now"
+  button, every single time, regardless of how long it had actually been
+  since the last successful sync. A missed night (an error, a restart, any
+  gap) meant that day's data was gone for good — nothing ever looked back
+  further than exactly one day to catch up. **Fixed**: `runNightlySync` now
+  computes `startDate` as the day after `MAX(date)` in `daily_line_items`
+  (falling back to the old single-day behavior if the table is empty) and
+  `endDate` as yesterday, then syncs that whole range in one
+  `syncPlForDateRange` call — Toast's own metrics sync is looped one day at
+  a time across the same range, since Toast's APIs only take a single
+  `businessDate`. `isoDateNDaysAgo`'s raw-UTC date math was also replaced
+  with an IANA-zone-aware `localToday()` (mirroring
+  `qbo-nightly-sync.ts`'s own `toLocalDateParts`), so "yesterday" can't land
+  on the wrong calendar day depending on what time it is in UTC.
+  `dateOverride` (an explicit single-date re-sync) still bypasses the range
+  logic entirely and stays single-day, as before. One Reports API call per
+  range is fine for the realistic catch-up window this covers (a missed
+  night or two) — a gap of months would want
+  `scripts/backfill-qbo-pl.mjs`'s month-chunked approach instead.
+
+- **Verifying that fix against local dev corrupted the local `accounts`
+  table** — the more serious finding. Local dev's QBO OAuth connection has
+  always been able to reach *Intuit's sandbox company* (a real login, just
+  to unrelated demo data) even though it can never reach Urban Hearth's
+  real production company — a distinction the "Local dev still can't hold
+  its own QBO connection" line above didn't make clear enough, and which
+  led directly to this incident. Manually triggering a sync locally to test
+  the range-catch-up fix ran `syncQboAccounts()` against the sandbox. QBO
+  account IDs are small per-company sequential integers, so real Urban
+  Hearth `qbo_account_id` values already in the local `accounts` table
+  (pulled down earlier via `db:pull-accounts`) coincidentally collided with
+  unrelated sandbox account IDs. The account sync's matching logic
+  (`server/utils/qbo-account-sync.ts`) then overwrote real accounts'
+  `name`/`account_number` with whatever sandbox account happened to share
+  that numeric ID, deactivated ~197 real accounts the sandbox didn't
+  recognize, and inserted sandbox-only accounts (landscaping-company line
+  items — Intuit's stock sandbox demo) as brand-new local rows. This had
+  already been happening across earlier local syncs that same day, before
+  it was caught — not just the one test run.
+- **Recovery**: `npm run db:pull-accounts` (re-matches everything against
+  real production truth over `fly ssh console`), followed by hand-resolving
+  22 leftover duplicate-`account_number` pairs and 6 duplicate QBO system
+  accounts (Uncategorized Expense, Purchases, Reconciliation Discrepancies,
+  Unapplied Cash Bill Payment Expense, Uncategorized Income, Billable
+  Expense Income — these have no `account_number` at all, so
+  `pull-accounts-from-prod.mjs` can't merge them automatically and
+  re-inserts them fresh on every pull). Each merge was verified safe first
+  (checked that no `budget_targets`/`daily_line_items` row existed only on
+  the losing side of the pair) before deactivating the duplicate and
+  transferring its `qbo_account_id` onto the kept row — the general
+  "match by `account_number`/`qbo_account_id`, never raw `id`, never guess
+  on an ambiguous match" discipline this file already documents above,
+  applied by hand where the automated script's own account-number
+  requirement couldn't reach. `budget_targets`/`daily_line_items` were
+  never at risk from this specific failure mode — the account sync doesn't
+  touch either table.
+- **Guarded against a repeat, not just documented**: simulating Urban
+  Hearth's real data in the sandbox isn't worth the effort, so this is a
+  hard block rather than something to remember not to do.
+  `runNightlySync()` now refuses to run at all — before creating a
+  `sync_runs` row, before touching anything — unless
+  `qbo.environment === 'production'` (`QBO_ENVIRONMENT`/
+  `NUXT_QBO_ENVIRONMENT`, already set correctly in production per the
+  `NUXT_`-prefix convention documented in the Cloudflare Access section
+  above; defaults to `'sandbox'` everywhere else, including local dev's
+  `.env.local`). Since this is the single shared entry point for both the
+  nightly scheduler and the manual "Sync now" route, one check covers both.
+  `server/plugins/qbo-nightly-sync.ts` also bails out on the same condition
+  before its daily timer ever calls in, purely so local dev doesn't write a
+  doomed `error` `sync_runs` row and log a stack trace every day at the
+  scheduled sync time if `npm run dev` happens to be left running past it.
+  No override flag — if the sandbox genuinely needs to be exercised on
+  purpose, flip `QBO_ENVIRONMENT` locally by hand.
 
 ## Not yet done
 

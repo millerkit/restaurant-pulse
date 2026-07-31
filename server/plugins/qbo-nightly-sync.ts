@@ -7,6 +7,12 @@
 export default defineNitroPlugin((nitroApp) => {
   const { qbo } = useRuntimeConfig()
   if (qbo.syncEnabled === false) return
+  // runNightlySync() itself refuses to run outside qbo.environment ===
+  // 'production' (see qbo-sync-runner.ts) — this is just the same check
+  // done early, so local dev doesn't write a doomed 'error' sync_runs row
+  // and log a stack trace every single day at the scheduled sync time if
+  // `npm run dev` happens to be left running past it.
+  if (qbo.environment !== 'production') return
 
   let lastRunLocalDate: string | null = null
 
