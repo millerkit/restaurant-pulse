@@ -141,6 +141,38 @@ CREATE TABLE daily_toast_metrics (
   synced_at    TEXT NOT NULL
 );
 
+-- Full per-loan, per-payment debt-service schedule (principal + interest
+-- split, including each loan's one-time catch-up interest payment) for
+-- Urban Hearth's 10 loans (see CLAUDE.md's Debt Service / Cash Flow tab
+-- section). Imported once via scripts/import-debt-schedule.mjs from two
+-- source amortization workbooks (investor_loans_v6.xlsx,
+-- Eastern_Bank_Loan_Amortization_Reference.xlsx — neither checked in, same
+-- posture as the real budget xlsx scripts/import-budget-xlsx.mjs reads
+-- from). Exists because QBO's P&L has no principal line at all — a loan
+-- payment's principal portion reduces a balance-sheet liability, not an
+-- expense account — so daily_line_items/budget_targets can only ever see
+-- the interest portion (account 7020 Loan Interest). This table is the only
+-- place principal, and the one-time catch-up interest events, are tracked.
+--
+-- loan_key is a stable slug ('sba', 'chen', 'savage', 'schaefer',
+-- 'gilreath', 'mis', 'price', 'reid', 'jones', 'miller'), not a QBO
+-- liability account number — the source brief's own account reference had
+-- the SBA loan and the unrelated Price investor loan both cited as
+-- account 2740, so accounts.account_number isn't a safe join key here
+-- without confirming the real SBA sub-account number against QBO directly
+-- (not yet done).
+CREATE TABLE loan_schedule (
+  id             INTEGER PRIMARY KEY,
+  loan_key       TEXT NOT NULL,
+  lender         TEXT NOT NULL,
+  payment_date   TEXT NOT NULL,   -- ISO 8601, e.g. '2026-12-20'
+  payment_type   TEXT NOT NULL CHECK (payment_type IN ('catch_up', 'regular')),
+  interest       REAL NOT NULL,
+  principal      REAL NOT NULL,
+  total_payment  REAL NOT NULL,
+  UNIQUE (loan_key, payment_date, payment_type)
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.

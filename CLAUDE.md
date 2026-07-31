@@ -929,6 +929,9 @@ Employees API is forbidden, and it isn't needed here).
   one-time historical backfill of `daily_toast_metrics` from Toast's Orders
   and Labor APIs, one business date at a time. See Toast POS integration
   below.
+- `npm run db:import-debt-schedule -- /path/to/investor_loans_v6.xlsx /path/to/Eastern_Bank_Loan_Amortization_Reference.xlsx` —
+  one-time seed of `loan_schedule` from the two debt amortization
+  workbooks. See Debt Service / Cash Flow tab below.
 - `npm run dev` — all three pages are the real app now, not the static
   mockup files (which still exist under `design/` for reference)
 
@@ -1049,8 +1052,85 @@ switching to the right one, which is a mismatch between two *already*
 intentionally-different "as of" concepts (see `currentAsOfMonth`'s own
 comment), not a bug introduced by this fix.
 
+## Debt Service / Cash Flow tab — 2026-07-30
+
+Added after the user shared a "Debt Service & Budget Brief" (10 loans: an
+SBA loan via Eastern Bank plus 9 investor notes) explaining that QBO's P&L
+has no line for loan *principal* at all — a payment's principal portion
+reduces a balance-sheet liability, not an expense account — so even a
+budget that correctly includes loan interest (account 7020) still misses
+roughly $15,154/month of real cash going out once this restaurant's loans
+reach steady state (Jan 2027+), plus a one-time ~$50,562.50 catch-up
+interest payment due Dec 20, 2026 and a $2,200/week reserve-transfer plan
+funding it. The brief's own Section 7 ("Recommended App Structure: Two
+Parallel Views") proposed exactly the fix built here: a P&L view (existing
+budget/actuals, interest only) alongside a new Cash Flow view covering full
+debt service, with `Free Cash Flow = Net Income + Depreciation − Principal
+− Catch-Up Payments − Reserve Transfers`.
+
+- **`loan_schedule`** (schema.sql) is a new table — one row per loan per
+  payment date (including each loan's one-time catch-up-interest row),
+  with the real principal/interest split. Imported once via
+  `npm run db:import-debt-schedule -- /path/to/investor_loans_v6.xlsx
+  /path/to/Eastern_Bank_Loan_Amortization_Reference.xlsx`
+  (`scripts/import-debt-schedule.mjs`) — neither source file is checked in,
+  same posture as the real budget xlsx `scripts/import-budget-xlsx.mjs`
+  reads from. Verified against the brief's own summary figures after
+  import (e.g. Dec 20, 2026 total due: $61,693.48; Jan 2027+ steady-state
+  monthly total: $22,783.98) — exact matches.
+- **`loan_key` is a plain slug ('sba', 'chen', 'savage', ...), not a QBO
+  liability account number** — a real data conflict was caught while
+  building this: the brief's own Section 1 cites the SBA loan's QBO account
+  as "2740," but 2740 is actually the investor Price loan's real account
+  (confirmed against the investor workbook's own "DR 2740 NP ..." QBO Entry
+  Notes column). Rather than guess which citation is right, `loan_schedule`
+  sidesteps the ambiguity entirely — the real SBA sub-account number is
+  still unconfirmed (see Not yet done).
+- **The reserve transfer target ($50,562.50) is computed, not hardcoded** —
+  it's the sum of catch-up interest across the 7 original investor loans
+  only (`server/api/cashflow.get.ts`), excluding Jones & Miller's separate,
+  smaller Aug 2026 catch-up, which the brief's reserve plan doesn't fund.
+  Verified this sums to exactly $50,562.50 against the imported schedule.
+  The weekly $2,200 transfer schedule itself (every Monday, Jul 13 – Dec
+  14 2026, 23 transfers) is a fixed plan from the brief with no
+  corresponding source-of-truth table to derive it from, so it's a
+  constant in `cashflow.get.ts` — there's no bank-feed signal yet to know
+  whether a given week's transfer actually happened, so "transfers done"
+  is inferred from today's date being on/after the scheduled date, not a
+  confirmed bank transaction.
+- **Free Cash Flow caps both sides at today, including for the Year view**
+  — a real bug caught before shipping: the Year view's debt service was
+  originally summed across the *entire* calendar year (including,
+  e.g., the Dec 20 catch-up), while actual Net Income only ever covers
+  Jan–today. Subtracting full-year scheduled debt from a partial-year Net
+  Income understated cash position for months that hadn't happened yet.
+  Fixed by capping both the actuals query and the debt-service sum at
+  `min(periodEnd, today)` for both Month and Year views — the Year toggle
+  now reads "year-to-date" rather than implying a full-year total.
+- **The P&L table's "Loan interest" row uses the real posted 7020 actual,
+  not the amortization schedule's computed figure** — another real
+  discrepancy caught while verifying: local `daily_line_items` already had
+  ~$8,006 and ~$6,160 posted to account 7020 in May and June 2026,
+  *before* any of these 10 loans' first payment dates (SBA's first payment
+  is Jul 12; every investor loan's first payment is Aug or Dec). That
+  account evidently also carries interest from debt outside the scope of
+  this brief (plausibly the prior location, before the 2026 move). The P&L
+  column therefore queries real `daily_line_items` for account 7020
+  directly; the Cash Flow column uses `loan_schedule`'s computed figure
+  (the source of truth for actual cash obligations regardless of how
+  QBO's books currently reflect it) — shown side by side rather than
+  silently picking one, with a note under the table.
+- **Nightly sync untouched** — `loan_schedule` is a static one-time import,
+  not part of `runNightlySync()`. There's no live source for it to sync
+  from (it's not QBO report data); a change to the actual loan terms would
+  need a re-run of `db:import-debt-schedule` by hand.
+
 ## Not yet done
 
+- Confirming the SBA loan's real QBO liability account number directly
+  against QBO (see Debt Service / Cash Flow tab above) — currently
+  unconfirmed since the source brief's own citation ("2740") conflicts with
+  a real investor loan's account number.
 - Wiring the P&L page to the real schema — it still renders the same static
   sample data as the approved mockup, not `useDb()` queries. The Dashboard
   page was wired to real data (`server/api/dashboard.get.ts`) and no longer
@@ -1083,6 +1163,9 @@ comment), not a bug introduced by this fix.
 - [`app/pages/pl.vue`](app/pages/pl.vue) — the real P&L page
 - [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending (route `/budget`)
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
+- [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
+- [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
+- [`scripts/import-debt-schedule.mjs`](scripts/import-debt-schedule.mjs) — one-time seed of `loan_schedule` from the debt amortization workbooks
 - [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
 - [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav
 - [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
