@@ -1124,6 +1124,18 @@ debt service, with `Free Cash Flow = Net Income + Depreciation − Principal
   not part of `runNightlySync()`. There's no live source for it to sync
   from (it's not QBO report data); a change to the actual loan terms would
   need a re-run of `db:import-debt-schedule` by hand.
+- **Production rollout, 2026-07-31**: `loan_schedule` was created on the
+  production volume by hand via `fly ssh console` (same manual-migration
+  posture as `daily_toast_metrics` — schema changes to an existing volume
+  aren't picked up by `fly deploy` itself). The two source xlsx files were
+  uploaded to `/app/data/` via `fly ssh sftp put` just long enough to run
+  `db:import-debt-schedule` against them, then deleted from the volume
+  immediately after — same "neither source file stays anywhere but the
+  imported DB rows" posture as the real budget xlsx. Verified: 663 rows
+  across the same 10 loans as local dev, byte-identical totals for every
+  spot-checked payment date (e.g. Dec 20, 2026: $61,693.48; reserve
+  target: exactly $50,562.50), and a live `/api/cashflow` + `/cashflow`
+  request against production both returned 200 with real numbers.
 
 ## Not yet done
 
