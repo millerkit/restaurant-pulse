@@ -1185,6 +1185,40 @@ schedule assumption was never going to stay correct.
   transfer — a wrong entry has to be corrected with an offsetting row for
   now, the same reversal mechanism used for a real reversal.
 
+## Declared weekly reserve plan, separate from transfer history — 2026-07-31
+
+Same day as the section above, while working out a new $4,000/week reserve
+plan with the user (they're now also funding Jones & Miller's ongoing
+monthly loan payments — not just their catch-up — out of the same 1005
+Loan Payment Reserve account, considerably raising the weekly amount
+needed). This surfaced a real gap in the design from a few hours earlier:
+`currentWeeklyAmount` was inferred from the single most recent *positive*
+`reserve_transfers` row, which broke the moment the user wanted to declare
+a new rate ($4,000/week) *before* the next actual transfer at that rate had
+happened — the most recent row at that point was a $400 top-up transfer,
+which would have made the projection show $400/week instead.
+
+- **`reserve_plan`** (schema.sql) is a new single-row table holding just the
+  currently-declared weekly amount, with its own
+  `POST /api/cashflow/reserve-plan` route and a small "Planned weekly
+  amount" form on the Cash Flow tab, separate from "Record a transfer."
+  `reserveProgress()` in `server/api/cashflow.get.ts` now prefers this
+  value for `currentWeeklyAmount`/`projectedCompletionDate`, falling back
+  to the old last-positive-transfer inference only if no plan has ever been
+  declared. `reserve_transfers` remains the sole source of truth for
+  "saved so far" — this table only feeds the forward-looking projection.
+- **The app's projection still doesn't model scheduled *withdrawals*** (the
+  Jones & Miller monthly payments now also coming out of this account) —
+  `projectedCompletionDate` is still a simple "remaining ÷ weekly amount"
+  calculation, not a full running-balance simulation against
+  `loan_schedule`'s known future outflows. The more accurate number (worked
+  out by hand with the user for this specific plan: $4,011.77/week is the
+  precise break-even, and the $400 top-up + flat $4,000/week they chose
+  lands at $53,014.60 available by Dec 15, comfortably covering the Dec 20
+  catch-up) currently lives only in that conversation, not in the app
+  itself. Worth building if the reserve keeps being used to fund ongoing
+  loan payments rather than just the one-time catch-up — see Not yet done.
+
 ## Not yet done
 
 - Confirming the SBA loan's real QBO liability account number directly
@@ -1214,6 +1248,11 @@ schedule assumption was never going to stay correct.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
   SQL on the two owner accounts) and to split *actual* labor by owner-comp
   the same way the budget side already is (needs real per-account actuals)
+- A real running-balance cash flow simulation for the reserve projection
+  (against `loan_schedule`'s known future outflows — e.g. Jones & Miller's
+  monthly payments now also being funded from the reserve account), instead
+  of the current simple "remaining ÷ weekly amount" estimate — see
+  "Declared weekly reserve plan" above.
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model
@@ -1226,6 +1265,7 @@ schedule assumption was never going to stay correct.
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
 - [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
 - [`server/api/cashflow/reserve-transfer.post.ts`](server/api/cashflow/reserve-transfer.post.ts) — records a real reserve transfer (or reversal)
+- [`server/api/cashflow/reserve-plan.post.ts`](server/api/cashflow/reserve-plan.post.ts) — declares the current weekly reserve-transfer plan
 - [`scripts/import-debt-schedule.mjs`](scripts/import-debt-schedule.mjs) — one-time seed of `loan_schedule` from the debt amortization workbooks
 - [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
 - [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav

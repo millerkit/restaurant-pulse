@@ -193,6 +193,23 @@ CREATE TABLE reserve_transfers (
   note           TEXT
 );
 
+-- The user's currently-declared weekly reserve transfer plan — separate
+-- from reserve_transfers' history because "what I'm planning to transfer
+-- each week going forward" and "what I've actually transferred" are two
+-- different facts that can disagree at any moment (e.g. the user
+-- announcing a new $4,000/week plan before that week's transfer has
+-- actually happened yet). Before this table existed, the Cash Flow tab's
+-- projection inferred the "current weekly rate" from the single most
+-- recent positive reserve_transfers row — which broke the first time the
+-- user wanted to declare a new rate ahead of the next actual transfer.
+-- Single-row (id is always 1); reserve_transfers stays the sole source of
+-- truth for "saved so far," this table only feeds the forward projection.
+CREATE TABLE reserve_plan (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  weekly_amount  REAL NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.

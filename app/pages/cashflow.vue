@@ -79,6 +79,32 @@ async function submitTransfer() {
     transferSubmitting.value = false
   }
 }
+
+// ---- Set planned weekly amount -----------------------------------------
+const planAmount = ref<number | null>(null)
+watch(() => data.value?.reserve.currentWeeklyAmount ?? null, (v) => { if (planAmount.value === null) planAmount.value = v }, { immediate: true })
+const planSubmitting = ref(false)
+const planError = ref<string | null>(null)
+const planSaved = ref(false)
+
+async function submitPlan() {
+  planError.value = null
+  planSaved.value = false
+  if (planAmount.value === null || !Number.isFinite(planAmount.value) || planAmount.value <= 0) {
+    planError.value = 'Enter a positive weekly amount'
+    return
+  }
+  planSubmitting.value = true
+  try {
+    await $fetch('/api/cashflow/reserve-plan', { method: 'POST', body: { weeklyAmount: planAmount.value } })
+    planSaved.value = true
+    await load()
+  } catch (err: any) {
+    planError.value = err?.data?.statusMessage || err?.message || 'Failed to save plan'
+  } finally {
+    planSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -245,6 +271,16 @@ async function submitTransfer() {
               <button type="submit" :disabled="transferSubmitting">{{ transferSubmitting ? 'Recording…' : 'Record transfer' }}</button>
               <span v-if="transferError" class="chip critical">{{ transferError }}</span>
             </div>
+          </form>
+
+          <form class="transfer-form plan-form" @submit.prevent="submitPlan">
+            <div class="transfer-form-row">
+              <label>Planned weekly amount<input type="number" step="0.01" min="0.01" v-model.number="planAmount" placeholder="4000.00" required /></label>
+              <button type="submit" :disabled="planSubmitting">{{ planSubmitting ? 'Saving…' : 'Update plan' }}</button>
+              <span v-if="planError" class="chip critical">{{ planError }}</span>
+              <span v-else-if="planSaved" class="chip good">Plan updated</span>
+            </div>
+            <div class="section-note">Used for the projection above — independent of what's actually been transferred so far.</div>
           </form>
         </div>
       </section>

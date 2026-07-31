@@ -74,6 +74,7 @@ export default defineEventHandler((event) => {
     .reduce((s, r) => s + r.interest, 0)
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
+  const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
 
   // Real, actual transfers only — see schema.sql's reserve_transfers
   // comment for why this replaced a fixed $/week schedule assumption (two
@@ -85,10 +86,15 @@ export default defineEventHandler((event) => {
     const saved = toDate.reduce((s, t) => s + t.amount, 0)
     const remaining = Math.max(0, reserveTarget - saved)
 
-    // Projection uses the most recent *positive* transfer as "the current
-    // weekly rate" — a reversal shouldn't reset what the ongoing plan is.
+    // The declared plan (reserve_plan) wins over inferring a rate from the
+    // last transfer — see schema.sql's reserve_plan comment: a user
+    // announcing a new weekly amount should update the projection
+    // immediately, not wait for the next actual transfer at that rate to
+    // land and become "the most recent one." Falls back to the last
+    // *positive* transfer (a reversal shouldn't reset the ongoing plan) if
+    // no plan has ever been declared.
     const lastPositive = [...toDate].reverse().find(t => t.amount > 0)
-    const currentWeeklyAmount = lastPositive?.amount ?? null
+    const currentWeeklyAmount = plan?.weekly_amount ?? lastPositive?.amount ?? null
     let projectedCompletionDate: string | null = null
     if (remaining > 0 && currentWeeklyAmount) {
       const weeksNeeded = Math.ceil(remaining / currentWeeklyAmount)
