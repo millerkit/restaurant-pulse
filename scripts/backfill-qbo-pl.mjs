@@ -2,9 +2,17 @@
 // (summarize_column_by=Days), month by month, and upserts into
 // daily_line_items. Not part of the nightly sync — run by hand:
 //
-//   npm run db:backfill-pl -- [--since=YYYY-MM-DD] [--until=YYYY-MM-DD] [--delay-ms=1000]
+//   npm run db:backfill-pl -- [--since=YYYY-MM-DD] [--until=YYYY-MM-DD] [--delay-ms=1000] [--accounts=qboAccountId1,qboAccountId2,...]
 //
 // Defaults: --since = 2 years before today, --until = yesterday.
+//
+// --accounts scopes the DB writes to just the listed QBO account ids
+// (accounts.qbo_account_id, not the local accounts.id) — the ProfitAndLoss
+// report itself always returns every account for the requested range (QBO
+// has no per-account report filter), so this only changes what gets
+// upserted, not what gets fetched. Useful for correcting a small, known set
+// of accounts (e.g. after a parsing bug fix) without touching every other
+// account's already-correct rows. Omit for a normal full backfill.
 //
 // Prerequisite: at least one account sync must already have run (via
 // POST /api/qbo/sync, or letting server/plugins/qbo-nightly-sync.ts fire
@@ -83,6 +91,7 @@ yesterday.setUTCDate(yesterday.getUTCDate() - 1)
 const since = args.since || isoDate(twoYearsAgo)
 const until = args.until || isoDate(yesterday)
 const delayMs = args['delay-ms'] ? Number(args['delay-ms']) : 1000
+const accountFilter = args.accounts ? new Set(String(args.accounts).split(',').map(s => s.trim()).filter(Boolean)) : null
 
 if (!/^\d{4}-\d{2}-\d{2}$/.test(since) || !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
   console.error(`--since/--until must be YYYY-MM-DD. Got since=${since} until=${until}`)
@@ -167,7 +176,9 @@ function qboFaultType(body) {
 }
 
 async function fetchReportWithRetry(accessToken, realmId, start, end, retries = 2) {
-  const params = new URLSearchParams({ start_date: start, end_date: end, summarize_column_by: 'Days' })
+  // Cash basis — must match server/utils/qbo-pl-sync.ts's own accounting_method,
+  // or a re-backfilled range would disagree with what the nightly sync writes.
+  const params = new URLSearchParams({ start_date: start, end_date: end, summarize_column_by: 'Days', accounting_method: 'Cash' })
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${apiBase}/v3/company/${realmId}/reports/ProfitAndLoss?${params}`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
@@ -218,7 +229,7 @@ for (const { start, end } of chunks) {
     process.exit(1)
   }
 
-  const items = reportToLineItems(report)
+  const items = reportToLineItems(report).filter(item => !accountFilter || accountFilter.has(item.qboAccountId))
   const unmatched = new Set()
   const written = db.transaction((rows) => {
     let n = 0

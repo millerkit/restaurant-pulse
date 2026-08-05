@@ -11,7 +11,11 @@ export async function syncPlForDateRange(startDate: string, endDate: string): Pr
   const { qbo } = useRuntimeConfig()
   const db = useDb()
 
-  const params = new URLSearchParams({ start_date: startDate, end_date: endDate, summarize_column_by: 'Days' })
+  // Cash basis, matching how this restaurant's own QBO reports are reviewed
+  // manually — QBO defaults to Accrual when this param is omitted, which is
+  // what this sync used until 2026-08-05 and was the source of a real
+  // production/QuickBooks net income mismatch (see CLAUDE.md).
+  const params = new URLSearchParams({ start_date: startDate, end_date: endDate, summarize_column_by: 'Days', accounting_method: 'Cash' })
   const { res, intuitTid } = await qboFetch(qbo.environment, qbo.clientId, qbo.clientSecret, (realmId) => `/v3/company/${realmId}/reports/ProfitAndLoss?${params}`)
   const body = await res.json().catch(() => ({}))
   if (!res.ok || qboFaultType(body)) {

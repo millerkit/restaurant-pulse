@@ -14,15 +14,28 @@
 // shape-drift error.
 
 // Recurses into type:"Section" rows' nested Rows.Row for arbitrarily deep
-// chart-of-accounts nesting; collects only type:"Data" rows. A Section's
-// own Header/Summary are QBO's own computed subtotal rows — never
-// collected, matching schema.sql's stated design principle ("Nothing here
-// is QuickBooks-report-shaped — it's shaped for the questions we're
-// asking"); we recompute our own category rollups instead.
+// chart-of-accounts nesting; collects type:"Data" rows plus, per section,
+// one synthetic row from that section's own Header. A Section's Summary is
+// purely QBO's own computed subtotal (label + total, no account id) and is
+// never collected — but Header is not just a label: confirmed live against
+// production that a parent account with sub-accounts still carries its own
+// direct-posted amount in Header.ColData (same {value, id} shape as a real
+// Data row's columns), whenever something was posted straight to the
+// parent rather than to one of its children — e.g. "6300 Marketing &
+// Advertising" itself, distinct from "6301 Advertising" etc. underneath
+// it. Missing this silently dropped real dollars: a parent-with-children
+// account's own postings never appeared anywhere in daily_line_items.
+// When nothing was posted directly to the parent, Header.ColData's value
+// columns are empty strings, which already parse to 0 below — so treating
+// Header like a Data row is a no-op for the common case and only matters
+// when a parent genuinely has its own direct activity.
 export function flattenDataRows(rows, out = []) {
   for (const row of rows ?? []) {
     if (row.type === 'Data') out.push(row)
-    else if (row.type === 'Section' && row.Rows?.Row) flattenDataRows(row.Rows.Row, out)
+    else if (row.type === 'Section') {
+      if (row.Header?.ColData?.length > 1) out.push({ ColData: row.Header.ColData })
+      if (row.Rows?.Row) flattenDataRows(row.Rows.Row, out)
+    }
   }
   return out
 }
@@ -49,11 +62,19 @@ export function extractColumnDates(columns) {
   })
 }
 
-// Ties it together: { qboAccountId, date, amount }[]. amount is
-// Math.abs(value) per schema.sql's "positive magnitude, sign handled at
-// query time" convention for daily_line_items. A blank cell is treated as
-// amount=0 (still produced, not skipped) so a no-activity day upserts a
-// real zero rather than leaving a stale nonzero value from a prior sync.
+// Ties it together: { qboAccountId, date, amount }[]. amount is QBO's own
+// raw signed value, not Math.abs(value) — a contra-income account (e.g.
+// "4910 Discounts & Comps") reports negative within the Income section so
+// that summing a section's rows nets to the correct subtotal, exactly as
+// QBO's own report displays it; forcing it positive would make a deduction
+// add to revenue instead of subtracting from it (confirmed against a real
+// mismatch: production's category-level SUM(amount) overstated revenue by
+// exactly 2x the contra accounts' total once they'd been flipped positive).
+// A normal, non-contra line item already comes back positive from QBO, so
+// this is a no-op for the common case and only matters for contra/
+// correcting entries. A blank cell is treated as amount=0 (still produced,
+// not skipped) so a no-activity day upserts a real zero rather than leaving
+// a stale nonzero value from a prior sync.
 export function reportToLineItems(report) {
   const dates = extractColumnDates(report.Columns?.Column)
   const dataRows = flattenDataRows(report.Rows?.Row)
@@ -65,7 +86,7 @@ export function reportToLineItems(report) {
       const date = dates[col]
       if (!date) continue // the Total column, or another unrecognized non-day column
       const raw = row.ColData[col]?.value
-      const amount = Math.abs(Number(raw ?? 0) || 0)
+      const amount = Number(raw ?? 0) || 0
       items.push({ qboAccountId, date, amount })
     }
   }

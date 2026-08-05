@@ -1345,8 +1345,129 @@ sequence:
   No override flag — if the sandbox genuinely needs to be exercised on
   purpose, flip `QBO_ENVIRONMENT` locally by hand.
 
+## Net income mismatch vs. real QuickBooks — 2026-08-05
+
+Prompted by the user comparing production's YTD net income (+$20,040) against
+a real QBO P&L export for Urban Hearth and finding it materially different.
+Investigated by directly querying production's `daily_line_items` over
+`fly ssh console` (same technique as the local/prod account-drift incident
+above) and comparing category totals line-by-line against the real export,
+rather than guessing from the net figure alone. Found four independent real
+issues, only one of which turned out to be an actual bug in this app's own
+number once the investigation was done:
+
+- **Contra-revenue accounts had their sign flipped.** `qbo-pl-parse.mjs`'s
+  `reportToLineItems` used to `Math.abs()` every value per schema.sql's
+  original "positive magnitude, sign handled at query time" convention — but
+  that convention never anticipated contra-income accounts like "4910
+  Discounts & Comps," which QBO's own report already returns *negative*
+  within the Income section so that summing the section nets correctly.
+  Forcing it positive made a $13,593.83 deduction add to revenue instead of
+  subtracting from it — a $27,410.22 swing (2x the two contra accounts'
+  total) that was the entire revenue overstatement. **Fixed**: the parser
+  now keeps QBO's own signed value; a normal line item is already positive
+  from QBO, so this is a no-op for the common case. `schema.sql`'s
+  `daily_line_items.amount` comment updated to match. Every downstream
+  consumer (`dashboard.get.ts`, `pl.get.ts`, `cashflow.get.ts`,
+  `budget/actuals.get.ts`, `useBudgetData.ts`) already just does
+  `SUM(amount)` per category with plain addition, so nothing else needed to
+  change. Corrected via a targeted re-backfill (see below).
+- **Deleted/inactive QBO accounts are invisible to the account sync, so
+  their historical P&L rows silently vanish.**
+  `qbo-account-sync.ts`'s `SELECT * FROM Account MAXRESULTS 1000` — QBO's
+  Query API only returns `Active=true` rows by default. Three real labor
+  accounts (Service Charge Distribution (KA), GM Bonus, Project Manager)
+  had been deactivated by the user to save QBO account-count limit
+  headroom, and were absent from local `accounts` entirely — so P&L rows
+  referencing their QBO account ids had nothing to match against and were
+  dropped with only a `console.warn`, no visible failure ($6,780.80 of the
+  labor gap). Not fixed in code this round — the user reinstated the three
+  accounts directly in QBO instead (deciding it wasn't worth widening the
+  account-sync query's `Active` filter given their account-count
+  constraints) and a manual `POST /api/qbo/sync` + targeted backfill
+  (`--accounts=`, see below) picked them up once real.
+- **Switched to Cash basis**, matching how the user already reviews QBO
+  reports manually — `qbo-pl-sync.ts` and `backfill-qbo-pl.mjs` now pass
+  `accounting_method=Cash` (QBO defaults to Accrual when omitted, which is
+  what this sync had used, unnoticed, since it was first built). This
+  closed the Other Income gap exactly (a $10,000 "Grant Income" mismatch
+  turned out to be pure cash/accrual timing) but had no effect on Labor —
+  this restaurant's payroll postings apparently aren't accrual-adjusted in
+  QBO at all (likely posted directly as cash transactions by the payroll
+  processor), so Labor was identical under both bases. Also moved Opex
+  *further* from the reference report at the time, which briefly looked
+  like a regression — see below for why.
+- **A parent account with sub-accounts can also carry its own direct
+  postings, which the parser was silently dropping.** Confirmed live
+  against production: a QBO report Section row (e.g. "6300 Marketing &
+  Advertising," which has children like "6301 Advertising" underneath it)
+  puts the parent's *own* direct-posted amount in `Header.ColData` — same
+  `{value, id}` shape as a real Data row's columns — whenever something was
+  posted straight to the parent instead of one of its children (confirmed
+  by inspecting a real report's raw JSON via a temporary inspection
+  script). `flattenDataRows` only ever recursed into `Rows.Row` collecting
+  `type:"Data"` rows and completely ignored `Header`, so any parent-direct
+  posting vanished whenever the parent also had child activity in the same
+  period. When there's no direct posting, `Header.ColData`'s value column
+  is just `""`, which already parses to 0 — so capturing it too is a no-op
+  for the common case. **Fixed** in `flattenDataRows`: pushes one synthetic
+  row from a Section's own `Header` (never from `Summary`, which really is
+  just QBO's computed subtotal) alongside the recursion into children.
+  Found and fixed four affected accounts this way (Marketing & Advertising
+  $4,000, Non-Capital Equipment & Furnishings $845.37, Taxes and Licenses
+  $735, Meals & Entertainment $16.31 — $5,596.68 total) plus a bonus
+  catch, a −$390.30 direct correction on "Employer Payroll Taxes" that had
+  also been silently dropped. This fully explained the post-cash-basis Opex
+  regression: it wasn't really a regression, cash basis had just changed
+  which of these already-broken parent postings coincided with child
+  activity.
+- **The real, final "gap" turned out to be a reporting artifact, not a data
+  bug at all.** After all the above, Opex matched almost exactly but Labor
+  still showed a stubborn ~$26,682 shortfall no theory above explained. The
+  user then pointed out — after separately explaining that the $3,606.17
+  Interest & Financing gap was a recurring SBA loan-payment journal entry
+  QBO creates early as a funding reminder, ahead of its real due date — that
+  the *same* mechanism explains Labor: their first QBO export used "This
+  Year" (Jan 1 – Dec 31), which includes QBO's own recurring journal
+  entries (payroll runs, the SBA reminder) dated ahead of when they
+  actually post, not just transactions that have genuinely happened.
+  Production's sync only ever pulls through yesterday, so it correctly
+  excludes all of that — the mismatch was in what the comparison reference
+  was, not in the app. Confirmed against a second QBO export explicitly
+  scoped to "Actual YTD" (Jan 1 – Aug 5): Labor ($489,970.56) and Interest &
+  Financing ($38,482.84) both matched production **exactly**, and total net
+  income landed within $1,941.27 (down from the original $68,869 gap),
+  almost entirely attributable to a small, low-priority COGS discrepancy
+  (~0.25% of revenue) not investigated further — see Not yet done.
+- **`scripts/backfill-qbo-pl.mjs` gained an `--accounts=qboAccountId1,...`
+  flag**, used throughout this investigation to re-sync just a known,
+  narrow set of affected accounts (by QBO account id, not local `accounts.id`
+  — matching every other cross-environment script's `account_number`/
+  `qbo_account_id` discipline) without touching every other account's
+  already-correct rows. The ProfitAndLoss report itself always returns
+  every account for a date range regardless (QBO has no per-account report
+  filter) — this only scopes what gets *upserted*. General full backfills
+  (no `--accounts` flag) were also re-run twice against production during
+  this investigation, once after the cash-basis change and once after the
+  parent-posting fix, both deployed via `fly deploy` first (the script runs
+  from the deployed image, not a local checkout).
+- **Diagnostic technique used throughout**: temporary read-only Node
+  scripts uploaded via `fly ssh sftp shell` (`put local.js
+  /app/name.cjs` — `.cjs` extension required, since `/app/package.json` has
+  `"type": "module"` and plain `.js` would be parsed as ESM), executed via
+  `fly ssh console -C "node /app/name.cjs"`, then deleted — same disposable
+  pattern as the temporary inspection routes used to verify the original
+  QBO Account + P&L sync. Used both for category/account-level SQL
+  comparisons against production's live `daily_line_items` and, for the
+  parent-posting bug, to fetch and inspect one real `ProfitAndLoss` report's
+  raw JSON directly against the live QBO connection.
+
 ## Not yet done
 
+- A small, low-priority COGS discrepancy (~$1,926.79, ~0.25% of revenue)
+  surfaced by the net income investigation above, not yet root-caused —
+  called closed for now given its size relative to everything else found
+  and fixed in that pass.
 - Confirming the SBA loan's real QBO liability account number directly
   against QBO (see Debt Service / Cash Flow tab above) — currently
   unconfirmed since the source brief's own citation ("2740") conflicts with

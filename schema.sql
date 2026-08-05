@@ -55,7 +55,7 @@ CREATE TABLE daily_line_items (
   id          INTEGER PRIMARY KEY,
   date        TEXT NOT NULL,              -- ISO 8601, e.g. '2026-07-16'
   account_id  INTEGER NOT NULL REFERENCES accounts(id),
-  amount      REAL NOT NULL,              -- positive for revenue and expense magnitudes (sign handled at query time)
+  amount      REAL NOT NULL,              -- QBO's own signed value (normal line items positive; contra/correcting entries negative, e.g. "Discounts & Comps" reduces revenue) — see qbo-pl-parse.mjs
   UNIQUE (date, account_id)
 );
 
