@@ -1045,6 +1045,24 @@ function exportForQuickBooks() {
           <span class="chip critical">Over / under budget</span>
         </div>
 
+        <div v-if="!selectedMonthClosed && !viewingAnnualTotal" class="action-row">
+          <button
+            class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
+            :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month in this year'"
+            @click="fillMissingFromLastMonth"
+          >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
+          <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
+          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
+        </div>
+        <div v-else class="action-row">
+          <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
+        </div>
+        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+        <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
+        <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
+
         <div class="pl-table-card">
           <div class="section-head table-head">
             <div class="section-label">Edit Monthly Budget</div>
