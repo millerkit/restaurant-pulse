@@ -10,14 +10,15 @@ export default defineNuxtConfig({
       redirectUri: process.env.QBO_REDIRECT_URI,
       environment: process.env.QBO_ENVIRONMENT || 'sandbox',
       // Nightly sync scheduling (see server/plugins/qbo-nightly-sync.ts).
-      // Defaults match the sample "Last synced... 3:04 AM" text already in
-      // useSyncStatus() (app/composables/useBudgetData.ts). Urban Hearth's
-      // actual location is America/New_York — confirmed with the user, not
+      // Runs at 8:00 AM local (changed from 3:04 AM 2026-08-07, at the
+      // user's request, so the previous night's revenue has had time to
+      // post before the sync pulls "yesterday"). Urban Hearth's actual
+      // location is America/New_York — confirmed with the user, not
       // guessed, since the container's own clock is UTC.
       syncEnabled: process.env.QBO_SYNC_ENABLED !== 'false',
       syncTimeZone: process.env.QBO_SYNC_TIMEZONE || 'America/New_York',
-      syncHour: Number(process.env.QBO_SYNC_HOUR ?? 3),
-      syncMinute: Number(process.env.QBO_SYNC_MINUTE ?? 4)
+      syncHour: Number(process.env.QBO_SYNC_HOUR ?? 8),
+      syncMinute: Number(process.env.QBO_SYNC_MINUTE ?? 0)
     },
     toast: {
       clientId: process.env.TOAST_CLIENT_ID,
