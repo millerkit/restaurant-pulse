@@ -141,6 +141,98 @@ CREATE TABLE daily_toast_metrics (
   synced_at    TEXT NOT NULL
 );
 
+-- The revenue-projection model behind the Capacity tab (added 2026-08-07):
+-- "how many covers, at what revenue per cover, are we assuming per seating
+-- area, and are we actually hitting that." One row per dining area (bar,
+-- salon, dining room, chef's counter, outdoor), seeded once from a real
+-- capacity/pricing worksheet via scripts/import-capacity-projections.mjs —
+-- same "source file not checked in, only the imported rows" posture as the
+-- budget xlsx and debt-schedule imports (data/*.csv is gitignored) — but
+-- editable afterward via the Capacity tab's Edit page
+-- (app/pages/capacity/edit.vue), unlike those one-shot imports: the user
+-- expects to revise capacity/turns/per-cover-revenue assumptions over time,
+-- not just re-run the import.
+--
+-- Capacity is seasonal, not a single year-round number: outdoor seating
+-- doesn't exist Nov-April at all (capacity_nov_apr is NULL for that row),
+-- and every other area's nightly capacity happens to be identical across
+-- both seasons for this restaurant (not assumed to always be true — hence
+-- two separate columns rather than one, matching the source worksheet).
+-- Nightly capacity (seats * max_turns_per_night) is stored directly rather
+-- than recomputed from seats/max_turns_per_night at query time, so editing
+-- the capacity number directly (without touching seats/turns) is possible
+-- without the two drifting apart — the Edit page exposes all of seats,
+-- max_turns_per_night, and the two capacity columns as independently
+-- editable fields, per the user's explicit request 2026-08-07.
+CREATE TABLE capacity_areas (
+  id                   INTEGER PRIMARY KEY,
+  name                 TEXT NOT NULL,   -- e.g. 'dining room', 'bar', 'salon', 'chefs counter', 'outdoor'
+  seats                INTEGER NOT NULL,
+  max_turns_per_night  REAL NOT NULL,
+  capacity_nov_apr     INTEGER,          -- nightly max covers, NULL if the area is closed this season
+  capacity_may_oct     INTEGER NOT NULL,
+  per_cover_revenue    REAL NOT NULL,   -- assumed $ revenue per guest in this area
+  notes                TEXT
+);
+
+-- Holiday closures only (added nights closed beyond the standing Monday
+-- closure — e.g. Thanksgiving, Christmas). A flat count per month rather
+-- than specific dates: precise enough for the assumption this feeds
+-- (subtracted from that month's Tue-Sun day count to get real operating
+-- days before multiplying by nightly capacity — see
+-- server/api/capacity.get.ts), and there's no need for exact dates since
+-- the *actual* side of every comparison just reflects whatever
+-- daily_toast_metrics/daily_line_items rows are really there. Seeded
+-- 2026-08-07 with the user's own figures: 2 in January, 1 in July, 1 in
+-- November, 2 in December, 0 elsewhere. One row per calendar month (1-12),
+-- reused every year until edited.
+--
+-- Used to carry a single restaurant-wide expected_pct here too, applied
+-- uniformly to every area's own capacity — replaced 2026-08-07 (same day)
+-- by capacity_area_seasonality below, after the user pointed out $86.12/
+-- cover looked low and asked to see (and edit) each area's own assumed
+-- nightly covers directly, rather than one blended % standing in for every
+-- area. A single % was also never going to be right for very different
+-- areas — the chef's counter's real fill pattern has no reason to track
+-- the bar's.
+CREATE TABLE capacity_seasonality (
+  month             INTEGER PRIMARY KEY CHECK (month BETWEEN 1 AND 12),
+  holiday_closures  INTEGER NOT NULL DEFAULT 0  -- additional closed nights this month, beyond Mondays
+);
+
+-- Per-area, per-month expected nightly covers — the real editable
+-- projection input as of 2026-08-07, replacing capacity_seasonality's old
+-- single blended expected_pct. Stored as a raw covers count (not a %):
+-- this is what the Edit Capacity page's table actually lets the user type
+-- in directly ("how many covers/night do we expect in the dining room in
+-- July"), and a raw forecast doesn't automatically need to rescale just
+-- because someone edits that area's seat count later — if capacity
+-- changes, the covers assumption is something to reconsider, not something
+-- that should silently drift. Expected revenue for an area/month is this
+-- value * that area's own per_cover_revenue; expected fill % (shown as a
+-- derived, read-only figure on the Edit Capacity page) is this value ÷
+-- that area's own nightly capacity for the season. One row per
+-- (area, month), reused every year until edited — same reuse convention as
+-- capacity_seasonality above.
+CREATE TABLE capacity_area_seasonality (
+  area_id          INTEGER NOT NULL REFERENCES capacity_areas(id),
+  month            INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+  expected_covers  REAL NOT NULL,
+  PRIMARY KEY (area_id, month)
+);
+
+-- Buyout revenue (a private event that buys out an entire dining area or
+-- the whole restaurant for a guaranteed minimum, in exchange for reducing
+-- that month's normal service nights by one) is budgeted for but
+-- deliberately NOT modeled here yet — bookmarked 2026-08-07 at the user's
+-- own request. The guaranteed minimum to charge isn't yet known (it depends
+-- on how much a normal night at that capacity/pct would otherwise make,
+-- which this app can now estimate, but the user hasn't settled on a number
+-- to plug in), and a buyout night's real economics (one fewer regular
+-- service night, one bigger guaranteed night) don't fit this table's
+-- per-night-capacity model without a real design pass. Revisit once a
+-- guaranteed-minimum figure exists to model against.
+
 -- Full per-loan, per-payment debt-service schedule (principal + interest
 -- split, including each loan's one-time catch-up interest payment) for
 -- Urban Hearth's 10 loans (see CLAUDE.md's Debt Service / Cash Flow tab

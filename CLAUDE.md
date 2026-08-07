@@ -1462,6 +1462,239 @@ number once the investigation was done:
   parent-posting bug, to fetch and inspect one real `ProfitAndLoss` report's
   raw JSON directly against the live QBO connection.
 
+## Capacity tab — 2026-08-07
+
+Added after the user shared a real capacity/pricing worksheet
+(`Capacity-And-Per-Cover-Revenue-Projections.csv` — per-area seats, max
+turns/night, seasonal nightly capacity, and assumed per-cover revenue for
+the bar, salon, dining room, chef's counter, and outdoor areas) and a set
+of monthly capacity-fill-% targets, asking whether real July/August data is
+actually meeting the revenue assumptions the business is projecting off of.
+A new top-level tab, not a section on an existing page — same reasoning as
+the original Budget tab: this answers a different question (is our capacity
+model correct) from the existing pages (are we on pace against a dollar
+budget), even though both ultimately bear on revenue.
+
+- **The monthly fill % applies to every dining area's own capacity
+  independently, not to one blended total** — confirmed explicitly by the
+  user rather than assumed: "if we fill 58% one month, that means we fill
+  58% of seats across all the spaces." So expected revenue for a month is
+  built per-area (`that area's own nightly capacity * this month's fill % *
+  that area's own per-cover revenue`) and summed across areas, never
+  `total expected covers * one blended per-cover figure` — the two are not
+  interchangeable once per-area capacity/pricing differ (e.g. the chef's
+  counter's $258.56/cover vs. the bar's $55). See `capacity_areas` /
+  `capacity_seasonality` in [`schema.sql`](schema.sql) and the
+  `nightlyExpected` function in
+  [`server/api/capacity.get.ts`](server/api/capacity.get.ts).
+- **Operating days = Tue–Sun (the standing Monday closure, same as every
+  other pace calculation in this app) minus a flat monthly holiday-closure
+  count** — 2 in January, 1 in July, 1 in November, 2 in December, per the
+  user's own figures, 0 elsewhere. Deliberately a count, not specific
+  calendar dates: matches the precision of `expected_pct` itself (a rough
+  monthly target, not derived from a specific calendar), and the "actual"
+  side of every comparison doesn't need the exact date anyway — real
+  `daily_toast_metrics`/`daily_line_items` rows are simply absent or zero on
+  a day the restaurant was really closed, with no adjustment required. See
+  `capacity_seasonality.holiday_closures` in schema.sql.
+- **Per-area capacity, turns/night, and per-cover revenue are editable in
+  the app**, not a one-shot import left alone — an explicit request from
+  the user, unlike the budget xlsx / debt schedule imports this pattern
+  otherwise resembles. `app/pages/capacity/edit.vue` (route
+  `/capacity/edit`) is a plain editable form (5 area rows + 12 month rows,
+  no account-tree complexity needed at this size) backed by
+  [`server/api/capacity/settings.get.ts`](server/api/capacity/settings.get.ts)
+  /
+  [`server/api/capacity/settings.post.ts`](server/api/capacity/settings.post.ts).
+  `capacity_areas` rows are updated by id (not delete/re-insert) since
+  there's no re-import expected going forward; `capacity_seasonality` is
+  upserted by month (its primary key).
+- **Seeded once from the real worksheet** via
+  `scripts/import-capacity-projections.mjs`
+  (`npm run db:import-capacity`) — same "source file not checked in, only
+  the imported rows" posture as the budget xlsx / debt schedule imports
+  (`data/*.csv` is gitignored); `capacity_seasonality`'s fill %s and
+  holiday-closure counts came directly from the user in chat, not a file,
+  so they're a hardcoded constant inside the script rather than parsed from
+  anything.
+- **The Capacity Pace view** (`app/pages/capacity/index.vue`, route
+  `/capacity`) leads with the two months the app can actually judge right
+  now — the most recently closed month and the current in-progress month
+  (Actual-to-date + a straight-line Projected figure, same pattern as the
+  Edit Budget page's current-month treatment) — then a full 12-month table
+  for trend, plus a read-only reference table of the underlying per-area
+  assumptions. Status coloring reuses the exact same good/warning/serious/
+  critical `paceStatus` scale (100% of target = good, each 10pts short
+  bumps a level) every other pace card in the app already uses, judged
+  against revenue specifically (covers alone doesn't say whether the
+  per-cover assumption held).
+- **A real data-quality gap surfaced immediately on verifying against local
+  data, not a bug in this feature**: June 2026 shows real revenue (from
+  QBO, full month) far outpacing real covers (from Toast) — Toast's history
+  only starts 2026-06-20 (the new location's opening day, per the Toast POS
+  integration section above), so June's actual-covers figure only reflects
+  ~10 days of real Toast data while June's actual-revenue figure covers the
+  whole month. July is the first month clean on both sides. Not fixed here
+  — it's a property of when Toast started tracking, not something this
+  page's math can correct — but worth remembering when reading any
+  pre-July comparison on this tab.
+- **Buyout revenue is bookmarked, not modeled** — explicitly deferred at
+  the user's own request. Urban Hearth budgets for buyout revenue (a
+  private event that buys out a dining area for a guaranteed minimum, in
+  exchange for reducing that month's normal service nights by one), but two
+  things are unresolved: the guaranteed minimum to charge isn't settled
+  (it depends on what a normal night at that capacity/fill-% would
+  otherwise make — now estimable via this tab, but not yet turned into a
+  number), and a buyout night's real economics (fewer regular nights,
+  one bigger guaranteed night) don't fit this table's flat per-night-capacity
+  model without a real design pass. See schema.sql's note above
+  `capacity_areas` and "Not yet done" below.
+
+## Capacity Pace reframed around fill %/per-cover, not revenue pace — 2026-08-07
+
+Same day, after the user reviewed the first version and redirected it: the
+initial build leaned on the same pace/projection framing as Budget
+Pace/Cash Flow (dollar totals, projected month-end), but the user pointed
+out that overall revenue projection is already covered by those other
+tabs. What this page is actually for is narrower and more operational: is
+the restaurant filling seats at the % capacity assumed, and are guests
+spending the per-cover amount assumed — checked at a tighter, more
+frequent grain (last week, this week, last month, this month) than the
+other tabs bother with, so the user can tell whether an *assumption* needs
+revising, not just whether a dollar target was hit. Renamed **Capacity
+Pace** (nav: "Capacity Pace" for the view, "Capacity" for the edit page —
+same asymmetric naming as "Budget Pace"/"Budget") per the user's own
+choice, over "Revenue Pace" (would read as a duplicate of Budget Pace) or
+"Covers & Spend" (loses the pace/goal-tracking framing that's the actual
+point).
+
+- **Fill % and per-cover $ are already rate metrics, which turned out to
+  simplify the whole page** — unlike a dollar total, a partial period's
+  actual-to-date ÷ capacity-to-date is already directly comparable to the
+  assumed rate, with no scale-up/projection needed the way the Budget/Cash
+  Flow tabs need for an in-progress month. `server/api/capacity.get.ts`
+  was rewritten around this: `assumedForRange`/`actualForRange` take an
+  arbitrary date range and return both sides' fill %/per-cover directly:
+  for a still-in-progress period, `actualForRange` just caps the range at
+  `asOfDate` and compares against `assumedForRange` computed over that
+  *same* shortened range — both sides shrink together, so the ratio stays
+  fair. This is also why there's no "Projected" column here the way Budget
+  Pace/Edit Budget have one.
+- **Four quick-look periods — last week, this week, last month, this
+  month** — the day-to-day/week-to-week grain the user asked for, replacing
+  the old two-card (closed month/current month) hero row. Weeks are
+  Monday–Sunday (`mondayOf()` in capacity.get.ts); "this week"/"this month"
+  use the same actual-to-date-vs-capacity-to-date comparison described
+  above, so they're meaningful even a day or two into the period.
+- **`holiday_closures` (a flat monthly count, not specific dates — see
+  schema.sql) can only be subtracted precisely when a date range is exactly
+  one full calendar month** (`holidayAdjustment()` in capacity.get.ts,
+  called from a new shared `assumedForRange`/day-by-day
+  `dayByDaySum()` helper that replaced the old month-only capacity math).
+  Week-level and any partial/to-date range simply doesn't subtract a
+  holiday closure, a known small imprecision (a real holiday week will
+  show a slightly-overstated assumed fill %) — accepted rather than
+  over-engineered, since holidays are rare (6/year) and the *actual* side
+  already reflects reality regardless (a real closure shows up as zero
+  actual covers that day, whether or not the "expected" side knew to skip
+  it).
+- **Per-cover $ is the primary, larger figure on every card; fill % is
+  secondary** — a direct request ("one thing I definitely want to see is a
+  quicker view of that per-cover expenditure"). Both still get their own
+  delta chip (dollar delta for per-cover, percentage-point delta for fill
+  %) using the same good/warning/serious/critical `paceStatus` scale as
+  every other pace card in the app, judged as a ratio of actual-to-assumed
+  in both cases (see `ratioStatus` in `app/pages/capacity/index.vue`).
+- **The old 12-row "all months" table was replaced with Jan–Dec tabs**,
+  mirroring the exact tab pattern already on the Edit Budget page
+  (`app/pages/budget/edit.vue`'s `.month-tabs`) — select a month, see one
+  detail card, rather than scanning a dense table for the one month that
+  matters right now. A future month with no actual data yet still shows
+  its assumed target (fill %, per-cover $, expected revenue) so the tab
+  isn't just blank.
+- **Bookmarked, not built: feeding these micro (per-cover) assumptions
+  forward into the Budget tab's revenue projections**, raised by the user
+  in the same conversation as a longer-term direction — potentially making
+  Budget's revenue line items derived/read-only instead of manually
+  entered, once this tab's fill %/per-cover assumptions are trusted. The
+  user flagged this would require splitting *revenue* itself by beverage
+  category (beer/liquor/wine/non-alcoholic) and food, mirroring the
+  `accounts.subcategory` Food/Beverage split COGS already got (see the
+  Budget tab section's "COGS budgeted as % of revenue" entry above) — a
+  real QBO chart-of-accounts/report-structure change, not something this
+  session investigated. Explicitly deferred by the user ("that might also
+  be something to bookmark for later"); see "Not yet done" below.
+
+## Per-area expected covers replace the blended fill % — 2026-08-07
+
+Same day, same conversation: reviewing the new Edit Capacity page, the user
+said $86.12/cover (the blended per-cover figure) looked low, and asked to
+see — and directly edit — each area's own average nightly covers per
+month, rather than trust one blended number. Asked explicitly whether
+editing that per-area number should become a real per-area override or
+stay a read-only sanity check; the user chose the real override.
+
+- **`capacity_seasonality.expected_pct` is gone.** A new table,
+  `capacity_area_seasonality` (`area_id`, `month`, `expected_covers`,
+  PK on the pair), is now the real editable projection input — one row per
+  area per month, holding a raw nightly-covers target directly (not a %).
+  Storing covers rather than a % was a deliberate choice: a raw forecast
+  number shouldn't silently rescale just because someone edits that area's
+  seat count later — if capacity changes, the covers assumption is
+  something to reconsider, not something that should drift on its own.
+  `capacity_seasonality` still exists, now holding only `holiday_closures`.
+  Expected fill % and blended per-cover $ are still shown, but as derived,
+  read-only figures (`monthDerived()` in `app/pages/capacity/edit.vue`,
+  `nightlyExpectedForMonth()` in `server/api/capacity.get.ts`) computed by
+  summing every area's own `expected_covers` — not a stored, independently
+  editable number anymore.
+- **Migration was a clean re-seed, not a careful in-place migration** —
+  this whole feature was built earlier the same session and had nothing
+  deployed to production yet, so `scripts/import-capacity-projections.mjs`
+  just derives each area's starting `expected_covers` from the original
+  blended `expected_pct` (`capacity * pct`, per area) — reproduces the old
+  model's numbers exactly as a starting point, until the user edits an
+  individual area. Applied locally via a direct `DROP`/`CREATE` on
+  `capacity_seasonality` plus a new `CREATE TABLE` for
+  `capacity_area_seasonality`, then a re-run of the import script — no
+  production volume to worry about yet for these two tables.
+- **`server/api/capacity.get.ts`'s per-day math was already structured
+  around a `nightlyExpectedForMonth(month)`-shaped helper** (from the
+  fill%/per-cover rate-metric rework earlier the same day), so swapping its
+  internals from "capacity × one shared pct" to "sum of each area's own
+  `expected_covers`" was a small, contained change — everything
+  downstream (day-by-day sums, holiday adjustment, week/month periods)
+  was already written against that helper's output shape and needed no
+  changes at all. Verified via curl: `/api/capacity`'s numbers were
+  byte-identical before and after the migration (since the seed
+  reproduces the old blended numbers exactly), and editing one area's
+  `expected_covers` via `POST /api/capacity/settings` correctly moved
+  `/api/capacity`'s `assumedFillPct`/`assumedAvgCheck` by the expected
+  amount before being reverted.
+- **Fixed a real display bug in the same pass**: `(expected_pct *
+  100).toString()` was rendering raw floating-point noise (`57.99999999999
+  9996%` for a stored 0.58, `55.00000000000001%` for 0.55) directly into
+  editable input fields — caught by the user from a screenshot. The new
+  derived Fill %/Per-Cover $ columns are formatted with `.toFixed()`
+  instead of raw `.toString()`, and the new `expected_covers` inputs
+  (themselves often `capacity * pct` floating-point products, e.g.
+  `4.199999999999999`) get rounded before ever reaching an input field —
+  see `roundCovers()`/`fmtPct()`/`fmtMoney2()` in edit.vue.
+- **Every input on the Edit Capacity page is now integer-only except Max
+  Turns/Night and Per-Cover Revenue** — a follow-up simplification request
+  from the user, both to narrow the now-9-column monthly table and because
+  fractional covers (37.6 covers/night) aren't a meaningful thing to type
+  in by hand. Seats/capacity/expected-covers/holiday-closures round via a
+  new `intNum()` helper on save (and are pre-rounded on load); Max
+  Turns/Night and Per-Cover Revenue stay decimal, since $258.56/cover
+  (Chef's Counter) and 2.5 turns/night are real, meaningful fractional
+  values.
+- **Nav tab renamed "Capacity" → "Edit Capacity"**, at the user's explicit
+  request — a deliberate departure from the "Budget Pace"/"Budget"
+  asymmetric-naming convention this tab was originally modeled on (see the
+  "Capacity Pace reframed..." section above). The view stays "Capacity
+  Pace."
+
 ## Not yet done
 
 - A small, low-priority COGS discrepancy (~$1,926.79, ~0.25% of revenue)
@@ -1500,6 +1733,16 @@ number once the investigation was done:
   payment; it doesn't project whether the reserve can keep sustaining
   Jones & Miller's monthly payments indefinitely afterward — see "Real
   running-balance reserve projection" above.
+- Buyout revenue modeling on the Capacity Pace tab — bookmarked at the
+  user's own request 2026-08-07 until a guaranteed-minimum figure exists to
+  model against; see the Capacity tab section above.
+- Feeding Capacity Pace's per-cover assumptions forward into the Budget
+  tab's revenue projections (potentially making Budget's revenue line
+  items derived/read-only) — bookmarked by the user 2026-08-07; would
+  require splitting revenue itself by beverage category (beer/liquor/wine/
+  non-alcoholic) and food, mirroring COGS's existing Food/Beverage split.
+  See "Capacity Pace reframed..." above.
+
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model
@@ -1525,3 +1768,8 @@ number once the investigation was done:
 - [`scripts/init-db.mjs`](scripts/init-db.mjs) — creates the SQLite file from `schema.sql`
 - [`scripts/import-budget-xlsx.mjs`](scripts/import-budget-xlsx.mjs) — one-time seed of accounts + budget from a real QBO budget export
 - `data/qbo-budget-template.xlsx` — sanitized export template (checked in; the real xlsx it came from is not)
+- [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue) — Capacity Pace view (route `/capacity`)
+- [`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue) — editable capacity/turns/per-cover-revenue + monthly fill %/holiday closures (route `/capacity/edit`)
+- [`server/api/capacity.get.ts`](server/api/capacity.get.ts) — Capacity tab's projection-vs-actual data route
+- [`server/api/capacity/settings.get.ts`](server/api/capacity/settings.get.ts) / [`settings.post.ts`](server/api/capacity/settings.post.ts) — load/save capacity assumptions
+- [`scripts/import-capacity-projections.mjs`](scripts/import-capacity-projections.mjs) — one-time seed of `capacity_areas`/`capacity_seasonality` from the real capacity worksheet

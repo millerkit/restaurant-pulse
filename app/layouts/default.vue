@@ -7,6 +7,8 @@
       <NuxtLink to="/budget" exact-active-class="active">Budget Pace</NuxtLink>
       <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
+      <NuxtLink to="/capacity" exact-active-class="active">Capacity Pace</NuxtLink>
+      <NuxtLink to="/capacity/edit" exact-active-class="active">Edit Capacity</NuxtLink>
     </nav>
     <slot />
     <footer class="app-footer">

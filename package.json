@@ -12,6 +12,7 @@
     "db:init": "node scripts/init-db.mjs",
     "db:import-budget": "node scripts/import-budget-xlsx.mjs",
     "db:import-debt-schedule": "node scripts/import-debt-schedule.mjs",
+    "db:import-capacity": "node scripts/import-capacity-projections.mjs",
     "db:backfill-pl": "node --env-file=.env.local scripts/backfill-qbo-pl.mjs",
     "db:backfill-toast": "node --env-file=.env.local scripts/backfill-toast-metrics.mjs",
     "db:seed-benchmarks": "node scripts/seed-category-benchmarks.mjs",
