@@ -1695,8 +1695,121 @@ stay a read-only sanity check; the user chose the real override.
   "Capacity Pace reframed..." section above). The view stays "Capacity
   Pace."
 
+## Capacity Nov–Apr/May–Oct calculated from Seats × Max Turns/Night — 2026-08-08
+
+The two `capacity_areas` seasonal capacity columns were free-typed inputs
+on the Edit Capacity page until now, independent of Seats/Max Turns/Night —
+which had let them silently drift: Salon's stored `capacity_nov_apr`/
+`capacity_may_oct` was 80/80, but 20 seats × 3.0 turns/night is 60, a real
+mismatch caught while making this change, not a hypothetical one. At the
+user's request, both columns are now calculated, not editable —
+`computedCapacity()` in
+[`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue) derives them
+from the Seats/Max Turns/Night drafts (`Math.round(seats *
+maxTurnsPerNight)`), rendered as read-only cells alongside the page's other
+derived columns (Fill %/Per-Cover $). Outdoor is the one exception, per the
+user's instruction: it has no Nov–Apr season at all (stays closed through
+winter) regardless of what Seats × Turns would compute, matched by name
+(`isOutdoor()`, case-insensitive) rather than a stored flag, since it's the
+only area this applies to today.
+
+`capacity_areas.capacity_nov_apr`/`capacity_may_oct` stay real stored
+columns — `server/api/capacity.get.ts`, `capacity/index.vue`'s reference
+table, and `scripts/import-capacity-projections.mjs` all still read them
+directly, unchanged — only how the Edit Capacity page produces the values
+written into them changed. Since a stale stored value (like Salon's) no
+longer has a corresponding editable field for the user to "touch" to make
+the Save button notice it, `hasUnsavedChanges` now also flags a
+`capacityMismatch`: any area whose calculated capacity differs from what's
+currently stored counts as an unsaved change on its own, so a load-time
+mismatch is immediately savable rather than stuck until the user happens to
+edit that row's Seats or Max Turns/Night for an unrelated reason. Verified
+in the browser: Salon showed 60/60 (not the stale 80/80) with the page
+already flagging "Unsaved changes" on load; clicking Save persisted 60/60
+to local `data/restaurant.sqlite` and the mismatch flag cleared on reload.
+Production's `capacity_areas` table has the same stale Salon values and
+hasn't been corrected yet — this only shipped to local dev in this pass.
+
+## "Set %" — bidirectional Fill % on the Edit Capacity page — 2026-08-09
+
+Added at the user's request, after asking whether editing a blended Fill %
+could drive each area's expected covers instead of only the other way
+around. Flagged one real risk before building it: this is the same
+blended-% assumption the 2026-08-07 change deliberately moved away from
+(see "Per-area expected covers replace the blended fill %" above) — bar,
+salon, chef's counter etc. don't really fill at the same rate, and a live
+two-way-bound % field would silently clobber any differentiated per-area
+figures the moment it recalculated. Landed on a middle ground: **"Set %" is
+an explicit one-shot action (a button), not a persistent editable field**,
+so overwriting a row's per-area assumptions is something the user chooses
+to do, not an ambient side effect of the derived Fill % column existing.
+
+- **`applySetPct(s)`** in
+  [`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue) writes into
+  every area's covers input for that month row, reusing the same
+  `areaCapacityForMonth` helper the derived Fill %/Per-Cover $ columns
+  already use — so a closed season (Outdoor Nov–Apr, capacity 0) naturally
+  lands on 0 covers with no special-casing needed.
+- **Kept out of the unsaved-changes diff until applied**: the scratch `%`
+  input lives in its own `setPctInputs` ref, not on `MonthlyDraft`/
+  `draftSnapshot`, so typing into it doesn't flag "Unsaved changes" —
+  only clicking "Set" does (by writing into `areaCoversInput`, which was
+  already tracked). The input clears itself after a successful apply.
+  "Set" is disabled until the typed value parses as a finite number ≥ 0.
+- **Verified in the browser**: typing 50 and clicking "Set" on the January
+  row (Nov–Apr season, Dining 80/Bar 40/Salon 60/Chef's Counter 12/Outdoor
+  closed) correctly wrote Dining 40, Bar 20, Salon 30, Chef's Counter 6,
+  Outdoor 0 — Fill % updated to 50.0% and Per-Cover $ recalculated
+  accordingly, all before saving.
+
+**Repositioned + rounding fixed, same day**, after the user tried it with
+their own real (non-round) Seats/Turns numbers and got 50.3% back from a
+typed 50%. Two follow-up changes:
+
+- **Moved the Set % input/button (plus a `→` between it and the area
+  columns) into its own column right after Month**, ahead of Dining Room —
+  at the user's request, so the control that drives the row reads
+  left-to-right before the values it's about to overwrite, rather than
+  sitting after them next to the now-purely-derived Fill % column. Fill %
+  went back to being a plain read-only `.derived` cell, same as
+  Per-Cover $.
+- **`applySetPct` now rounds by largest remainder, not independently per
+  area** — the real bug behind the 50% → 50.3% report. The original
+  `Math.round(pct × areaCapacity)` per area let up to five independent
+  0.5-cover roundings drift in the *same* direction (`Math.round` always
+  rounds a `.5` up), compounding into a visibly-off blended Fill %.
+  The fix computes each area's exact (unrounded) share, floors all of
+  them, computes the *total's* own rounding once
+  (`Math.round(pct × totalCapacity)`), and hands out just that many
+  leftover whole covers to the areas with the largest fractional
+  remainder. This bounds the drift to at most the total's own rounding
+  (well under a tenth of a point in practice) instead of letting per-area
+  roundings stack. Verified against a deliberately fractional test case
+  (Bar 10 seats × 1.7 turns = 17, Salon 15 × 1 = 15, Chef's Counter 6 ×
+  1.5 = 9, alongside Dining 80/Outdoor closed — total capacity 121, not
+  evenly divisible by 2): typing 50% now produces Dining 40/Bar 9/Salon
+  8/Chef's Counter 4 (61 covers, matching `round(0.5 × 121) = 61` exactly)
+  and displays 50.4% — the closest any integer split of 121 covers can get
+  to 50%, not the old method's larger, avoidable drift.
+
+**Column alignment, same day** — the user flagged that right-aligned
+header text sitting above narrow, right-aligned input boxes read as
+misaligned, and that wide headers like "Chefs Counter"/"Holiday Closures"
+were forcing extra column width they didn't need. Both `.pl-table`s now
+center every column except the leftmost (Area/Month, still left-aligned) —
+`.pl-table th, .pl-table td { text-align: center }`, with `.money-cell`/
+`.setpct-cell`'s flex rows switched from `justify-content: flex-end` to
+`center` so the input(s) inside them center too, not just plain-text cells.
+Header labels now wrap (`.pl-table thead th { white-space: normal }`,
+overriding the general `nowrap` every other cell keeps) instead of forcing
+their column to their own single-line width, so a narrow input column can
+sit under a 2-line header instead of stretching to fit it.
+
 ## Not yet done
 
+- Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
+  production and saving once there to correct Salon's stale stored capacity
+  (80/80 vs. the correct 60/60) — done in local dev only so far.
 - A small, low-priority COGS discrepancy (~$1,926.79, ~0.25% of revenue)
   surfaced by the net income investigation above, not yet root-caused —
   called closed for now given its size relative to everything else found

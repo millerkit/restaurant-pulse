@@ -16,6 +16,9 @@ const { data, pending, error, refresh } = await useFetch<{ areas: AreaRow[], sea
 function isMayThroughOct(month: number): boolean {
   return month >= 5 && month <= 10
 }
+function isOutdoor(name: string): boolean {
+  return name.trim().toLowerCase() === 'outdoor'
+}
 // Every input on this page is integer-only except Max Turns/Night and
 // Per-Cover Revenue (added 2026-08-07, at the user's request, to save
 // horizontal space and simplify data entry) — capacity * fill % (the seed
@@ -29,11 +32,11 @@ function roundCovers(n: number): number {
 // Editable drafts, separate from the loaded data so unsaved edits don't
 // leak into anything else and a failed save doesn't need a re-fetch to
 // recover a clean baseline to diff against — same split budget/edit.vue
-// already uses between loaded data and in-progress edits. capacity_nov_apr
-// is edited as a plain string so "closed this season" (null) can be
-// represented as an empty field rather than a magic number like 0 (0 would
-// mean "open, zero capacity," a different real state).
-type AreaDraft = { id: number, name: string, seats: string, maxTurnsPerNight: string, capacityNovApr: string, capacityMayOct: string, perCoverRevenue: string }
+// already uses between loaded data and in-progress edits. Capacity
+// Nov-Apr/May-Oct are no longer directly editable (2026-08-08) — they're
+// calculated from Seats × Max Turns/Night, so they aren't part of the
+// draft shape at all; see computedCapacity() below.
+type AreaDraft = { id: number, name: string, seats: string, maxTurnsPerNight: string, perCoverRevenue: string }
 // One row per month: holiday closures (unchanged) plus each area's own
 // expected nightly covers, keyed by area id — the real editable projection
 // input as of 2026-08-07 (replacing a single blended Expected Fill %),
@@ -43,6 +46,11 @@ type MonthlyDraft = { month: number, holidayClosuresInput: string, areaCoversInp
 
 const areaDrafts = ref<AreaDraft[]>([])
 const monthlyDrafts = ref<MonthlyDraft[]>([])
+// Scratch input for the "Set %" quick-fill action below — deliberately kept
+// out of MonthlyDraft/draftSnapshot (see applySetPct) so typing into it
+// doesn't itself count as an unsaved change; only the per-area covers it
+// writes on Apply do.
+const setPctInputs = ref<Record<number, string>>({})
 
 function loadDrafts() {
   areaDrafts.value = (data.value?.areas ?? []).map(a => ({
@@ -50,8 +58,6 @@ function loadDrafts() {
     name: a.name,
     seats: String(Math.round(a.seats)),
     maxTurnsPerNight: String(a.max_turns_per_night),
-    capacityNovApr: a.capacity_nov_apr == null ? '' : String(Math.round(a.capacity_nov_apr)),
-    capacityMayOct: String(Math.round(a.capacity_may_oct)),
     perCoverRevenue: String(a.per_cover_revenue)
   }))
   const areaMonthMap = new Map((data.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
@@ -60,6 +66,7 @@ function loadDrafts() {
     holidayClosuresInput: String(s.holiday_closures),
     areaCoversInput: Object.fromEntries(areaDrafts.value.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`) ?? 0))]))
   }))
+  setPctInputs.value = Object.fromEntries(monthlyDrafts.value.map(s => [s.month, '']))
 }
 watch(data, loadDrafts, { immediate: true })
 
@@ -70,8 +77,7 @@ const draftSnapshot = computed(() => JSON.stringify({ areaDrafts: areaDrafts.val
 const cleanDraftSnapshot = computed(() => {
   const areas = (data.value?.areas ?? []).map(a => ({
     id: a.id, name: a.name, seats: String(Math.round(a.seats)), maxTurnsPerNight: String(a.max_turns_per_night),
-    capacityNovApr: a.capacity_nov_apr == null ? '' : String(Math.round(a.capacity_nov_apr)),
-    capacityMayOct: String(Math.round(a.capacity_may_oct)), perCoverRevenue: String(a.per_cover_revenue)
+    perCoverRevenue: String(a.per_cover_revenue)
   }))
   const areaMonthMap = new Map((data.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   const monthly = (data.value?.seasonality ?? []).map(s => ({
@@ -81,16 +87,47 @@ const cleanDraftSnapshot = computed(() => {
   }))
   return JSON.stringify({ areaDrafts: areas, monthlyDrafts: monthly })
 })
-const hasUnsavedChanges = computed(() => draftSnapshot.value !== cleanDraftSnapshot.value)
+// Capacity Nov-Apr/May-Oct are calculated, not edited — but they're still
+// stored columns other pages/scripts read directly, so a mismatch between
+// what's currently in the DB and what Seats × Max Turns/Night computes
+// right now (e.g. a row whose capacity was hand-edited before this change,
+// or last saved before an intervening Seats/Turns edit was applied
+// elsewhere) needs to count as an unsaved change too — otherwise the Save
+// button stays disabled and the stale stored value never gets corrected
+// until the user happens to also touch Seats or Max Turns/Night.
+const capacityMismatch = computed(() => {
+  return areaDrafts.value.some(a => {
+    const row = data.value?.areas.find(r => r.id === a.id)
+    if (!row) return false
+    return computedCapacity(a, 'novApr') !== row.capacity_nov_apr || computedCapacity(a, 'mayOct') !== row.capacity_may_oct
+  })
+})
+const hasUnsavedChanges = computed(() => draftSnapshot.value !== cleanDraftSnapshot.value || capacityMismatch.value)
+
+// Capacity Nov-Apr/May-Oct is calculated from Seats × Max Turns/Night
+// (added 2026-08-08, at the user's request, replacing free-typed capacity
+// figures that could silently drift from those two inputs). Outdoor has no
+// Nov-Apr season at all — it stays closed through winter, same as the old
+// "leave it blank" convention — every other area gets both seasons.
+// Returns null for "closed this season," never for invalid input (an
+// unparseable Seats/Turns draft surfaces as NaN instead, same as any other
+// numeric field on this page, so save-time validation still catches it).
+function computedCapacity(a: AreaDraft, season: 'novApr' | 'mayOct'): number | null {
+  if (season === 'novApr' && isOutdoor(a.name)) return null
+  return Math.round(num(a.seats) * num(a.maxTurnsPerNight))
+}
+function fmtCapacity(n: number | null): string {
+  return n == null ? 'closed' : (Number.isFinite(n) ? String(n) : '—')
+}
 
 // Live-derived Fill %/Per-Cover $ for a month, recomputed from the
 // in-progress drafts (not the loaded data) so an edit shows its effect
 // immediately, before saving — same per-area capacity/per-cover-revenue
 // math as server/api/capacity.get.ts's nightlyExpectedForMonth.
 function areaCapacityForMonth(a: AreaDraft, month: number): number {
-  const raw = isMayThroughOct(month) ? a.capacityMayOct : a.capacityNovApr
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : 0
+  const cap = isMayThroughOct(month) ? computedCapacity(a, 'mayOct') : computedCapacity(a, 'novApr')
+  if (cap == null || !Number.isFinite(cap)) return 0
+  return cap
 }
 function monthDerived(s: MonthlyDraft) {
   let covers = 0, revenue = 0, maxCovers = 0
@@ -111,6 +148,53 @@ function fmtPct(n: number | null): string {
 }
 function fmtMoney2(n: number | null): string {
   return n == null ? '—' : n.toFixed(2)
+}
+
+function isValidPct(raw: string | undefined): boolean {
+  const n = Number(raw)
+  return (raw ?? '').trim() !== '' && Number.isFinite(n) && n >= 0
+}
+// "Set %" (added 2026-08-09, at the user's request) applies one blended
+// fill % equally across every area's own capacity for that month and
+// overwrites whatever per-area covers were there before. Deliberately a
+// one-shot action (a button), not a live two-way-bound field: syncing it
+// continuously both directions would fight with direct per-area edits and
+// risk update loops. A closed-season area (areaCapacityForMonth already
+// returns 0 for that case, e.g. Outdoor Nov-Apr) naturally stays at 0
+// covers — no special-casing needed here beyond reusing that helper.
+//
+// Uses largest-remainder rounding rather than rounding each area
+// independently (Math.round per area, the first version of this) — caught
+// by the user hitting a real 50% typed -> 50.3% shown gap: five
+// independently-rounded areas can each drift up to 0.5 of a cover in the
+// same direction, and those drifts compound in the summed Fill % instead
+// of cancelling out. Largest-remainder first computes the exact
+// (unrounded) share per area, floors every one, then hands out the
+// leftover whole covers (the total's own rounding, computed once) to the
+// areas with the largest fractional remainder — so the summed result
+// matches round(fraction × total capacity) exactly, and the displayed
+// Fill % can only be off from what was typed by the total's own rounding,
+// not by up to n× that.
+function applySetPct(s: MonthlyDraft) {
+  const raw = setPctInputs.value[s.month]
+  if (!isValidPct(raw)) return
+  const fraction = Number(raw) / 100
+  const areas = areaDrafts.value
+  const exact = areas.map(a => fraction * areaCapacityForMonth(a, s.month))
+  const totalCapacity = areas.reduce((sum, a) => sum + areaCapacityForMonth(a, s.month), 0)
+  const totalTarget = Math.round(fraction * totalCapacity)
+  const floors = exact.map(Math.floor)
+  const floorSum = floors.reduce((sum, v) => sum + v, 0)
+  const order = floors
+    .map((_, i) => i)
+    .sort((x, y) => (exact[y] - floors[y]) - (exact[x] - floors[x]))
+  const result = [...floors]
+  let leftover = Math.max(0, totalTarget - floorSum)
+  for (let k = 0; k < order.length && leftover > 0; k++, leftover--) {
+    result[order[k]] += 1
+  }
+  areas.forEach((a, i) => { s.areaCoversInput[a.id] = String(result[i]) })
+  setPctInputs.value[s.month] = ''
 }
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
@@ -147,8 +231,8 @@ async function save() {
       id: a.id,
       seats: intNum(a.seats),
       maxTurnsPerNight: num(a.maxTurnsPerNight),
-      capacityNovApr: a.capacityNovApr.trim() === '' ? null : intNum(a.capacityNovApr),
-      capacityMayOct: intNum(a.capacityMayOct),
+      capacityNovApr: computedCapacity(a, 'novApr'),
+      capacityMayOct: computedCapacity(a, 'mayOct') ?? NaN,
       perCoverRevenue: num(a.perCoverRevenue)
     }))
     const seasonality = monthlyDrafts.value.map(s => ({
@@ -207,11 +291,11 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Per-Area Capacity &amp; Revenue</div>
-          <div class="section-note">Leave "Capacity Nov–Apr" blank if the area is closed that season (e.g. outdoor).</div>
+          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
-            <caption>Editable per-area capacity and revenue assumptions</caption>
+            <caption>Editable per-area seats, turns/night, and revenue assumptions, with calculated seasonal capacity</caption>
             <thead>
               <tr>
                 <th scope="col">Area</th>
@@ -227,8 +311,8 @@ async function save() {
                 <th scope="row" style="text-transform: capitalize;">{{ a.name }}</th>
                 <td><input v-model="a.seats" class="cell-input" inputmode="numeric" /></td>
                 <td><input v-model="a.maxTurnsPerNight" class="cell-input decimal" inputmode="decimal" /></td>
-                <td><input v-model="a.capacityNovApr" class="cell-input" inputmode="numeric" placeholder="closed" /></td>
-                <td><input v-model="a.capacityMayOct" class="cell-input" inputmode="numeric" /></td>
+                <td class="derived">{{ fmtCapacity(computedCapacity(a, 'novApr')) }}</td>
+                <td class="derived">{{ fmtCapacity(computedCapacity(a, 'mayOct')) }}</td>
                 <td class="money-cell">$<input v-model="a.perCoverRevenue" class="cell-input decimal" inputmode="decimal" /></td>
               </tr>
             </tbody>
@@ -239,14 +323,15 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Expected Nightly Covers by Area &amp; Holiday Closures</div>
-          <div class="section-note">Average nightly covers per area, by month — edit these directly. Fill % and Per-Cover $ are derived from them, shown for reference. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
+          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set %" to apply one fill % equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Fill % and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
-            <caption>Editable monthly expected covers per area, derived fill percentage and per-cover revenue, and holiday closure counts</caption>
+            <caption>Editable monthly expected covers per area, a quick-set blended fill percentage, derived fill percentage and per-cover revenue, and holiday closure counts</caption>
             <thead>
               <tr>
                 <th scope="col">Month</th>
+                <th scope="col">Set %</th>
                 <th v-for="a in areaDrafts" :key="a.id" scope="col" style="text-transform: capitalize;">{{ a.name }}</th>
                 <th scope="col">Fill %</th>
                 <th scope="col">Per-Cover $</th>
@@ -256,6 +341,16 @@ async function save() {
             <tbody>
               <tr v-for="s in monthlyDrafts" :key="s.month">
                 <th scope="row">{{ MONTH_NAMES[s.month - 1] }}</th>
+                <td class="setpct-cell">
+                  <input v-model="setPctInputs[s.month]" class="cell-input narrow" inputmode="decimal" placeholder="%" />
+                  <button
+                    type="button"
+                    class="apply-pct-btn"
+                    :disabled="!isValidPct(setPctInputs[s.month])"
+                    @click="applySetPct(s)"
+                  >Set</button>
+                  <span class="setpct-arrow" aria-hidden="true">→</span>
+                </td>
                 <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>
                 <td class="derived">{{ fmtPct(monthDerived(s).fillPct) }}</td>
                 <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
@@ -299,9 +394,14 @@ async function save() {
 }
 table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
 .pl-table caption { display: none; }
-.pl-table th, .pl-table td { padding: 10px 16px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pl-table th, .pl-table td { padding: 10px 12px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pl-table th:first-child, .pl-table td:first-child { text-align: left; white-space: normal; }
-.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink-3); border-bottom: 1px solid var(--hair); }
+/* Header labels wrap instead of forcing their column wide (added
+   2026-08-09, at the user's request) — "Chefs Counter"/"Holiday Closures"/
+   "Per-Cover Revenue" no longer set the column width on their own; the
+   narrow input boxes now do, and center comfortably under a 2-line
+   header. */
+.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink-3); border-bottom: 1px solid var(--hair); white-space: normal; }
 .pl-table tbody th { text-align: left; font-weight: 600; font-size: 13px; color: var(--ink); }
 .pl-table tbody tr { border-bottom: 1px solid var(--hair); }
 .pl-table tbody tr:last-child { border-bottom: none; }
@@ -323,8 +423,23 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
    values here are 1-3 digits. */
 .cell-input.narrow { width: 40px; }
 .cell-input.decimal { width: 72px; }
-.money-cell { display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
+.money-cell { display: flex; align-items: center; justify-content: center; gap: 3px; }
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.setpct-cell { display: flex; align-items: center; justify-content: center; gap: 5px; }
+.setpct-arrow { color: var(--ink-3); font-size: 14px; }
+.apply-pct-btn {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--hair);
+  background: var(--surface-alt);
+  color: var(--ink);
+  cursor: pointer;
+}
+.apply-pct-btn:disabled { opacity: 0.4; cursor: default; }
+.apply-pct-btn:not(:disabled):hover { background: var(--accent); color: white; border-color: var(--accent); }
 
 .save-bar { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; }
 .save-btn {
