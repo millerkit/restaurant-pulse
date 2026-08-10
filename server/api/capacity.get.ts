@@ -25,7 +25,7 @@
 type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
   capacity_nov_apr: number | null, capacity_may_oct: number | null,
-  per_cover_revenue: number, notes: string | null
+  per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null
 }
 type HolidayRow = { month: number, holiday_closures: number }
 type AreaMonthRow = { area_id: number, month: number, expected_covers: number }
@@ -78,15 +78,22 @@ export default defineEventHandler(() => {
   // Expected covers/revenue for a month, summed across every area's own
   // expected_covers (the real editable projection input) — plus the raw
   // max capacity (every seat, every turn) used as the fill % denominator.
+  // revenue is split Food/Beverage (per_cover_revenue_food/
+  // per_cover_revenue_beverage — see schema.sql's capacity_areas comment)
+  // so the Edit Budget page's "Recompute Revenue from Capacity" action (see
+  // CLAUDE.md) has a real target for each of the Food (4010) and Beverage
+  // (4022/4024/4026/4028) revenue account groups, not just a blended total.
+  // revenue is always revenueFood + revenueBeverage.
   function nightlyExpectedForMonth(month: number) {
-    let covers = 0, revenue = 0, maxCovers = 0
+    let covers = 0, revenueFood = 0, revenueBeverage = 0, maxCovers = 0
     for (const area of areas) {
       const c = areaMonth.get(`${area.id}:${month}`) ?? 0
       covers += c
-      revenue += c * area.per_cover_revenue
+      revenueFood += c * area.per_cover_revenue_food
+      revenueBeverage += c * area.per_cover_revenue_beverage
       maxCovers += areaCapacity(area, month)
     }
-    return { covers, revenue, maxCovers }
+    return { covers, revenue: revenueFood + revenueBeverage, revenueFood, revenueBeverage, maxCovers }
   }
 
   // Day-by-day sum over [startIso, endIso] — handles a range spanning a
@@ -96,7 +103,7 @@ export default defineEventHandler(() => {
   // see schema.sql) — see holidayAdjustment below for the one case (an
   // exact full calendar month) where that count can be applied precisely.
   function dayByDaySum(startIso: string, endIso: string) {
-    let expectedCovers = 0, expectedRevenue = 0, maxCovers = 0, operatingDays = 0
+    let expectedCovers = 0, expectedRevenue = 0, expectedRevenueFood = 0, expectedRevenueBeverage = 0, maxCovers = 0, operatingDays = 0
     let d = new Date(`${startIso}T00:00:00Z`)
     const end = new Date(`${endIso}T00:00:00Z`)
     while (d <= end) {
@@ -105,12 +112,14 @@ export default defineEventHandler(() => {
         const nightly = nightlyExpectedForMonth(m)
         expectedCovers += nightly.covers
         expectedRevenue += nightly.revenue
+        expectedRevenueFood += nightly.revenueFood
+        expectedRevenueBeverage += nightly.revenueBeverage
         maxCovers += nightly.maxCovers
         operatingDays++
       }
       d.setUTCDate(d.getUTCDate() + 1)
     }
-    return { expectedCovers, expectedRevenue, maxCovers, operatingDays }
+    return { expectedCovers, expectedRevenue, expectedRevenueFood, expectedRevenueBeverage, maxCovers, operatingDays }
   }
 
   // Only applies when [startIso, endIso] is exactly one full calendar
@@ -127,6 +136,8 @@ export default defineEventHandler(() => {
     return {
       covers: nightly.covers * holidayClosures,
       revenue: nightly.revenue * holidayClosures,
+      revenueFood: nightly.revenueFood * holidayClosures,
+      revenueBeverage: nightly.revenueBeverage * holidayClosures,
       maxCovers: nightly.maxCovers * holidayClosures,
       days: holidayClosures
     }
@@ -142,12 +153,20 @@ export default defineEventHandler(() => {
     const adj = holidayAdjustment(startIso, endIso)
     const expectedCovers = sum.expectedCovers - (adj?.covers ?? 0)
     const expectedRevenue = sum.expectedRevenue - (adj?.revenue ?? 0)
+    const expectedRevenueFood = sum.expectedRevenueFood - (adj?.revenueFood ?? 0)
+    const expectedRevenueBeverage = sum.expectedRevenueBeverage - (adj?.revenueBeverage ?? 0)
     const maxCapacityCovers = sum.maxCovers - (adj?.maxCovers ?? 0)
     const operatingDays = sum.operatingDays - (adj?.days ?? 0)
     return {
       operatingDays,
       expectedCovers,
       expectedRevenue,
+      // Food/Beverage split of expectedRevenue — see nightlyExpectedForMonth
+      // above — consumed by the Edit Budget page's "Recompute Revenue from
+      // Capacity" action, which only ever calls this for a full calendar
+      // month (see CLAUDE.md).
+      expectedRevenueFood,
+      expectedRevenueBeverage,
       maxCapacityCovers,
       assumedFillPct: maxCapacityCovers > 0 ? expectedCovers / maxCapacityCovers : null,
       assumedAvgCheck: expectedCovers > 0 ? expectedRevenue / expectedCovers : null

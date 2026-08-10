@@ -96,9 +96,35 @@ function isMayThroughOct(month) {
 }
 
 const db = new Database(dbPath)
+
+// per_cover_revenue was split into per_cover_revenue_food/
+// per_cover_revenue_beverage 2026-08-10 (see schema.sql's capacity_areas
+// comment) — this worksheet only ever had one blended figure per area, so
+// each area's per_cover_revenue is split using this restaurant's own
+// trailing actual Food/Beverage revenue ratio (core dine-in accounts only),
+// same derivation as scripts/migrate-capacity-revenue-split.mjs. Falls back
+// to a flat split if there's no revenue data yet (e.g. a brand-new
+// environment running this before any QBO sync/backfill).
+const FALLBACK_FOOD_PCT = 0.65
+const revenueByGroup = db.prepare(`
+  SELECT a.subcategory AS grp, SUM(dli.amount) AS total
+  FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+  WHERE a.category = 'revenue' AND a.account_number IN ('4010', '4020', '4022', '4024', '4026', '4028')
+  GROUP BY a.subcategory
+`).all()
+const foodActual = revenueByGroup.find(r => r.grp === 'Food')?.total ?? 0
+const beverageActual = revenueByGroup.find(r => r.grp === 'Beverage')?.total ?? 0
+const actualTotal = foodActual + beverageActual
+const foodPct = actualTotal > 0 ? foodActual / actualTotal : FALLBACK_FOOD_PCT
+
+for (const a of areas) {
+  a.per_cover_revenue_food = Math.round(a.per_cover_revenue * foodPct * 100) / 100
+  a.per_cover_revenue_beverage = Math.round((a.per_cover_revenue - a.per_cover_revenue_food) * 100) / 100
+}
+
 const insertArea = db.prepare(`
-  INSERT INTO capacity_areas (name, seats, max_turns_per_night, capacity_nov_apr, capacity_may_oct, per_cover_revenue, notes)
-  VALUES (@name, @seats, @max_turns_per_night, @capacity_nov_apr, @capacity_may_oct, @per_cover_revenue, @notes)
+  INSERT INTO capacity_areas (name, seats, max_turns_per_night, capacity_nov_apr, capacity_may_oct, per_cover_revenue_food, per_cover_revenue_beverage, notes)
+  VALUES (@name, @seats, @max_turns_per_night, @capacity_nov_apr, @capacity_may_oct, @per_cover_revenue_food, @per_cover_revenue_beverage, @notes)
 `)
 const insertMonth = db.prepare(`
   INSERT INTO capacity_seasonality (month, holiday_closures) VALUES (@month, @holiday_closures)

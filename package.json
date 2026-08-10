@@ -18,7 +18,8 @@
     "db:seed-benchmarks": "node scripts/seed-category-benchmarks.mjs",
     "db:seed-dev-actuals": "node scripts/seed-dev-actuals.mjs",
     "db:pull-accounts": "node scripts/pull-accounts-from-prod.mjs",
-    "db:migrate-other-categories": "node scripts/migrate-other-categories.mjs"
+    "db:migrate-other-categories": "node scripts/migrate-other-categories.mjs",
+    "db:migrate-capacity-revenue-split": "node scripts/migrate-capacity-revenue-split.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

@@ -811,6 +811,143 @@ async function recomputeCogsFromTrailingAverage() {
   }
 }
 
+// ---- Revenue from Capacity assumptions -----------------------------------
+// The Capacity tab (app/pages/capacity/edit.vue) already models a real
+// bottom-up revenue projection — per-area expected covers x per-cover
+// Food/Beverage revenue (see schema.sql's capacity_areas comment and
+// server/api/capacity.get.ts) — so rather than typing a Revenue budget in
+// twice, this pulls that same month's Capacity-projected Food/Beverage
+// revenue and offers to write it into the real Food (4010)/Beverage
+// (4022/4024/4026/4028) revenue accounts. Mechanically this mirrors the
+// COGS recompute above (weighted redistribution across a group's leaf
+// accounts, by each account's existing share), but the source is Capacity's
+// projection model directly, not a trailing average of past months — unlike
+// COGS, Revenue isn't itself a % of some other total; Capacity's covers x
+// per-cover model IS the projection.
+//
+// Restricted to leaf accounts (no children) via isLeafAccount, unlike
+// groupRevenueBudget/currentGroupPct above (used only by the COGS section,
+// left as-is) — 4020 Restaurant Beverage is a parent whose own stored
+// budget_targets amount happens to always be 0 today, so including it there
+// is harmless by convention, not by filtering. Excluding it here avoids
+// relying on that same convention for a brand-new write path.
+type CapacityAssumedMonth = { expectedRevenueFood: number, expectedRevenueBeverage: number }
+type CapacityMonth = { month: number, assumed: CapacityAssumedMonth }
+const capacityMonths = ref<CapacityMonth[] | null>(null)
+async function loadCapacityMonths() {
+  try {
+    const result = await $fetch<{ months: CapacityMonth[] }>('/api/capacity')
+    capacityMonths.value = result.months?.length ? result.months : null
+  } catch {
+    capacityMonths.value = null // Capacity tab has no data yet (e.g. a brand-new environment) — recompute banner just stays hidden
+  }
+}
+onMounted(loadCapacityMonths)
+
+function capacityTargetForMonth(month: number): CapacityAssumedMonth | null {
+  return capacityMonths.value?.find(m => m.month === month)?.assumed ?? null
+}
+
+function leafRevenueAccountsForGroup(data: MonthData, group: 'Food' | 'Beverage'): BudgetAccount[] {
+  return data.accounts.filter(a => a.category === 'revenue' && a.subcategory === group && isLeafAccount(a))
+}
+function currentGroupRevenueBudget(data: MonthData, group: 'Food' | 'Beverage'): number {
+  return leafRevenueAccountsForGroup(data, group).reduce((sum, a) => sum + (a.amount || 0), 0)
+}
+
+// Real Beer/Liquor/Wine/Non-Alcoholic revenue mix (accounts 4022/4024/4026/
+// 4028 — never the COGS-side beverage cost accounts) since the location
+// move, from server/api/budget/beverage-revenue-mix.get.ts. Used below to
+// split a month's Capacity-projected Beverage $ by how guests actually
+// spend, instead of by whatever mix happens to already be budgeted for the
+// month being edited (the fallback every other group here still uses).
+type BeverageMixAccount = { accountId: number, accountNumber: string | null, name: string, pct: number | null }
+const beverageRevenueMix = ref<BeverageMixAccount[] | null>(null)
+async function loadBeverageRevenueMix() {
+  try {
+    const result = await $fetch<{ hasData: boolean, accounts: BeverageMixAccount[] }>('/api/budget/beverage-revenue-mix')
+    beverageRevenueMix.value = result.hasData ? result.accounts : null
+  } catch {
+    beverageRevenueMix.value = null // falls back to existing-budget-weight below
+  }
+}
+onMounted(loadBeverageRevenueMix)
+
+// Short label for the banner below, e.g. "Beer 3%, Liquor 42%, Wine 51%,
+// Non-Alcoholic 4%" — so the mix the recompute button is about to apply is
+// visible before clicking, not just implied by the resulting dollar split.
+const beverageMixLabel = computed(() => {
+  const mix = beverageRevenueMix.value
+  if (!mix) return null
+  return mix.map(m => `${m.name.replace(/^Restaurant /, '')} ${Math.round((m.pct ?? 0) * 100)}%`).join(', ')
+})
+
+// $1 threshold (not a %, unlike COGS_RECOMPUTE_THRESHOLD) since both sides
+// here are already dollar amounts — avoids the banner flapping on sub-dollar
+// rounding from the recompute's own per-account weighting.
+const REVENUE_RECOMPUTE_THRESHOLD = 1
+function revenueComparisons() {
+  const data = editMonthData.value
+  const target = capacityTargetForMonth(editMonth.value)
+  if (!data || viewingAnnualTotal.value || !target) return []
+  return (['Food', 'Beverage'] as const).map(group => ({
+    group,
+    targetAmount: group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage,
+    currentAmount: currentGroupRevenueBudget(data, group)
+  }))
+}
+const revenueHasCapacityData = computed(() => capacityTargetForMonth(editMonth.value) !== null)
+const revenueNeedsRecompute = computed(() =>
+  revenueComparisons().some(c => Math.abs(c.currentAmount - c.targetAmount) > REVENUE_RECOMPUTE_THRESHOLD)
+)
+
+const revenueRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const revenueRecomputeMessage = ref('')
+
+async function recomputeRevenueFromCapacity() {
+  revenueRecomputeStatus.value = 'running'
+  try {
+    const data = editMonthData.value
+    if (!data) throw new Error('Budget data not loaded yet')
+    const target = capacityTargetForMonth(editMonth.value)
+    if (!target) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Edit Capacity page`)
+
+    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+    const summary: string[] = []
+    for (const group of ['Food', 'Beverage'] as const) {
+      const groupTarget = group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage
+      const accounts = leafRevenueAccountsForGroup(data, group)
+      if (accounts.length === 0) continue
+      // Beverage prefers the real Beer/Liquor/Wine/Non-Alcoholic mix
+      // (beverageRevenueMix, from actual sales since the location move) over
+      // this group's existing budget weight — Food has only one account
+      // (4010), so there's no mix to speak of; it always uses its existing
+      // weight (trivially 100%).
+      const mixByAccountId = group === 'Beverage'
+        ? new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
+        : null
+      const usingRealMix = !!mixByAccountId && accounts.every(a => mixByAccountId.get(a.accountId) != null)
+      const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
+      for (const a of accounts) {
+        const weight = usingRealMix
+          ? (mixByAccountId!.get(a.accountId) ?? 0)
+          : (oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length)
+        targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(groupTarget * weight * 100) / 100 })
+      }
+      summary.push(`${group} $${Math.round(groupTarget).toLocaleString()}${group === 'Beverage' ? (usingRealMix ? ' (real Beer/Liquor/Wine/N-A mix)' : ' (no sales mix data yet — used existing budget weight)') : ''}`)
+    }
+    if (targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
+
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await loadYear()
+    revenueRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} Revenue from Capacity assumptions: ${summary.join(', ')}.`
+    revenueRecomputeStatus.value = 'done'
+  } catch (err: any) {
+    revenueRecomputeStatus.value = 'error'
+    revenueRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
+  }
+}
+
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const saveMessage = ref('')
 
@@ -922,6 +1059,8 @@ const actionMessage = ref('')
 watch(editMonth, () => {
   cogsRecomputeStatus.value = 'idle'
   cogsRecomputeMessage.value = ''
+  revenueRecomputeStatus.value = 'idle'
+  revenueRecomputeMessage.value = ''
   actionStatus.value = 'idle'
   actionMessage.value = ''
   saveStatus.value = 'idle'
@@ -1195,6 +1334,23 @@ function exportForQuickBooks() {
                     </td>
                   </tr>
                 </template>
+                <tr v-if="cat === 'revenue' && revenueHasCapacityData" class="cogs-avg-row">
+                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
+                    <div class="section-note">
+                      From the <NuxtLink to="/capacity/edit">Capacity tab's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
+                      Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>,
+                      Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
+                      <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
+                      <template v-else>(no real Beer/Liquor/Wine/Non-Alcoholic sales mix yet — will split by whatever's already budgeted)</template>.
+                      <button v-if="revenueNeedsRecompute" class="mini-btn" :disabled="revenueRecomputeStatus === 'running'" @click="recomputeRevenueFromCapacity">
+                        Recompute {{ MONTH_NAMES[editMonth - 1] }} Revenue from Capacity
+                      </button>
+                      <span v-else-if="revenueRecomputeStatus !== 'done'" class="chip neutral">Already tracking the Capacity projection</span>
+                      <span v-if="revenueRecomputeStatus === 'done'" class="chip good">{{ revenueRecomputeMessage }}</span>
+                      <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
+                    </div>
+                  </td>
+                </tr>
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">

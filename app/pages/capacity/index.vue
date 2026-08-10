@@ -10,6 +10,9 @@ type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolea
 
 const { data, pending, error, refresh } = await useFetch('/api/capacity')
 
+type WeekPoint = { year: number, isoWeek: number, start: string, end: string, indexPct: number, openDays: number }
+const { data: historyData } = await useFetch<{ historicalYears: number[], currentYear: number | null, weeklySeries: WeekPoint[] }>('/api/capacity/history')
+
 function fmtMoney(n: number | null | undefined): string {
   return n == null ? '—' : `$${n.toFixed(2)}`
 }
@@ -180,6 +183,17 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
         </div>
       </section>
 
+      <!-- Historical seasonality reference -->
+      <section v-if="historyData?.weeklySeries?.length">
+        <div class="section-head">
+          <div class="section-label">Historical Weekly Seasonality</div>
+          <div class="section-note">Per-open-day core dine-in revenue (food &amp; beverage only — events/catering excluded, closures excluded), indexed to each year's own average. Same figure that powers Edit Capacity's <NuxtLink to="/capacity/edit">Set by History</NuxtLink> button.</div>
+        </div>
+        <div class="pl-table-card chart-card">
+          <SeasonalityChart :weekly-series="historyData.weeklySeries" :historical-years="historyData.historicalYears" :current-year="historyData.currentYear" />
+        </div>
+      </section>
+
       <!-- Reference: the underlying per-area assumptions -->
       <section>
         <div class="section-head">
@@ -196,7 +210,8 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
                 <th scope="col">Max Turns/Night</th>
                 <th scope="col">Capacity Nov–Apr</th>
                 <th scope="col">Capacity May–Oct</th>
-                <th scope="col">Per-Cover Revenue</th>
+                <th scope="col">Per-Cover Revenue (Food)</th>
+                <th scope="col">Per-Cover Revenue (Beverage)</th>
               </tr>
             </thead>
             <tbody>
@@ -206,7 +221,8 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
                 <td>{{ a.max_turns_per_night }}</td>
                 <td>{{ a.capacity_nov_apr ?? 'closed' }}</td>
                 <td>{{ a.capacity_may_oct }}</td>
-                <td class="amount">${{ a.per_cover_revenue.toFixed(2) }}</td>
+                <td class="amount">${{ a.per_cover_revenue_food.toFixed(2) }}</td>
+                <td class="amount">${{ a.per_cover_revenue_beverage.toFixed(2) }}</td>
               </tr>
             </tbody>
           </table>
@@ -285,6 +301,7 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
   overflow-x: auto;
   margin-bottom: 14px;
 }
+.chart-card { padding: 16px 18px 18px; }
 table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
 .pl-table caption { display: none; }
 .pl-table th, .pl-table td { padding: 12px 16px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

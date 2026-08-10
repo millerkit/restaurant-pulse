@@ -8,7 +8,8 @@
 // primary key), and upserts capacity_area_seasonality by (area_id, month).
 type AreaInput = {
   id: number, seats: number, maxTurnsPerNight: number,
-  capacityNovApr: number | null, capacityMayOct: number, perCoverRevenue: number
+  capacityNovApr: number | null, capacityMayOct: number,
+  perCoverRevenueFood: number, perCoverRevenueBeverage: number
 }
 type SeasonalityInput = { month: number, holidayClosures: number }
 type AreaSeasonalityInput = { areaId: number, month: number, expectedCovers: number }
@@ -33,7 +34,8 @@ export default defineEventHandler(async (event) => {
     if (!Number.isFinite(a.maxTurnsPerNight) || a.maxTurnsPerNight < 0) throw createError({ statusCode: 400, statusMessage: `Invalid maxTurnsPerNight for area ${a.id}` })
     if (a.capacityNovApr != null && (!Number.isFinite(a.capacityNovApr) || a.capacityNovApr < 0)) throw createError({ statusCode: 400, statusMessage: `Invalid capacityNovApr for area ${a.id}` })
     if (!Number.isFinite(a.capacityMayOct) || a.capacityMayOct < 0) throw createError({ statusCode: 400, statusMessage: `Invalid capacityMayOct for area ${a.id}` })
-    if (!Number.isFinite(a.perCoverRevenue) || a.perCoverRevenue < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenue for area ${a.id}` })
+    if (!Number.isFinite(a.perCoverRevenueFood) || a.perCoverRevenueFood < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueFood for area ${a.id}` })
+    if (!Number.isFinite(a.perCoverRevenueBeverage) || a.perCoverRevenueBeverage < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueBeverage for area ${a.id}` })
   }
   for (const s of seasonality) {
     if (!Number.isInteger(s.month) || s.month < 1 || s.month > 12) throw createError({ statusCode: 400, statusMessage: `Invalid month: ${s.month}` })
@@ -50,7 +52,7 @@ export default defineEventHandler(async (event) => {
     UPDATE capacity_areas
     SET seats = @seats, max_turns_per_night = @maxTurnsPerNight,
         capacity_nov_apr = @capacityNovApr, capacity_may_oct = @capacityMayOct,
-        per_cover_revenue = @perCoverRevenue
+        per_cover_revenue_food = @perCoverRevenueFood, per_cover_revenue_beverage = @perCoverRevenueBeverage
     WHERE id = @id
   `)
   const upsertMonth = db.prepare(`

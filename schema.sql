@@ -164,15 +164,39 @@ CREATE TABLE daily_toast_metrics (
 -- without the two drifting apart — the Edit page exposes all of seats,
 -- max_turns_per_night, and the two capacity columns as independently
 -- editable fields, per the user's explicit request 2026-08-07.
+-- per_cover_revenue was a single blended $/guest figure until 2026-08-10,
+-- when it was split into per_cover_revenue_food/per_cover_revenue_beverage
+-- (added at the user's request, to feed Capacity's projected revenue
+-- forward into the Budget tab's real revenue accounts — see CLAUDE.md's
+-- "Capacity revenue feeds the Budget tab" section). Total per-cover revenue
+-- (what Capacity Pace's fill %/avg-check math and the Edit Capacity page's
+-- derived columns use) is food + beverage, computed at query time, not a
+-- separately stored column — same reasoning as capacity_nov_apr/
+-- capacity_may_oct being derived from Seats × Max Turns/Night rather than
+-- risking the parts and the whole drifting apart.
+--
+-- The split mirrors accounts.subcategory's existing Food/Beverage grouping
+-- (see the "COGS budgeted as % of revenue" section of CLAUDE.md) so a
+-- month's Capacity-projected Food $ can be written directly to account 4010
+-- Restaurant Food, and Beverage $ distributed across the real beverage-type
+-- leaf accounts (4022/4024/4026/4028 Beer/Liquor/Wine/Non-Alcoholic).
+-- Existing rows were migrated (scripts/migrate-capacity-revenue-split.mjs)
+-- by applying this restaurant's own trailing actual Food/Beverage revenue
+-- split to each area's prior blended per-cover figure — a first-pass
+-- estimate, not real per-area data (no area-level Food-vs-Beverage split
+-- existed before this), and editable per area afterward on the Edit
+-- Capacity page, same "first-pass rule, editable later" posture as
+-- cost_behavior/is_owner_compensation elsewhere in this schema.
 CREATE TABLE capacity_areas (
-  id                   INTEGER PRIMARY KEY,
-  name                 TEXT NOT NULL,   -- e.g. 'dining room', 'bar', 'salon', 'chefs counter', 'outdoor'
-  seats                INTEGER NOT NULL,
-  max_turns_per_night  REAL NOT NULL,
-  capacity_nov_apr     INTEGER,          -- nightly max covers, NULL if the area is closed this season
-  capacity_may_oct     INTEGER NOT NULL,
-  per_cover_revenue    REAL NOT NULL,   -- assumed $ revenue per guest in this area
-  notes                TEXT
+  id                          INTEGER PRIMARY KEY,
+  name                        TEXT NOT NULL,   -- e.g. 'dining room', 'bar', 'salon', 'chefs counter', 'outdoor'
+  seats                       INTEGER NOT NULL,
+  max_turns_per_night         REAL NOT NULL,
+  capacity_nov_apr            INTEGER,          -- nightly max covers, NULL if the area is closed this season
+  capacity_may_oct            INTEGER NOT NULL,
+  per_cover_revenue_food      REAL NOT NULL,   -- assumed $ FOOD revenue per guest in this area
+  per_cover_revenue_beverage  REAL NOT NULL,   -- assumed $ BEVERAGE revenue per guest in this area
+  notes                       TEXT
 );
 
 -- Holiday closures only (added nights closed beyond the standing Monday

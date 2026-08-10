@@ -1805,7 +1805,358 @@ overriding the general `nowrap` every other cell keeps) instead of forcing
 their column to their own single-line width, so a narrow input column can
 sit under a 2-line header instead of stretching to fit it.
 
-## Not yet done
+## Historical seasonality — "Set by History" + weekly chart — 2026-08-10
+
+Prompted by the user asking how real historical Toast/QBO data could inform
+the monthly capacity assumptions (e.g. "is early August actually one of the
+slowest weeks of the year, or does it just feel that way"), rather than
+guessing at seasonal fluctuations by hand. Investigated live before building
+anything — pulled real production data over `fly ssh console` (same
+disposable-script pattern as the QBO net-income investigation above) and
+found two real gotchas that reshaped the design before a line of app code
+was written:
+
+- **Total revenue is the wrong input — it has to be core dine-in sales
+  only.** A first pass using total revenue showed a real-looking dip in
+  early August across 2024/2025, but the user pointed out Urban Hearth's
+  event/catering revenue is sporadic (clients go on vacation too, so
+  private events dry up in early August) and would contaminate a read on
+  regular walk-in demand. Restricting to account_number IN ('4000'
+  Restaurant Sales, '4010' Food, '4020' Beverage, '4022'/'4024'/'4026'/
+  '4028' Beer/Liquor/Wine/Non-Alcoholic) — excluding Event Sales (4100s),
+  Catering (4200s), Retail (4300s), Other Service Income (4400) — actually
+  *reversed* the finding: core dine-in revenue in early August runs at or
+  slightly above each year's own average; the apparent dip was almost
+  entirely the events/catering line dropping off.
+- **Weekly totals silently conflate real closures with slow demand.** The
+  user caught this from a screenshot of Toast's own Sales Category Summary
+  for 2025-08-23 (a Saturday) showing $9,530 in "Special Events Offsite"
+  and nothing else — the restaurant was fully closed for an offsite buyout
+  that night, which a naive weekly-revenue aggregate reads as "a slow
+  week" rather than "a night with zero regular covers by design." Verified
+  this generalizes: the old location's non-Monday, non-Sunday closures
+  (holidays, staff events, buyouts) show up as clean $0 days against a
+  real per-day distribution with a sharp gap between "closed" (≤$252) and
+  the lowest real service night ($585) — see `CLOSED_DAY_THRESHOLD` in
+  `server/api/capacity/history.get.ts`. Also surfaced, as a side effect of
+  checking day-of-week closure rates directly rather than assuming: the old
+  location was closed **Sundays and Mondays** (94%/98% closed in 2025), not
+  just the new location's single standing Monday closure — a real
+  operating-calendar difference between the two locations, not a data bug.
+- **Per-open-day average, not weekly sum, is the right unit.** Both fixes
+  land in the same place: `history.get.ts` sums each *open* day's core
+  revenue and divides by open-day count (never dividing by 7, or by
+  whatever days happen to have a row), indexed to that year's own annual
+  per-open-day average — so a closure day is excluded entirely rather than
+  averaged in as a zero, and the 2026 location move's higher revenue level
+  never has to be compared directly against 2024/2025's.
+
+**Design fork, resolved with the user before building**: should the
+historical data stay a read-only reference, or actually drive the monthly
+covers numbers? Landed on both, via a specific mechanic the user proposed
+directly — replace Edit Capacity's old manually-typed "Set %" button
+outright with **"Set by History"**, which needs no typed input at all:
+
+- `monthlyIndex` (`server/api/capacity/history.get.ts`) is each calendar
+  month's per-open-day core revenue as a % of that year's own average,
+  equal-weighted across whichever of 2024/2025 have a trustworthy reading
+  for that month (≥3 open days — 2024's history only starts late July, so
+  Jan–Jun 2024 contribute nothing). The current year is deliberately
+  excluded from this average (both because it's the year being forecast,
+  and because 2026 specifically spans the location move) but still flows
+  into the chart below as its own "to date" line.
+- The one remaining judgment call — what absolute fill % the historical
+  *shape* scales against — was also put to the user directly rather than
+  assumed: derive the baseline from whatever's already typed into the
+  covers grid (`currentAnnualFillPct` in `app/pages/capacity/edit.vue`, a
+  live computed off the in-progress drafts) rather than a separate
+  target-% input to maintain. `historyTargetFraction(s) = baseline ×
+  (monthlyIndex/100)`, then the same largest-remainder area distribution
+  the old Set % already used. A real, expected consequence of this choice
+  worth remembering: because the baseline is derived from *all* months'
+  current drafts, clicking "Set by History" on one month shifts every
+  other month's preview % slightly (the annual average moved) — clicking
+  through all 12 months once gets close, not exactly, to a stable
+  self-consistent state; a second pass would converge tighter. Not
+  considered worth solving with iteration/convergence logic for a one-shot
+  manual action.
+- The button disables with an explanatory tooltip in the two cases where it
+  can't compute a number: no historical reading for that month (a gap in
+  the 2024/2025 data), or nothing entered anywhere on the page yet to
+  anchor the baseline to.
+
+**The weekly chart** (`app/components/SeasonalityChart.vue`, on
+`app/pages/capacity/index.vue`) shows the same underlying weekly index (not
+just the monthly-grain number the button uses) so the button's math isn't a
+black box — one line per year, current year overlaid against history, per
+the user's own framing ("this year's number compared to last year's"). Per
+the `dataviz` skill: this is an **ordinal**, not categorical, palette —
+years have a real order (recency), so the fixed-hue-per-category rule
+doesn't apply; one hue, light→dark by recency in light mode, flipped
+light-on-dark in dark mode (same reasoning a sequential ramp flips its
+anchor) so the current year — the one that matters most — stays the most
+visible line against a dark surface either way. Validated via
+`validate_palette.js --ordinal` for both modes (light: light-end contrast
+2.10:1, dark: 2.45:1; both pass monotone-L and adjacent-ΔL). Ships a
+crosshair + one-tooltip-for-all-series on hover (per the skill's
+interaction defaults for a line chart) and a "Show as table" toggle as the
+accessibility fallback. First chart of any kind in this app — the Design
+direction section above rules out traditional line/bar time-series charts
+for the Dashboard specifically; this is a different, explicitly-requested
+reference view on a different page, not a reversal of that call.
+
+**Verification note**: local dev's `daily_line_items` only covers
+2026-05-01 onward (never backfilled further locally), so the button and
+chart can't be exercised against real multi-year data in local dev — the
+button correctly disables (verified) and the chart correctly renders a
+single 2026-only line (verified) in that state. The actual monthlyIndex
+math was verified against real production data instead, via the same
+disposable-script-over-`fly ssh console` pattern used throughout this file
+(August: 97.7%, blended from both 2024 and 2025 — consistent with, though
+smoother than, the sharper week-31/32 dip found during the investigation
+above, since the monthly grain averages over the mid-August recovery
+weeks). End-to-end button behavior (distribution math, live Fill %/
+Per-Cover $ update, unsaved-changes tracking) was verified by temporarily
+seeding synthetic 2024/2025 rows into local dev, clicking through, then
+deleting them — never saved, and local dev's `daily_line_items` was
+confirmed back to its original 76-row state afterward.
+
+**Three refinements, same day, after the user reviewed the real chart in
+production** (deployed themselves, separate from local dev/production
+verification above):
+
+- **Single most-recent prior year, not a multi-year average.** The user
+  found the original 2024+2025+2026 chart cluttered and asked to drop 2024
+  — `historicalYears` (`server/api/capacity/history.get.ts`) now returns
+  just the single most recent prior year (2025) instead of every year with
+  data. `monthlyIndex`'s "average across historical years" logic was left
+  in place unchanged (it degrades to a one-element average automatically)
+  rather than special-cased, so both it and the chart's `weeklySeries`
+  stay derived from the same `historicalYears` list and can't drift apart.
+  The hardcoded "2024/2025" text on Edit Capacity's tooltip/section-note is
+  now built from the API's own `historicalYears` (`historyYearsLabel` in
+  `app/pages/capacity/edit.vue`) instead, so it can't go stale as years
+  roll forward.
+- **2026 needs two averages, not one — a real location move, not a
+  hypothetical edge case.** The user confirmed the exact dates directly:
+  old location closed 2026-05-30, new location's real opening was
+  2026-06-20 (a Jun 16-19 friends & family preview generated real, if
+  atypical, revenue — $5-8k/day — that doesn't represent either steady
+  state). A single whole-year per-open-day average for 2026 blended two
+  operationally different revenue levels, which is what produced a
+  misleading "sudden steep increase" in the first version of the chart —
+  not organic growth, just the location switch. `LOCATION_MOVE_PERIODS`
+  (`history.get.ts`) hardcodes the two windows (Jan 1–May 31, Jun 20–Dec
+  31) as a one-off, hand-verified constant — deliberately not a generic
+  multi-segment mechanism, since no other year has this problem.
+  `periodAvgFor(year, date)` returns the right period's average for 2026,
+  or the plain whole-year average for every other year unchanged. A
+  week/month whose earliest open day falls in the Jun 1-19 gap (neither
+  period) is dropped entirely rather than misattributed — including the
+  real Jun 20-21 revenue that happened to share an ISO week with the F&F
+  preview days, since a 2-day fragment isn't a meaningful week on its own
+  either. This is also what creates the chart's visual break across the
+  move — `SeasonalityChart.vue`'s `pathFor` was changed to start a fresh
+  SVG subpath (`M`) instead of connecting (`L`) whenever consecutive
+  points aren't adjacent, a general fix (any missing week/month breaks the
+  line) rather than a special case hardcoded to this one gap.
+- **Monthly view added, now the default — the weekly line was too jagged
+  to read.** The user's own read on the deployed weekly-only chart: real
+  week-to-week noise (this restaurant is only open ~5-6 nights/week, so a
+  swing of +/-20pts is mostly sampling noise, not seasonal signal) made
+  the chart "unsatisfying" without being clearly wrong. Considered and
+  rejected switching to a bar chart — that doesn't address a data-grain
+  problem, and 52 thin bars/year would look busier, not clearer. Landed on
+  a Weekly/Monthly toggle instead, monthly as the default (steadier, since
+  it averages 20+ days instead of 5-6), same "smoother default, detail on
+  request" reasoning as the table-view toggle next to it. `monthlySeries`
+  (`history.get.ts`) is a new, separate field from `monthlyIndex` — the
+  same per-year raw-value shape as `weeklySeries` at month grain (reusing
+  `periodAvgFor` and the same "drop, don't misattribute, an ambiguous
+  period" rule, so June 2026 is expected to be absent here too), not a
+  reuse of `monthlyIndex`'s already-averaged-for-the-button shape.
+  `SeasonalityChart.vue` was refactored to normalize weekly/monthly data
+  into one shared `{year, x, indexPct, label}` point shape so the
+  geometry/hover/table code doesn't fork per grain. Verified against real
+  production data via the same disposable-script pattern: 2025 now shows a
+  steady 86-115% range across all 12 months (vs. the old chart's
+  week-to-week swings into the 60s/160s), and 2026 correctly shows Jan-May
+  (old location, 91-113%) and Jul-Aug (new location, ~98-103%) with June
+  cleanly absent — no artificial spike.
+
+**Monthly view superseded by a smoothed weekly line, same day** — the user
+tried the monthly chart above and wasn't sold on it ("not sure about the
+month display now"), and asked to try a rolling average over the weekly
+data instead. `SeasonalityChart.vue`'s mode toggle is now **Smoothed**
+(default) / **Raw weekly** — same weekly x-axis/grain either way, so
+week-to-week movement is still visible, just averaged over a centered
+5-week window (`SMOOTHING_WINDOW_HALF = 2`) to separate the seasonal shape
+from the sampling noise instead of collapsing to a coarser calendar unit.
+The window walk stops the moment the next week isn't actually adjacent (an
+x-value check, not just array-adjacent), so it never averages across the
+real location-move gap — a week right next to the gap naturally smooths
+over fewer than 5 weeks rather than reaching past what's really there.
+Verified against real production data: week 1's raw 62.7% (a single-day,
+noisy week) smooths to 109.4%, and the two weeks flanking the gap (22 and
+26) each smooth from only 3 real neighbors, not 5, confirming the gap
+isn't bridged. `monthlySeries` (`history.get.ts`) and the `MonthPoint`
+type/prop were removed entirely rather than left dormant, since this was a
+genuine pivot away from monthly, not an additional option alongside it —
+consistent with this file's own "delete rather than half-finish" posture;
+easy to reconstruct from this section's history if monthly ever comes back
+into consideration.
+
+**Smoothing itself dropped, same day — the user caught a real structural
+problem with it, not just a taste call.** Looking at the deployed smoothed
+chart against the raw one side by side, the smoothed line showed the most
+recent week (Aug 3-9) at 107%, while raw showed 94% — a real trough the
+smoothed line was hiding. Root cause: a *centered* moving average has no
+future data to center against at the live edge of a still-accumulating
+series, so its most recent points silently become backward-only averages
+biased toward whatever came *before* a real recent move — exactly the
+worst moment for a dashboard to be quietly optimistic. This isn't a tuning
+problem (a different window size doesn't fix it, the bias is structural to
+centering); simplified back to a single raw weekly line, no toggle,
+`viewMode`/`SMOOTHING_WINDOW_HALF`/`smoothedYear` all removed rather than
+left dormant.
+
+**Two follow-up legibility fixes to the now-single raw line, same day**:
+1. **Curved (Catmull-Rom) line interpolation** instead of straight
+   segments between points — a pure rendering choice (`curvedPath()` in
+   `SeasonalityChart.vue`), each real data point still sits at its exact
+   plotted position, only how the line travels *between* points changed.
+   Still split into contiguous runs at any real data gap first (same as
+   before), so a run's curve never reaches across missing weeks.
+2. **Fixed y-axis domain (65-145%)** replacing the previous auto-padded
+   range (which stretched well past the data on both ends), at the user's
+   specific request — verified this almost exactly matches the real data's
+   own min/max (62.7-145.3%, confirmed against production).
+3. **Categorical color pair, not an ordinal ramp** — with the chart now
+   showing exactly two concrete years ("this year vs. last year," not a
+   multi-year recency series), two genuinely distinct, validated
+   categorical hues read better than shades of one hue: the current year
+   reuses the app's own `--accent` blue (dataviz categorical slot 1), the
+   prior year gets slot 2's orange. Re-validated via
+   `validate_palette.js` (categorical, 2 slots this time, not
+   `--ordinal`): worst-pair ΔE 24.7/26.8 (CVD) and 33.6/31.8 (normal
+   vision) in light/dark — well past the >=8 target.
+
+## Capacity revenue feeds the Budget tab — 2026-08-10
+
+Closes the bookmark from "Capacity Pace reframed..." above: the user asked
+directly how to make the Edit Capacity page's monthly numbers feed the
+Budget tab's revenue, rather than the two staying independent projections
+of the same thing (Capacity computes covers × per-cover $ per area; the
+Budget tab's Revenue line items were manually typed, unrelated numbers).
+
+- **`capacity_areas.per_cover_revenue` (one blended $/guest figure) is now
+  split into `per_cover_revenue_food`/`per_cover_revenue_beverage`** — the
+  minimum split needed to write into real QBO accounts, since revenue
+  accounts split at Food (4010) vs. Beverage (4022/4024/4026/4028
+  Beer/Liquor/Wine/Non-Alcoholic), mirroring `accounts.subcategory`'s
+  existing Food/Beverage grouping (see "COGS budgeted as % of revenue"
+  above). Total per-cover revenue (what Capacity Pace's fill %/avg-check
+  math and the Edit Capacity page's derived columns use) is food +
+  beverage, computed at query time, not a separately stored column — same
+  reasoning as `capacity_nov_apr`/`capacity_may_oct` being derived from
+  Seats × Max Turns/Night rather than risking drift between the parts and
+  the whole. **Deliberately stops at Food/Beverage, not a further
+  beer/liquor/wine/non-alcoholic split** — Capacity's covers × per-cover
+  model has no natural way to know how a table's spend divides across
+  those four categories, so going further would mean fabricating a split
+  Capacity has no real basis for; the Beverage $ is instead distributed
+  across those four accounts by each account's own existing budget-dollar
+  weight (see below), not projected independently per account.
+- **No real per-area Food/Beverage split ever existed to migrate from**, so
+  existing `capacity_areas` rows were split
+  (`scripts/migrate-capacity-revenue-split.mjs`,
+  `npm run db:migrate-capacity-revenue-split`) using this restaurant's own
+  trailing actual Food/Beverage revenue ratio from `daily_line_items`
+  (68.8%/31.2% at migration time) applied uniformly to every area's prior
+  blended figure — a first-pass estimate, not real per-area data, editable
+  per area afterward on the Edit Capacity page, same "first-pass rule,
+  editable later" posture as `cost_behavior`/`is_owner_compensation`
+  elsewhere in this schema. `scripts/import-capacity-projections.mjs` was
+  updated the same way, so a fresh-clone `db:init` → `db:import-budget` →
+  `db:backfill-pl` → `db:import-capacity` path still produces a sane split
+  (falling back to a flat 65/35 if run before any revenue data exists).
+- **`server/api/capacity.get.ts`'s per-month `assumed` figure now also
+  carries `expectedRevenueFood`/`expectedRevenueBeverage`** (always summing
+  to the existing `expectedRevenue`, unchanged for every other consumer) —
+  threaded through `nightlyExpectedForMonth`, `dayByDaySum`,
+  `holidayAdjustment`, and `assumedForRange` alongside the existing blended
+  figure, so a full calendar month's Capacity projection has a real
+  Food/Beverage target to hand to the Budget tab.
+- **The Edit Budget page's Revenue section got a banner mirroring the
+  existing "Recompute COGS from trailing average" one** — shows that
+  month's Capacity-projected Food/Beverage revenue and, when it
+  meaningfully differs from what's currently budgeted (>$1), a "Recompute
+  {month} Revenue from Capacity" button. Mechanically similar to the COGS
+  recompute (weighted redistribution across a group's accounts by each
+  account's existing dollar share, equal split if the group was
+  previously all-zero) but the source is fundamentally different: COGS's
+  trailing-average % needs a revenue figure to multiply against, while
+  Capacity's covers × per-cover model already **is** a revenue projection,
+  not a percentage of something else — so this reads Capacity's number
+  directly rather than computing a rate. Food's target writes straight to
+  account 4010 (the only Food leaf account); Beverage's target is split
+  across the four Beverage leaf accounts (4022/4024/4026/4028) by their
+  existing weight. Verified end-to-end against real local data: clicking
+  the button for August wrote Capacity's exact $185,781/$84,177 Food/
+  Beverage figures to the right leaf accounts, left the 4020 parent
+  untouched, and the test write was reverted back to the real prior
+  budget afterward.
+- **Restricted to leaf accounts (`isLeafAccount`), unlike the existing COGS
+  recompute's account filter** — 4020 Restaurant Beverage is a parent
+  account that also carries the `subcategory='Beverage'` tag; the COGS
+  recompute's own filter (`a.category === 'cogs' && a.subcategory ===
+  group`, with no leaf check) happens to work today only because parent
+  accounts' own stored budget is conventionally 0. Rather than lean on that
+  same convention for a brand-new write path, this feature's account
+  lookup explicitly filters to accounts with no children. (While checking
+  this, found that convention doesn't actually hold everywhere in the real
+  budget data — see the flagged follow-up task, not fixed as part of this
+  change.)
+- **Real bug caught while building the Edit Capacity page's two new
+  columns**: `.money-cell { display: flex }` had been applied directly to
+  a `<td>` for the old single Per-Cover Revenue column, which worked fine
+  with one such column per row. Adding a second adjacent `<td
+  class="money-cell">` (Food next to Beverage) exposed a real CSS gotcha —
+  `display: flex` on a table cell changes its outer display away from
+  `table-cell`, so the browser's table "fixup" rules folded the two
+  adjacent non-cell `<td>`s into a single anonymous cell, stacking them
+  vertically instead of side by side. Fixed by moving the flex layout onto
+  a `<span>` nested inside a plain `<td>` instead of on the `<td>` itself,
+  in both the per-area table's two revenue columns.
+
+**Beverage $ now splits by a real Beer/Liquor/Wine/Non-Alcoholic sales mix,
+not by whatever's already budgeted** — same day, follow-up: the user
+recalled having worked out this mix before but not what it was, and asked
+how much effort a real-data version would take given the existing
+weighted-redistribution approach just reused whatever was already
+budgeted. `server/api/budget/beverage-revenue-mix.get.ts` sums real
+`daily_line_items` for the four Beverage **revenue** accounts (4022 Beer,
+4024 Liquor, 4026 Wine, 4028 Non-Alcoholic — never the COGS-side beverage
+cost accounts 5110/5120/5125/5130, a distinction called out explicitly
+after the user flagged that this section kept citing the COGS recompute as
+a reference pattern) since 2026-06-20, the new location's real opening
+date (the same boundary `capacity/history.get.ts`'s `LOCATION_MOVE_PERIODS`
+already uses, to avoid blending the old location's beverage program into
+the mix). Not a rolling trailing window like the COGS recompute's 3-month
+average — there's only one continuous stretch of real data since the move
+so far, so using all of it is the largest stable sample available, not a
+deliberate choice to revisit later. `recomputeRevenueFromCapacity` now
+prefers this real mix for Beverage's per-account weighting, falling back to
+the previous existing-budget-weight behavior only if no real mix data
+exists yet; Food is unaffected (only one account, 4010). The Revenue
+banner shows the computed mix (e.g. "split Beer 3%, Liquor 42%, Wine 51%,
+Non-Alcoholic 4%, from real sales since the location move") so the number
+behind the recompute button is visible before clicking, not just implied.
+Verified against real local data: the endpoint returned Beer 2.7% / Liquor
+42.3% / Wine 51.1% / Non-Alcoholic 4.0% (wine highest, matching the user's
+own recollection), and clicking Recompute wrote dollar amounts matching
+that mix applied to Capacity's Beverage target exactly, not the account's
+prior budgeted share.
 
 - Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
   production and saving once there to correct Salon's stale stored capacity
@@ -1849,12 +2200,30 @@ sit under a 2-line header instead of stretching to fit it.
 - Buyout revenue modeling on the Capacity Pace tab — bookmarked at the
   user's own request 2026-08-07 until a guaranteed-minimum figure exists to
   model against; see the Capacity tab section above.
-- Feeding Capacity Pace's per-cover assumptions forward into the Budget
-  tab's revenue projections (potentially making Budget's revenue line
-  items derived/read-only) — bookmarked by the user 2026-08-07; would
-  require splitting revenue itself by beverage category (beer/liquor/wine/
-  non-alcoholic) and food, mirroring COGS's existing Food/Beverage split.
-  See "Capacity Pace reframed..." above.
+- Feeding Capacity's projected revenue further than the Budget tab's
+  Revenue section — closed at the Food/Beverage grain 2026-08-10 (see
+  "Capacity revenue feeds the Budget tab" above); making Budget's revenue
+  line items fully derived/read-only (rather than a one-click "recompute"
+  the user can choose to apply or skip) was raised but not built, and a
+  further beer/liquor/wine/non-alcoholic split was deliberately ruled out
+  since Capacity's covers × per-cover model has no real basis for it — see
+  that section for why.
+- A real, currently-live inconsistency found while building the above,
+  not fixed as part of it (out of scope — see the flagged follow-up task):
+  several accounts that are themselves a parent (have children) also carry
+  their own nonzero stored `budget_targets` row today — e.g. account 5100
+  Beverage COGS has real Sep-Dec 2026 amounts alongside its own children's
+  amounts, and the same pattern shows up on at least two opex accounts.
+  `useBudgetData.ts`'s flat `categoryTotals()`/`monthCategoryBudget()`
+  (Budget Pace page) sum every account's raw amount regardless of
+  parent/child, which double-counts these; `budget/edit.vue`'s account-tree
+  display (`computedAccountAmount`) does the opposite — it always
+  recomputes a parent's amount as the sum of its children and silently
+  never shows the parent's own stored figure at all. Same root cause the
+  COGS recompute section above already flagged (a filter that doesn't
+  check `isLeafAccount`), but reaches further than just that one recompute
+  button — it affects any code path that sums `budget_targets` without
+  walking the account tree.
 
 ## Where to look
 
@@ -1886,3 +2255,8 @@ sit under a 2-line header instead of stretching to fit it.
 - [`server/api/capacity.get.ts`](server/api/capacity.get.ts) — Capacity tab's projection-vs-actual data route
 - [`server/api/capacity/settings.get.ts`](server/api/capacity/settings.get.ts) / [`settings.post.ts`](server/api/capacity/settings.post.ts) — load/save capacity assumptions
 - [`scripts/import-capacity-projections.mjs`](scripts/import-capacity-projections.mjs) — one-time seed of `capacity_areas`/`capacity_seasonality` from the real capacity worksheet
+- [`scripts/migrate-capacity-revenue-split.mjs`](scripts/migrate-capacity-revenue-split.mjs) — one-time migration splitting `capacity_areas.per_cover_revenue` into Food/Beverage
+- [`server/api/capacity/history.get.ts`](server/api/capacity/history.get.ts) — historical seasonality index (monthly + weekly) derived from real core-revenue QBO history, backing both "Set by History" and the weekly chart
+- [`app/components/SeasonalityChart.vue`](app/components/SeasonalityChart.vue) — the weekly multi-year seasonality chart on the Capacity Pace page
+- [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue)'s "Recompute Revenue from Capacity" section — feeds Capacity's projected Food/Beverage revenue into the Budget tab's real revenue accounts (see "Capacity revenue feeds the Budget tab" above)
+- [`server/api/budget/beverage-revenue-mix.get.ts`](server/api/budget/beverage-revenue-mix.get.ts) — real Beer/Liquor/Wine/Non-Alcoholic revenue split since the location move, used by the Recompute Revenue action above
