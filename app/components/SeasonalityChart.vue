@@ -270,7 +270,7 @@ const showTable = ref(false)
 .legend-item { display: flex; align-items: center; gap: 5px; }
 .legend-swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .legend-swatch.current { background: var(--yr-current); }
-.legend-swatch.prior { background: var(--yr-prior); }
+.legend-swatch.prior { background: var(--yr-prior); opacity: 0.5; }
 .legend-swatch.ref { background: none; border-top: 2px dashed var(--ink-3); }
 .table-toggle {
   margin-left: auto;
@@ -295,10 +295,13 @@ svg { width: 100%; height: auto; display: block; }
 .crosshair { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
 .series-line { stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .series-line.current { stroke: var(--yr-current); stroke-width: 2.75; }
-.series-line.prior { stroke: var(--yr-prior); }
+/* Faded on purpose (added at the user's request) — the prior year is
+   reference context, not the focal line, so it recedes toward the
+   surface instead of competing with the current year for attention. */
+.series-line.prior { stroke: var(--yr-prior); opacity: 0.5; }
 .hover-dot { stroke: var(--surface); stroke-width: 2; }
 .hover-dot.current { fill: var(--yr-current); }
-.hover-dot.prior { fill: var(--yr-prior); }
+.hover-dot.prior { fill: var(--yr-prior); opacity: 0.5; }
 
 .tooltip {
   position: absolute;
