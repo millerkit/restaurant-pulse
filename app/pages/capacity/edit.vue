@@ -147,6 +147,7 @@ function monthDerived(s: MonthlyDraft) {
     maxCovers += areaCapacityForMonth(a, s.month)
   }
   return {
+    totalCovers: covers,
     fillPct: maxCovers > 0 ? covers / maxCovers : null,
     avgCheck: covers > 0 ? revenue / covers : null
   }
@@ -361,16 +362,17 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Expected Nightly Covers by Area &amp; Holiday Closures</div>
-          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} QuickBooks dine-in revenue, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Fill % and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
+          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} QuickBooks dine-in revenue, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
-            <caption>Editable monthly expected covers per area, a history-derived quick-set blended fill percentage, derived fill percentage and per-cover revenue, and holiday closure counts</caption>
+            <caption>Editable monthly expected covers per area, a history-derived quick-set blended fill percentage, a total covers figure, derived fill percentage and per-cover revenue, and holiday closure counts</caption>
             <thead>
               <tr>
                 <th scope="col">Month</th>
                 <th scope="col">Set by History</th>
                 <th v-for="a in areaDrafts" :key="a.id" scope="col" style="text-transform: capitalize;">{{ a.name }}</th>
+                <th scope="col">Total</th>
                 <th scope="col">Fill %</th>
                 <th scope="col">Per-Cover $</th>
                 <th scope="col">Holiday Closures</th>
@@ -393,6 +395,7 @@ async function save() {
                   <span v-if="historyTargetFraction(s) != null" class="setpct-result">≈{{ fmtPct(historyTargetFraction(s)) }}</span>
                 </td>
                 <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>
+                <td class="derived">{{ monthDerived(s).totalCovers }}</td>
                 <td class="derived">{{ fmtPct(monthDerived(s).fillPct) }}</td>
                 <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
                 <td><input v-model="s.holidayClosuresInput" class="cell-input" inputmode="numeric" /></td>

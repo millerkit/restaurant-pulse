@@ -5,7 +5,7 @@ import { MONTH_NAMES, paceStatus } from '~/composables/useBudgetData'
 useHead({ title: `${site.restaurantName} — Capacity Pace` })
 
 type Assumed = { operatingDays: number, expectedCovers: number, expectedRevenue: number, maxCapacityCovers: number, assumedFillPct: number | null, assumedAvgCheck: number | null }
-type Actual = { throughDate: string, covers: number | null, revenue: number | null, toastDaysSynced: number, maxCapacityCovers: number, actualFillPct: number | null, actualAvgCheck: number | null } | null
+type Actual = { throughDate: string, covers: number | null, revenue: number | null, toastDaysSynced: number, operatingDays: number, maxCapacityCovers: number, actualFillPct: number | null, actualAvgCheck: number | null } | null
 type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolean, assumed: Assumed, actual: Actual }
 
 const { data, pending, error, refresh } = await useFetch('/api/capacity')
@@ -21,6 +21,14 @@ function fmtMoneyRound(n: number | null | undefined): string {
 }
 function fmtCovers(n: number | null | undefined): string {
   return n == null ? '—' : Math.round(n).toLocaleString()
+}
+// Average nightly covers over a range — covers ÷ the same operating-day
+// count already used to build the assumed/actual rate figures, so it's
+// consistent with everything else on this page (Mondays and holiday
+// closures already excluded upstream, not re-derived here).
+function fmtAvgCovers(covers: number | null | undefined, operatingDays: number | null | undefined): string {
+  if (covers == null || !operatingDays) return '—'
+  return Math.round(covers / operatingDays).toLocaleString()
 }
 function fmtPct(n: number | null | undefined): string {
   return n == null ? '—' : `${(n * 100).toFixed(1)}%`
@@ -121,7 +129,7 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
                 <div class="metric-figure small">{{ fmtPct(p.actual.actualFillPct) }}</div>
                 <div class="metric-sub">vs. {{ fmtPct(p.assumed.assumedFillPct) }} assumed</div>
               </div>
-              <div class="caption">{{ fmtCovers(p.actual.covers) }} covers &middot; {{ fmtMoneyRound(p.actual.revenue) }} revenue</div>
+              <div class="caption"><strong>{{ fmtAvgCovers(p.actual.covers, p.actual.operatingDays) }} covers/night</strong> avg &middot; {{ fmtCovers(p.actual.covers) }} covers &middot; {{ fmtMoneyRound(p.actual.revenue) }} revenue</div>
             </template>
             <div v-else class="quiet-note">No actual data for this period yet.</div>
           </div>
@@ -172,7 +180,9 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
               </div>
             </div>
             <div class="caption">
-              {{ fmtCovers(selectedMonthData.actual.covers) }} covers vs. {{ fmtCovers(selectedMonthData.assumed.expectedCovers) }} expected
+              <strong>{{ fmtAvgCovers(selectedMonthData.actual.covers, selectedMonthData.actual.operatingDays) }} covers/night</strong> avg
+              ({{ fmtAvgCovers(selectedMonthData.assumed.expectedCovers, selectedMonthData.assumed.operatingDays) }} covers/night assumed)
+              &middot; {{ fmtCovers(selectedMonthData.actual.covers) }} covers vs. {{ fmtCovers(selectedMonthData.assumed.expectedCovers) }} expected
               &middot; {{ fmtMoneyRound(selectedMonthData.actual.revenue) }} revenue vs. {{ fmtMoneyRound(selectedMonthData.assumed.expectedRevenue) }} expected
               <template v-if="selectedMonthData.isCurrent">(through {{ fmtDate(selectedMonthData.actual.throughDate) }})</template>
             </div>
@@ -271,6 +281,7 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
 .metric.primary .metric-figure { font-size: 30px; }
 .metric-sub { font-size: 11px; color: var(--ink-3); }
 .caption { font-size: 11.5px; color: var(--ink-3); border-top: 1px dashed var(--hair); padding-top: 8px; }
+.caption strong { font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 
 .month-detail { margin-top: 10px; }

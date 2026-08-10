@@ -199,6 +199,7 @@ export default defineEventHandler(() => {
       covers: actual.covers,
       revenue: actual.revenue,
       toastDaysSynced: actual.toastDaysSynced,
+      operatingDays: cap.operatingDays,
       maxCapacityCovers: cap.maxCapacityCovers,
       actualFillPct: actual.covers != null && cap.maxCapacityCovers > 0 ? actual.covers / cap.maxCapacityCovers : null,
       actualAvgCheck: actual.covers ? (actual.revenue ?? 0) / actual.covers : null
