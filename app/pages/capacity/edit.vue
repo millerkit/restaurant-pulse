@@ -127,6 +127,12 @@ function computedCapacity(a: AreaDraft, season: 'novApr' | 'mayOct'): number | n
 function fmtCapacity(n: number | null): string {
   return n == null ? 'closed' : (Number.isFinite(n) ? String(n) : '—')
 }
+// Blended per-cover revenue, live-derived from the two draft inputs —
+// display only, not a separately stored/editable field (see schema.sql's
+// capacity_areas comment on why the total is computed, not stored).
+function perCoverTotal(a: AreaDraft): number {
+  return (Number(a.perCoverRevenueFood) || 0) + (Number(a.perCoverRevenueBeverage) || 0)
+}
 
 // Live-derived Fill %/Per-Cover $ for a month, recomputed from the
 // in-progress drafts (not the loaded data) so an edit shows its effect
@@ -342,6 +348,7 @@ async function save() {
                 <th scope="col">Capacity May–Oct</th>
                 <th scope="col">Per-Cover Revenue (Food)</th>
                 <th scope="col">Per-Cover Revenue (Beverage)</th>
+                <th scope="col">Per-Cover Revenue (Total)</th>
               </tr>
             </thead>
             <tbody>
@@ -353,6 +360,7 @@ async function save() {
                 <td class="derived">{{ fmtCapacity(computedCapacity(a, 'mayOct')) }}</td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
+                <td class="derived">${{ perCoverTotal(a).toFixed(2) }}</td>
               </tr>
             </tbody>
           </table>

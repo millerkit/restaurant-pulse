@@ -2041,6 +2041,46 @@ left dormant.
    `--ordinal`): worst-pair ΔE 24.7/26.8 (CVD) and 33.6/31.8 (normal
    vision) in light/dark — well past the >=8 target.
 
+**Prior-year line faded to 50% opacity**, at the user's explicit request
+after seeing the two-color version deployed — the prior year is reference
+context, not the focal series, so it now recedes toward the surface
+(line, hover dot, and legend swatch all faded; the tooltip's color key
+stays full-opacity, since that's a small precise readout rather than part
+of the chart's visual hierarchy).
+
+**Rebuilt as a monthly grouped bar chart, 2026-08-10, superseding the line
+chart above.** After using the deployed raw-weekly line for real, the user
+concluded the week-to-week noise is likely mostly unavoidable sampling
+noise at this restaurant's size (~5-6 open days/week), and that pulling in
+more years to average it out "seems like too much effort" for what it
+would buy — landing on a monthly grouped bar chart (current year and prior
+year side by side per month) instead. This closes the loop on the
+smoothing problem from a different angle than smoothing itself: monthly is
+steadier by construction (20+ open days per bar) without the moving
+average's live-edge bias.
+- `server/api/capacity/history.get.ts`'s `weeklySeries`/`isoWeekInfo`
+  were removed outright (not left dormant) and replaced with
+  `monthlySeries` — the same per-chart-year raw-value shape at month grain,
+  reusing the existing `periodAvgFor`/location-move-period logic unchanged
+  (May 2026 and earlier index against the old location's average, July
+  2026 on against the new location's, June 2026 absent — same as every
+  monthly computation earlier in this section).
+- Bars start at zero, unlike the old line chart's truncated 65-145% axis —
+  called out explicitly per the dataviz skill: bar *length* encodes
+  magnitude, so a truncated bar axis misrepresents it in a way a
+  truncated line-position axis doesn't. Y-axis headroom is computed from
+  the real data (`Math.ceil((max+10)/20)*20`, floor 120%) rather than
+  fixed, so it stays sane as new months of data arrive.
+- Hover is per-month-group (bars are the hit target, no crosshair — this
+  isn't a continuous series) and shows both years in one tooltip, since
+  the side-by-side comparison is the entire point of this chart.
+- Verified against real production data via the same disposable-script
+  pattern used throughout this file: rebuilt `history.get.ts`'s monthly
+  numbers exactly reproduce the earlier-verified figures (2025: 86-115%
+  across all 12 months; 2026: Jan-May and Jul-Aug present, June cleanly
+  absent) — confirming the rewrite didn't silently change the underlying
+  math, only the chart form consuming it.
+
 ## Capacity revenue feeds the Budget tab — 2026-08-10
 
 Closes the bookmark from "Capacity Pace reframed..." above: the user asked

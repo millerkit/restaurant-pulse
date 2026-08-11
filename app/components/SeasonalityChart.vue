@@ -1,42 +1,45 @@
 <script setup lang="ts">
-// Weekly historical seasonality overlay — added 2026-08-10 alongside Edit
+// Historical seasonality reference — added 2026-08-10 alongside Edit
 // Capacity's "Set by History" button, so the number that button computes
-// isn't a black box: this shows the same underlying weekly index (per-
-// open-day core dine-in revenue, indexed to each year's own average) that
-// feeds it, with the current year plotted against last year's shape. See
+// isn't a black box: this shows the same underlying index (per-open-day
+// core dine-in revenue, indexed to each year's own average) that feeds it,
+// with the current year plotted against last year's. See
 // server/api/capacity/history.get.ts for how the index itself is derived.
 //
-// Simplified back to a single raw weekly line, same day, after two other
-// attempts: a monthly-grain view (dropped — user wasn't sold on it) and a
-// 5-week centered moving average (dropped — the user caught a real,
-// structural problem with it: at the live edge of a still-accumulating
-// series there's no future data to center against, so the smoothed value
-// silently becomes a backward-only average biased toward whatever came
-// *before* a real recent move — exactly the worst moment for a dashboard
-// to be quietly optimistic. Raw weekly reads honestly at "right now," even
-// if it's noisier elsewhere, which is what actually matters here.
+// Rebuilt as a monthly grouped bar chart, same day, after two earlier line-
+// chart attempts: raw weekly (too noisy — this restaurant's only open
+// ~5-6 nights/week, so week-to-week swings are mostly sampling noise, not
+// seasonal signal) and a 5-week centered moving average (dropped — it
+// masked a real recent trough at the live edge of the series, since a
+// centered average has no future data to average against right at "now").
+// The user's own read: much of the week-to-week noise may just be
+// unavoidable at this sample size, and averaging in *more* years to smooth
+// it further "seems like too much effort" for what it'd buy — a monthly
+// grain (20+ open days per bar) is steadier by construction, without the
+// live-edge bias a moving average has.
 //
-// Two follow-up legibility fixes, same day: (1) curved (Catmull-Rom)
-// line interpolation instead of straight segments between points — purely
-// a rendering choice, the data itself is untouched, each real point still
-// sits at its exact position; and (2) a fixed y-domain (65-145%) instead
-// of one auto-padded around whatever the current data's own min/max
-// happens to be, at the user's request, matching the real data's own
-// range almost exactly (verified against production: 62.7-145.3%).
+// Categorical color pair (dataviz slots 1/2), not an ordinal ramp — this
+// is "this year vs. last year," two concrete entities, not a multi-year
+// recency series. Current year reuses the app's own --accent blue; prior
+// year is slot 2's orange, faded to 50% opacity at the user's explicit
+// request so it reads as background context rather than competing with
+// the current year. Validated via validate_palette.js (categorical, 2
+// slots): worst-pair ΔE 24.7/26.8 (CVD), 33.6/31.8 (normal vision) in
+// light/dark — comfortably past the >=8 target before the fade is applied.
 //
-// Categorical (not ordinal) color pair now that this is just "this year vs
-// last year," not a multi-year recency ramp — current year gets the app's
-// own --accent blue (dataviz categorical slot 1), the prior year gets slot
-// 2's orange, both validated via dataviz's validate_palette.js
-// (categorical, 2 slots): worst-pair ΔE 24.7/26.8 (CVD) and 33.6/31.8
-// (normal vision) in light/dark respectively — comfortably past the >=8
-// target, not just the floor.
-type WeekPoint = { year: number, isoWeek: number, start: string, end: string, indexPct: number, openDays: number }
-const props = defineProps<{ weeklySeries: WeekPoint[], historicalYears: number[], currentYear: number | null }>()
+// Bars start at zero (unlike the old line chart's truncated y-axis) — bar
+// *length* encodes magnitude, so truncating would misrepresent it the way
+// truncating a line chart's position axis doesn't. Per dataviz's mark
+// spec: <=24px thick, 4px rounded top corners only (square at the
+// baseline), a 2px surface gap between the two bars in a group. Hover is
+// per-month-group (the bars are the hit target, not a crosshair — this
+// isn't a continuous series), showing both years side by side in one
+// tooltip since the whole point of this chart is that comparison.
+type MonthPoint = { year: number, month: number, indexPct: number, openDays: number }
+const props = defineProps<{ monthlySeries: MonthPoint[], historicalYears: number[], currentYear: number | null }>()
 
-function fmtShort(s: string): string {
-  return new Date(`${s}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 const years = computed(() => {
   const ys = [...props.historicalYears]
@@ -47,121 +50,81 @@ function colorRoleFor(year: number): 'current' | 'prior' {
   return year === props.currentYear ? 'current' : 'prior'
 }
 
-type NormPoint = { year: number, x: number, indexPct: number, label: string, openDays: number }
-const points = computed<NormPoint[]>(() =>
-  props.weeklySeries.map(p => ({ year: p.year, x: p.isoWeek, indexPct: p.indexPct, label: `${fmtShort(p.start)}–${fmtShort(p.end)}`, openDays: p.openDays }))
-)
-const seriesByYear = computed(() => {
-  const map = new Map<number, NormPoint[]>()
-  for (const y of years.value) {
-    map.set(y, points.value.filter(p => p.year === y).sort((a, b) => a.x - b.x))
+// month (1-12) -> year -> value, for quick lookup while drawing bars.
+const byMonth = computed(() => {
+  const map = new Map<number, Map<number, MonthPoint>>()
+  for (const p of props.monthlySeries) {
+    if (!map.has(p.month)) map.set(p.month, new Map())
+    map.get(p.month)!.set(p.year, p)
   }
   return map
 })
 
-const xDomainMax = computed(() => Math.max(52, ...props.weeklySeries.map(w => w.isoWeek)))
-// Fixed, not auto-padded around whatever the current data's own min/max
-// happens to be — see header comment. Points outside this range (rare,
-// not seen in real data so far) still plot, just clipped visually rather
-// than expanding the axis and re-compressing everything else.
-const Y_MIN = 65, Y_MAX = 145
+const Y_MIN = 0
+const yMax = computed(() => {
+  const max = Math.max(0, ...props.monthlySeries.map(p => p.indexPct))
+  return Math.max(120, Math.ceil((max + 10) / 20) * 20)
+})
+const yTickStep = computed(() => (yMax.value <= 120 ? 20 : 40))
+const yTicks = computed(() => {
+  const ticks: number[] = []
+  for (let v = 0; v <= yMax.value; v += yTickStep.value) ticks.push(v)
+  return ticks
+})
 
 const W = 900, H = 320
 const margin = { top: 14, right: 16, bottom: 28, left: 44 }
 const plotW = W - margin.left - margin.right
 const plotH = H - margin.top - margin.bottom
+const bandW = plotW / 12
+const BAR_W = Math.min(24, bandW * 0.34)
+const BAR_GAP = 3 // surface gap between the two bars in a group
 
-function xFor(x: number): number {
-  return margin.left + ((x - 1) / (xDomainMax.value - 1)) * plotW
-}
 function yFor(pct: number): number {
-  return margin.top + (1 - (pct - Y_MIN) / (Y_MAX - Y_MIN)) * plotH
+  return margin.top + (1 - pct / yMax.value) * plotH
 }
-// Catmull-Rom-to-cubic-Bezier conversion (uniform, tension 1/6) — smooths
-// the line into a curve through the real data points (each point's exact
-// x/y is unchanged; only how the line travels *between* points changes)
-// rather than straight jagged segments. Points are first split into
-// contiguous runs wherever a week is missing (a real gap — e.g. 2026's
-// location-move closure) so a run never curves across data that doesn't
-// exist; each run gets its own 'M' (a fresh subpath), same visual break
-// as before.
-function curvedPath(pts: { x: number, y: number }[]): string {
-  if (pts.length === 0) return ''
-  if (pts.length === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`
-  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] ?? pts[i]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2] ?? p2
-    const cp1x = p1.x + (p2.x - p0.x) / 6
-    const cp1y = p1.y + (p2.y - p0.y) / 6
-    const cp2x = p2.x - (p3.x - p1.x) / 6
-    const cp2y = p2.y - (p3.y - p1.y) / 6
-    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`
-  }
-  return d
+function groupCenterX(month: number): number {
+  return margin.left + (month - 1) * bandW + bandW / 2
 }
-function pathFor(pts: NormPoint[]): string {
-  const runs: NormPoint[][] = []
-  let current: NormPoint[] = []
-  pts.forEach((p, i) => {
-    const prev = pts[i - 1]
-    if (i === 0 || p.x - prev.x > 1) {
-      if (current.length) runs.push(current)
-      current = [p]
-    } else {
-      current.push(p)
-    }
-  })
-  if (current.length) runs.push(current)
-  return runs.map(run => curvedPath(run.map(p => ({ x: xFor(p.x), y: yFor(p.indexPct) })))).join(' ')
+function barX(month: number, role: 'prior' | 'current'): number {
+  const center = groupCenterX(month)
+  return role === 'prior' ? center - BAR_GAP / 2 - BAR_W : center + BAR_GAP / 2
 }
-const yTicks = computed(() => {
-  const ticks: number[] = []
-  for (let v = Math.ceil(Y_MIN / 20) * 20; v <= Y_MAX; v += 20) ticks.push(v)
-  return ticks
+// Rounded-top, square-bottom bar as an explicit path (a plain rx/ry rect
+// would round the baseline corners too, which reads as floating rather
+// than grounded).
+const BAR_RADIUS = 4
+function barPath(x: number, month: number, value: number): string {
+  const yTop = yFor(value)
+  const yBase = yFor(0)
+  const r = Math.min(BAR_RADIUS, (yBase - yTop) / 2, BAR_W / 2)
+  if (r <= 0.5) return `M${x},${yBase} L${x},${yTop} L${x + BAR_W},${yTop} L${x + BAR_W},${yBase} Z`
+  return [
+    `M${x},${yBase}`,
+    `L${x},${yTop + r}`,
+    `Q${x},${yTop} ${x + r},${yTop}`,
+    `L${x + BAR_W - r},${yTop}`,
+    `Q${x + BAR_W},${yTop} ${x + BAR_W},${yTop + r}`,
+    `L${x + BAR_W},${yBase}`,
+    'Z'
+  ].join(' ')
+}
+
+// ---- Hover ---------------------------------------------------------------
+const hoveredMonth = ref<number | null>(null)
+const tooltipStyle = computed(() => {
+  if (hoveredMonth.value == null) return { left: '0%' }
+  const px = ((groupCenterX(hoveredMonth.value) / W) * 100)
+  return { left: `${Math.min(88, Math.max(2, px))}%` }
 })
-// Approximate month-start tick positions by ISO week — a reference chart,
-// not a precise calendar axis, so "week ~5 is roughly February" is close
-// enough for orientation.
-const monthTicks = [
-  { label: 'Jan', week: 1 }, { label: 'Feb', week: 5 }, { label: 'Mar', week: 9 },
-  { label: 'Apr', week: 14 }, { label: 'May', week: 18 }, { label: 'Jun', week: 22 },
-  { label: 'Jul', week: 27 }, { label: 'Aug', week: 31 }, { label: 'Sep', week: 35 },
-  { label: 'Oct', week: 40 }, { label: 'Nov', week: 44 }, { label: 'Dec', week: 48 }
-]
-
-// ---- Hover / crosshair --------------------------------------------------
-const svgEl = ref<SVGSVGElement | null>(null)
-const hoverWeek = ref<number | null>(null)
-const tooltipStyle = ref({ left: '0px', top: '0px' })
-
-function onMove(e: MouseEvent) {
-  const svg = svgEl.value
-  if (!svg) return
-  const rect = svg.getBoundingClientRect()
-  const svgX = ((e.clientX - rect.left) / rect.width) * W
-  const week = Math.round(1 + ((svgX - margin.left) / plotW) * (xDomainMax.value - 1))
-  hoverWeek.value = Math.min(xDomainMax.value, Math.max(1, week))
-  const px = ((e.clientX - rect.left) / rect.width) * 100
-  tooltipStyle.value = {
-    left: `${Math.min(88, Math.max(2, px))}%`,
-    top: '8px'
-  }
-}
-function onLeave() { hoverWeek.value = null }
-
 const hoverRows = computed(() => {
-  if (hoverWeek.value == null) return []
-  const rows: { year: number, point: NormPoint | null }[] = []
+  if (hoveredMonth.value == null) return []
+  const rows: { year: number, point: MonthPoint | null }[] = []
   for (const y of years.value) {
-    const point = (seriesByYear.value.get(y) ?? []).find(p => p.x === hoverWeek.value) ?? null
-    rows.push({ year: y, point })
+    rows.push({ year: y, point: byMonth.value.get(hoveredMonth.value)?.get(y) ?? null })
   }
   return rows.filter(r => r.point != null).reverse() // most recent year first
 })
-const hoverHeading = computed(() => hoverRows.value[0]?.point?.label ?? '')
 
 const showTable = ref(false)
 </script>
@@ -179,13 +142,10 @@ const showTable = ref(false)
 
     <div v-if="!showTable" class="chart-wrap">
       <svg
-        ref="svgEl"
         :viewBox="`0 0 ${W} ${H}`"
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label="Weekly per-open-day core revenue, indexed to each year's own average, by year"
-        @mousemove="onMove"
-        @mouseleave="onLeave"
+        aria-label="Monthly per-open-day core revenue, indexed to each year's own average, current year vs. prior year"
       >
         <!-- gridlines + y-axis labels -->
         <g v-for="t in yTicks" :key="t">
@@ -195,31 +155,40 @@ const showTable = ref(false)
         <!-- 100% reference line -->
         <line :x1="margin.left" :x2="W - margin.right" :y1="yFor(100)" :y2="yFor(100)" class="ref-line-mark" />
 
-        <!-- month ticks -->
-        <g v-for="m in monthTicks" :key="m.label">
-          <text :x="xFor(m.week)" :y="H - margin.bottom + 16" class="axis-label x-label">{{ m.label }}</text>
+        <!-- bars + hover hit-areas, one group per month -->
+        <g v-for="month in 12" :key="month">
+          <path
+            v-if="byMonth.get(month)?.get(historicalYears[0])"
+            :d="barPath(barX(month, 'prior'), month, byMonth.get(month)!.get(historicalYears[0])!.indexPct)"
+            class="bar prior"
+            :class="{ hovered: hoveredMonth === month }"
+          />
+          <path
+            v-if="currentYear != null && byMonth.get(month)?.get(currentYear)"
+            :d="barPath(barX(month, 'current'), month, byMonth.get(month)!.get(currentYear)!.indexPct)"
+            class="bar current"
+            :class="{ hovered: hoveredMonth === month }"
+          />
+          <!-- invisible hit area spanning the whole month band -->
+          <rect
+            :x="margin.left + (month - 1) * bandW"
+            :y="margin.top"
+            :width="bandW"
+            :height="plotH"
+            fill="transparent"
+            @mouseenter="hoveredMonth = month"
+            @mouseleave="hoveredMonth = null"
+          />
         </g>
 
-        <!-- crosshair -->
-        <line v-if="hoverWeek" :x1="xFor(hoverWeek)" :x2="xFor(hoverWeek)" :y1="margin.top" :y2="H - margin.bottom" class="crosshair" />
-
-        <!-- lines -->
-        <path
-          v-for="y in years" :key="y"
-          :d="pathFor(seriesByYear.get(y) ?? [])"
-          fill="none"
-          class="series-line"
-          :class="[colorRoleFor(y), { current: y === currentYear }]"
-        />
-
-        <!-- hover dots -->
-        <template v-for="row in hoverRows" :key="row.year">
-          <circle v-if="row.point" :cx="xFor(row.point.x)" :cy="yFor(row.point.indexPct)" r="4" class="hover-dot" :class="colorRoleFor(row.year)" />
-        </template>
+        <!-- month axis labels -->
+        <g v-for="month in 12" :key="`label-${month}`">
+          <text :x="groupCenterX(month)" :y="H - margin.bottom + 16" class="axis-label x-label">{{ MONTH_ABBR[month - 1] }}</text>
+        </g>
       </svg>
 
       <div v-if="hoverRows.length > 0" class="tooltip" :style="tooltipStyle">
-        <div class="tooltip-date">{{ hoverHeading }}</div>
+        <div class="tooltip-date">{{ MONTH_FULL[(hoveredMonth as number) - 1] }}</div>
         <div v-for="row in hoverRows" :key="row.year" class="tooltip-row">
           <span class="tooltip-key" :class="colorRoleFor(row.year)"></span>
           <span class="tooltip-year">{{ row.year }}</span>
@@ -230,18 +199,18 @@ const showTable = ref(false)
 
     <div v-else class="pl-table-card table-view">
       <table class="pl-table">
-        <caption>Weekly per-open-day core revenue index by year</caption>
+        <caption>Monthly per-open-day core revenue index by year</caption>
         <thead>
           <tr>
-            <th scope="col">Week</th>
+            <th scope="col">Month</th>
             <th v-for="y in years" :key="y" scope="col">{{ y }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="wk in xDomainMax" :key="wk">
-            <th scope="row">Wk {{ wk }}</th>
+          <tr v-for="month in 12" :key="month">
+            <th scope="row">{{ MONTH_ABBR[month - 1] }}</th>
             <td v-for="y in years" :key="y">
-              {{ (seriesByYear.get(y) ?? []).find(p => p.x === wk)?.indexPct.toFixed(0) ?? '—' }}<template v-if="(seriesByYear.get(y) ?? []).find(p => p.x === wk)">%</template>
+              {{ byMonth.get(month)?.get(y)?.indexPct.toFixed(0) ?? '—' }}<template v-if="byMonth.get(month)?.get(y)">%</template>
             </td>
           </tr>
         </tbody>
@@ -251,11 +220,9 @@ const showTable = ref(false)
 </template>
 
 <style scoped>
-/* Categorical pair (dataviz slots 1/2) — see header comment for
-   validation numbers. "current" reuses the app's own --accent so this
-   chart's focal line matches the rest of the app's accent color; "prior"
-   is dataviz's slot-2 orange, chosen for maximum contrast against it
-   rather than a subtler recency-ramp shade. */
+/* Categorical pair — see header comment for validation numbers. "current"
+   reuses the app's own --accent; "prior" is dataviz's slot-2 orange,
+   faded to recede into the background per the user's request. */
 .seasonality-chart {
   --yr-current: var(--accent);
   --yr-prior: #eb6834;
@@ -292,19 +259,16 @@ svg { width: 100%; height: auto; display: block; }
 .axis-label { font-size: 10px; fill: var(--ink-3); font-variant-numeric: tabular-nums; }
 .y-label { text-anchor: end; }
 .x-label { text-anchor: middle; }
-.crosshair { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
-.series-line { stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.series-line.current { stroke: var(--yr-current); stroke-width: 2.75; }
-/* Faded on purpose (added at the user's request) — the prior year is
-   reference context, not the focal line, so it recedes toward the
-   surface instead of competing with the current year for attention. */
-.series-line.prior { stroke: var(--yr-prior); opacity: 0.5; }
-.hover-dot { stroke: var(--surface); stroke-width: 2; }
-.hover-dot.current { fill: var(--yr-current); }
-.hover-dot.prior { fill: var(--yr-prior); opacity: 0.5; }
+
+.bar { transition: opacity 0.1s; }
+.bar.current { fill: var(--yr-current); }
+.bar.prior { fill: var(--yr-prior); opacity: 0.5; }
+.bar.hovered { opacity: 0.8; }
+.bar.prior.hovered { opacity: 0.7; }
 
 .tooltip {
   position: absolute;
+  top: 8px;
   transform: translateX(-50%);
   background: var(--surface);
   border: 1px solid var(--hair);

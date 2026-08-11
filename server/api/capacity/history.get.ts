@@ -1,5 +1,5 @@
 // Historical seasonality reference, derived from real QBO revenue history —
-// backs the Capacity Pace page's year-over-year weekly chart and the Edit
+// backs the Capacity Pace page's year-over-year monthly chart and the Edit
 // Capacity page's "Set by History" action (added 2026-08-10, after the user
 // asked how prior years' actual seasonal fluctuation could inform the
 // monthly expected-covers assumptions without turning Edit Capacity's
@@ -33,27 +33,6 @@ const MIN_OPEN_DAYS_FOR_MONTH_INDEX = 3
 
 type DailyRevenueRow = { date: string, revenue: number }
 
-// Standard ISO-8601 week algorithm (Thursday-of-the-week trick) — UTC-based
-// so this is deterministic regardless of the server's own timezone, same
-// posture as capacity.get.ts's isOperatingDow.
-function isoWeekInfo(dateIso: string): { isoYear: number, isoWeek: number, mondayIso: string } {
-  const d = new Date(`${dateIso}T00:00:00Z`)
-  const dayNum = d.getUTCDay() || 7 // Mon=1..Sun=7
-  const thursday = new Date(d)
-  thursday.setUTCDate(d.getUTCDate() + 4 - dayNum)
-  const isoYear = thursday.getUTCFullYear()
-  const yearStart = new Date(Date.UTC(isoYear, 0, 1))
-  const isoWeek = Math.ceil(((thursday.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
-  const monday = new Date(d)
-  monday.setUTCDate(d.getUTCDate() - dayNum + 1)
-  return { isoYear, isoWeek, mondayIso: monday.toISOString().slice(0, 10) }
-}
-function addDaysIso(iso: string, n: number): string {
-  const d = new Date(`${iso}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
-}
-
 export default defineEventHandler(() => {
   const db = useDb()
   const placeholders = CORE_REVENUE_ACCOUNT_NUMBERS.map(() => '?').join(',')
@@ -68,32 +47,30 @@ export default defineEventHandler(() => {
 
   const { date: asOfDate } = db.prepare('SELECT MAX(date) AS date FROM daily_line_items').get() as { date: string | null }
   if (!asOfDate || rows.length === 0) {
-    return { asOfYear: null, historicalYears: [], currentYear: null, monthlyIndex: [], weeklySeries: [] }
+    return { asOfYear: null, historicalYears: [], currentYear: null, monthlyIndex: [], monthlySeries: [] }
   }
   const asOfYear = Number(asOfDate.slice(0, 4))
 
   type YearAgg = {
-    openDays: { date: string, revenue: number, month: number, isoWeek: number, mondayIso: string }[]
+    openDays: { date: string, revenue: number, month: number }[]
   }
   const byYear = new Map<number, YearAgg>()
   for (const r of rows) {
     if (r.revenue < CLOSED_DAY_THRESHOLD) continue // a closure, not a slow night — see CLOSED_DAY_THRESHOLD above
     const year = Number(r.date.slice(0, 4))
     const month = Number(r.date.slice(5, 7))
-    const { isoWeek, mondayIso } = isoWeekInfo(r.date)
     if (!byYear.has(year)) byYear.set(year, { openDays: [] })
-    byYear.get(year)!.openDays.push({ date: r.date, revenue: r.revenue, month, isoWeek, mondayIso })
+    byYear.get(year)!.openDays.push({ date: r.date, revenue: r.revenue, month })
   }
 
   const allYears = [...byYear.keys()].sort((a, b) => a - b)
   // Only the single most recent prior year — simplified 2026-08-10 at the
   // user's request after seeing the real chart in production: a 2024 line
-  // (already the noisier, partial-year one — see CLOSED_DAY_THRESHOLD
-  // comment's own history) added visual clutter without changing the
-  // read, and a straight "this year vs. last year" comparison is simpler
-  // to reason about than an equal-weighted multi-year average. Both
-  // monthlyIndex and the chart's weeklySeries derive from this same list,
-  // so they can't drift out of sync with each other.
+  // (already the noisier, partial-year one) added visual clutter without
+  // changing the read, and a straight "this year vs. last year" comparison
+  // is simpler to reason about than an equal-weighted multi-year average.
+  // Both monthlyIndex and the chart's monthlySeries derive from this same
+  // list, so they can't drift out of sync with each other.
   const priorYears = allYears.filter(y => y < asOfYear)
   const historicalYears = priorYears.length > 0 ? [priorYears[priorYears.length - 1]] : []
 
@@ -115,8 +92,8 @@ export default defineEventHandler(() => {
   // and overstating the old location's own (pulled up by the new
   // location's higher per-night revenue). Hand-verified against the exact
   // dates the user gave, not a generic multi-segment mechanism — no other
-  // year has this problem, so this stays a one-off constant rather than
-  // a reusable "location periods" table. Only affects weeklySeries below
+  // year has this problem, so this stays a one-off constant rather than a
+  // reusable "location periods" table. Only affects monthlySeries below
   // (2026 is never in historicalYears/monthlyIndex — see above).
   const LOCATION_MOVE_PERIODS: { start: string, end: string }[] = [
     { start: '2026-01-01', end: '2026-05-31' },
@@ -126,9 +103,9 @@ export default defineEventHandler(() => {
   // its own single whole-year average back regardless of the date asked
   // about. A date that falls in neither window (2026-06-01 through
   // 2026-06-19, the real closure/transition gap) returns null — callers
-  // skip those days/weeks entirely rather than attributing them to either
-  // period, which is also what creates the chart's visual break between
-  // the two locations instead of a misleading connecting line.
+  // skip those days/months entirely rather than attributing them to
+  // either period, which is also what leaves June 2026 absent from the
+  // chart instead of showing a misleading blended figure.
   function periodAvgFor(year: number, dateIso: string): number | null {
     if (year !== 2026) return yearOpenDayAvg(year)
     const period = LOCATION_MOVE_PERIODS.find(p => dateIso >= p.start && dateIso <= p.end)
@@ -162,41 +139,38 @@ export default defineEventHandler(() => {
     return { month, indexPct, years: perYear.map(p => p.year) }
   })
 
-  // ---- Weekly series (for the Capacity Pace chart) -----------------------
-  // Includes historical years plus the current year to date, so the current
-  // year can be overlaid against prior years' shape — the current year is
-  // never included in monthlyIndex above (it's the year being forecast, and
-  // for 2026 specifically it also spans the location move, which would
-  // contaminate a same-year baseline).
+  // ---- Monthly series (for the Capacity Pace chart) ----------------------
+  // Same idea as monthlyIndex above, but per chartYear's own raw value
+  // (for a grouped-bar current-vs-prior comparison) rather than an average
+  // meant for a single "Set by History" figure — deliberately a *separate*
+  // field, not a reuse. Switched from a weekly to a monthly grain
+  // 2026-08-10, at the user's request: the raw week-to-week line was
+  // mostly sampling noise at this restaurant's size (~5-6 open days/week),
+  // and a centered moving average tried as a fix turned out to mask real
+  // recent moves at the live edge of the series (see CLAUDE.md's Capacity
+  // tab section) — monthly is steadier by construction (20+ days per
+  // point) without that edge-bias problem. June 2026 is expected to be
+  // absent for the same reason as monthlyIndex — its earliest open day
+  // falls in the location-move gap.
   const chartYears = [...historicalYears, asOfYear]
-  const weeklySeries: { year: number, isoWeek: number, start: string, end: string, indexPct: number, openDays: number }[] = []
+  const monthlySeries: { year: number, month: number, indexPct: number, openDays: number }[] = []
   for (const year of chartYears) {
     if (yearOpenDayAvg(year) == null) continue
-    const byWeek = new Map<number, { revenue: number, days: number, mondayIso: string, firstDate: string }>()
+    const byMonth = new Map<number, { revenue: number, days: number, firstDate: string }>()
     for (const d of byYear.get(year)!.openDays) {
-      const w = byWeek.get(d.isoWeek) ?? { revenue: 0, days: 0, mondayIso: d.mondayIso, firstDate: d.date }
-      w.revenue += d.revenue
-      w.days += 1
-      if (d.date < w.firstDate) w.firstDate = d.date
-      byWeek.set(d.isoWeek, w)
+      const m = byMonth.get(d.month) ?? { revenue: 0, days: 0, firstDate: d.date }
+      m.revenue += d.revenue
+      m.days += 1
+      if (d.date < m.firstDate) m.firstDate = d.date
+      byMonth.set(d.month, m)
     }
-    for (const [isoWeek, w] of [...byWeek.entries()].sort((a, b) => a[0] - b[0])) {
-      // periodAvgFor keyed off the week's own earliest open day — every
-      // day in a real week lands on the same side of the location-move
-      // boundary in practice (there's a genuine closure gap between them,
-      // not adjacent activity), so this doesn't need per-day splitting.
-      const avg = periodAvgFor(year, w.firstDate)
-      if (avg == null) continue // the closure/transition gap — skip rather than misattribute, which is also what breaks the chart line here instead of connecting across it
-      weeklySeries.push({
-        year,
-        isoWeek,
-        start: w.mondayIso,
-        end: addDaysIso(w.mondayIso, 6),
-        indexPct: (w.revenue / w.days / avg) * 100,
-        openDays: w.days
-      })
+    for (const [month, m] of [...byMonth.entries()].sort((a, b) => a[0] - b[0])) {
+      if (m.days < MIN_OPEN_DAYS_FOR_MONTH_INDEX) continue
+      const avg = periodAvgFor(year, m.firstDate)
+      if (avg == null) continue
+      monthlySeries.push({ year, month, indexPct: (m.revenue / m.days / avg) * 100, openDays: m.days })
     }
   }
 
-  return { asOfYear, historicalYears, currentYear: asOfYear, monthlyIndex, weeklySeries }
+  return { asOfYear, historicalYears, currentYear: asOfYear, monthlyIndex, monthlySeries }
 })
