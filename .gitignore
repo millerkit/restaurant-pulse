@@ -38,6 +38,12 @@ data/*.sqlite3
 # in the source file itself, only sanitized/derived artifacts.
 data/*.csv
 
+# Real Toast order-export CSVs (data/orders_cambridge_st/, data/orders_mass_ave/)
+# — same "one-off source data, never checked in" reasoning as data/*.csv
+# above, but these ship as directories of CSVs rather than loose files, so
+# the flat data/*.csv pattern doesn't reach them.
+data/orders_*/
+
 # Personal Claude Code settings (permissions etc.), not shared config
 .claude/settings.local.json
 

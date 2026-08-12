@@ -9,6 +9,7 @@
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
       <NuxtLink to="/capacity" exact-active-class="active">Capacity Pace</NuxtLink>
       <NuxtLink to="/capacity/edit" exact-active-class="active">Edit Capacity</NuxtLink>
+      <NuxtLink to="/historical" exact-active-class="active">Historical</NuxtLink>
     </nav>
     <slot />
     <footer class="app-footer">

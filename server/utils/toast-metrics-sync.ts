@@ -13,9 +13,22 @@ interface ToastCredentials {
 }
 
 interface ToastOrder {
+  guid: string
   deleted: boolean
   numberOfGuests: number | null
 }
+
+// A single order's numberOfGuests above this is treated as a data-entry
+// error, not a real party size — verified against real order history
+// (both the live API and a manually exported CSV covering 2025-2026): real
+// guest counts top out at 28 (a large private party), then jump straight
+// to 133/788 on a handful of otherwise-normal seated orders (same table,
+// same real check total) with no service in between — a staff fat-finger,
+// not a genuinely large party. Excluded from the covers sum entirely
+// (there's no way to recover the intended value), not clamped to some
+// guess, and logged so a real large future party isn't silently dropped
+// without a trace.
+const MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50
 
 interface ToastTimeEntry {
   regularHours: number | null
@@ -51,7 +64,14 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   const orders = await fetchAllPages<ToastOrder>(creds, '/orders/v2/ordersBulk', businessDate)
   const covers = orders
     .filter(o => !o.deleted)
-    .reduce((sum, o) => sum + (o.numberOfGuests ?? 0), 0)
+    .reduce((sum, o) => {
+      const guests = o.numberOfGuests ?? 0
+      if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) {
+        console.warn(`syncToastMetricsForDate: dropping implausible numberOfGuests=${guests} on order ${o.guid} (${businessDate}) — treating as a data-entry error, not counted toward covers.`)
+        return sum
+      }
+      return sum + guests
+    }, 0)
 
   const timeEntries = await fetchAllPages<ToastTimeEntry>(creds, '/labor/v1/timeEntries', businessDate)
   const laborHours = timeEntries

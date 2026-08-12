@@ -10,9 +10,6 @@ type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolea
 
 const { data, pending, error, refresh } = await useFetch('/api/capacity')
 
-type MonthPoint = { year: number, month: number, indexPct: number, openDays: number }
-const { data: historyData } = await useFetch<{ historicalYears: number[], currentYear: number | null, monthlySeries: MonthPoint[] }>('/api/capacity/history')
-
 function fmtMoney(n: number | null | undefined): string {
   return n == null ? '—' : `$${n.toFixed(2)}`
 }
@@ -193,17 +190,6 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
         </div>
       </section>
 
-      <!-- Historical seasonality reference -->
-      <section v-if="historyData?.monthlySeries?.length">
-        <div class="section-head">
-          <div class="section-label">Historical Monthly Seasonality</div>
-          <div class="section-note">Per-open-day core dine-in revenue (food &amp; beverage only — events/catering excluded, closures excluded), indexed to each year's own average. Same figure that powers Edit Capacity's <NuxtLink to="/capacity/edit">Set by History</NuxtLink> button.</div>
-        </div>
-        <div class="pl-table-card chart-card">
-          <SeasonalityChart :monthly-series="historyData.monthlySeries" :historical-years="historyData.historicalYears" :current-year="historyData.currentYear" />
-        </div>
-      </section>
-
       <!-- Reference: the underlying per-area assumptions -->
       <section>
         <div class="section-head">
@@ -312,7 +298,6 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
   overflow-x: auto;
   margin-bottom: 14px;
 }
-.chart-card { padding: 16px 18px 18px; }
 table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
 .pl-table caption { display: none; }
 .pl-table th, .pl-table td { padding: 12px 16px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

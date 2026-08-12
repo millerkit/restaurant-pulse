@@ -2081,6 +2081,38 @@ average's live-edge bias.
   absent) — confirming the rewrite didn't silently change the underlying
   math, only the chart form consuming it.
 
+**Real bug, caught by the user from the deployed chart: June 2026 was
+missing entirely, not just cleanly absent as intended.** The monthly
+version of the location-move gap logic (`monthlySeries` in
+`history.get.ts`) had reused the weekly version's "classify by one
+representative day" approach unchanged — picking each month's *earliest*
+open day to decide which period average applies, then dropping the whole
+month if that one day landed in the gap. June's earliest open day is June
+16 (the friends & family preview, inside the Jun 1-19 gap), so the whole
+month got dropped, silently discarding 11 real, clean post-move days
+(June 20-30) that individually belonged to the new-location period just
+fine. Fine at weekly grain (only ~2 real days were ever at stake in the
+one affected week); a real loss at monthly grain. Fixed by classifying
+each *day* individually (skip a day only if that specific day falls in
+the gap) before grouping into months, rather than classifying a whole
+month by one representative day. Verified against production: June 2026
+now shows a real 91.7% from 9 open days (June 20-30 minus its two
+Mondays) — in line with the surrounding months instead of blank.
+
+**Bookmarked, not yet resolved: this chart's "%" and the app's other
+Fill %/Capacity Pace figures mean two different things**, flagged by the
+user directly. This chart's percentage is core revenue relative to that
+year's own average (a seasonality index); the Capacity Pace/Edit Capacity
+pages' Fill % is real covers ÷ theoretical max seating capacity. Aligning
+them for real (rather than just relabeling this chart as a distinct
+"seasonality index") would mean expressing historical months as a
+*derived* fill % — scaling this chart's revenue index against the
+current year's saved covers assumptions, the same transformation "Set by
+History" already applies — since there's no real historical covers data
+(Toast) or historical seat-configuration data (the old location's actual
+layout was never recorded) to compute a truly *measured* historical fill
+%. See "Not yet done" below.
+
 ## Capacity revenue feeds the Budget tab — 2026-08-10
 
 Closes the bookmark from "Capacity Pace reframed..." above: the user asked
@@ -2198,6 +2230,265 @@ own recollection), and clicking Recompute wrote dollar amounts matching
 that mix applied to Capacity's Beverage target exactly, not the account's
 prior budgeted share.
 
+## Historical tab: covers + spend seasonality, replacing the blended revenue index — 2026-08-12
+
+Started as a simple ask (move the Seasonality chart off the Capacity Pace
+page onto its own top-level **Historical** tab, `app/pages/historical.vue`
+— same reasoning as the original Budget/Capacity tab splits: a reference
+view, not a pace-tracking one, belongs on its own page) but grew into a
+real redesign of what the chart measures, after the user shared real Toast
+order-export CSVs for both locations (`data/orders_cambridge_st/`,
+`data/orders_mass_ave/`, gitignored — same "source data not checked in,
+only imported/derived rows are" posture as every other real-data import in
+this file) and asked how that data could sharpen the app's seasonal
+assumptions.
+
+- **The single blended revenue index was replaced with two separate
+  indexes — covers, and spend-per-cover** — the user's own framing: "per-
+  open-day core dine-in revenue" isn't how a restaurateur thinks about
+  seasonality, since it silently conflates how many covers came through the
+  door with how much each cover spent. Splitting them also solves a real
+  problem raised in the same conversation: a raw fill % isn't transferable
+  from the old (smaller) Mass Ave location to the much larger Cambridge St
+  space — 95% full in a small room and 75% full in a big room can reflect
+  the *same* demand — but an index of covers relative to *that location's
+  own* typical night sidesteps the comparison entirely (demand-shape, not
+  an absolute occupancy level). Covers come from Toast
+  (`daily_toast_metrics`); spend-per-cover divides QBO's own core dine-in
+  revenue by those same covers, not Toast's own dollar totals — QBO stays
+  the trusted, cash-basis, sign-corrected revenue source everywhere else in
+  this app.
+  [`server/api/capacity/history.get.ts`](server/api/capacity/history.get.ts)
+  now returns `coversSeries`/`spendSeries` (the old single `monthlySeries`
+  is gone, not left dormant) and both render on the Historical page via two
+  instances of the now-generalized
+  [`SeasonalityChart.vue`](app/components/SeasonalityChart.vue) (parameterized
+  via `metricLabel`/`ariaLabel` props — bar-chart mechanics unchanged).
+  Edit Capacity's **Set by History** button (`app/pages/capacity/edit.vue`)
+  now reads the covers index specifically, not revenue — a real accuracy
+  improvement, not just a rename, since that button has always been about
+  covers.
+- **The live Toast connection reaches the entire Mass Ave era, not just
+  the new location** — verified directly against the live API (not
+  assumed) before building anything: `ordersBulk` returned real order data
+  for 2024-12-01, 2025-01-15, and 2025-06-10, all under the same
+  `restaurantGuid` (the user renamed the Toast location in place rather
+  than creating a new one — see the Toast POS integration section above).
+  This meant the user's CSV exports weren't actually needed as an ingestion
+  source — a backfill against the same API the nightly sync already uses
+  is more consistent, so `scripts/backfill-toast-metrics.mjs` (already
+  defaulting to a 2-year lookback) was simply re-run without the
+  `--since=2026-06-20` restriction that a previous session deliberately
+  added to *avoid* reaching old-location data — now the opposite of what's
+  wanted. Per-area (table-level) resolution, by contrast, *is* blocked:
+  order objects carry a `table` GUID reference, but resolving it to a
+  table name needs Toast's Config API, which 403s under the current
+  credentials (confirmed live). Bookmarked for whenever per-area actuals
+  get picked up (the user flagged wanting this for Dining Room/Outdoor/
+  Chef's Table now, Bar/Salon once Cambridge St has its own year of
+  history) — not just a data-availability gap but a credentials-scope one.
+- **Two real data-quality bugs found via this backfill, not from the CSV
+  export alone** — both confirmed live against the API, so not a CSV-tool
+  artifact:
+  - A handful of otherwise-normal seated orders carry an implausible
+    `numberOfGuests` (repeated exact values like `788`, one `133`) — a
+    staff data-entry slip, not a systemic error (real party sizes top out
+    at 28 across the full dataset). Fixed with
+    `MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50` in both
+    [`server/utils/toast-metrics-sync.ts`](server/utils/toast-metrics-sync.ts)
+    (the live nightly sync) and `backfill-toast-metrics.mjs` (duplicated,
+    same Node-22-can't-strip-TypeScript reason as this file's other
+    duplicated Toast/QBO logic) — the order is excluded from the day's
+    covers sum entirely (not clamped to a guess) and logged with its GUID.
+  - A **closed day with a single stray online order still reads as
+    "open."** The original `covers > 0` open-day filter looked sound until
+    checked against the real distribution: ~95 local days show covers
+    between 1-13, then a clean gap before real service nights start at
+    17+. 44 of those low-covers days are Mondays (the standing closure)
+    and 24 are Sundays (Mass Ave's *second* closure day — old-location-only,
+    per the location-move section above), with most of the remainder
+    clustering around known holidays (Thanksgiving, Christmas Eve, New
+    Year's). A closed day with one $150 gift-card order isn't a real slow
+    night. This wasn't just an accuracy nit — on the **spend** index it was
+    actively corrupting the data: 2026-07-04 (a holiday) showed
+    `covers=1, revenue=$10,582.24` — a private event whose true guest count
+    was never captured, producing a nonsensical $10,582/cover reading that
+    swamped July's whole-month average before this was caught (July's spend
+    index briefly read 10% in one intermediate build, an obviously-wrong
+    number that's what surfaced this in the first place). Fixed with
+    `MIN_COVERS_FOR_OPEN_DAY = 15` in `history.get.ts`, same "check the
+    real distribution, find the clean gap" methodology as
+    `MAX_PLAUSIBLE_GUESTS_PER_ORDER` above and the original
+    `CLOSED_DAY_THRESHOLD` this file documents elsewhere.
+- **Local dev backfilled 2024-08-01 through today** (741 days,
+  `npm run db:backfill-toast -- --since=2024-08-01`, two runs — the first
+  hit one transient `fetch failed` partway through and was resumed from
+  the failure point rather than restarted, since the script's upserts are
+  idempotent) so the two indexes have real data to render against locally.
+  Verified in the browser: both charts render with sane values (2025
+  covers index ranging 84-134%, no more corrupted outliers after the
+  open-day fix), and Set by History's tooltip/behavior confirmed against
+  July's real 98% covers index. Local dev still can't show a full
+  current-vs-prior-year comparison the way production will — local
+  `daily_line_items` (QBO revenue) only reaches back to 2026-05-01 (a
+  known, already-documented local dev limitation — see the Historical
+  seasonality section above), so the spend index only has real 2026 months
+  to show locally; production's QBO history goes back further and should
+  show both years once the equivalent Toast backfill runs there.
+- **Production Toast backfill run, 2026-08-12** — `npm run db:backfill-toast
+  -- --since=2024-07-28` (matching production's own QBO revenue floor,
+  found by querying `daily_line_items` directly first rather than guessing
+  a date) via `fly ssh console`, after the user confirmed. Hit one
+  connection drop partway through (`fly ssh console`'s own SSH session
+  ended mid-run, not a script error — "remote command exited without exit
+  status or exit signal"), leaving a real gap from 2026-03-23 through
+  2026-06-19 (the original narrower backfill had already covered
+  2026-06-20 onward). Resumed with `--since=2026-03-23 --until=2026-06-19`
+  to close just that gap rather than re-running the whole range — verified
+  afterward with a recursive-CTE gap check against `daily_toast_metrics`
+  (0 missing days across the full 2024-07-28–2026-08-11 span) rather than
+  eyeballing it.
+
+## Historical charts show what "100%" actually is, by location — 2026-08-12
+
+Same day, prompted by the user pointing at the chart legend and asking to
+show the real per-cover/per-night average each year's bars are indexed
+against — "just to know what the percentages are indexed against." Framed
+by *location*, not by calendar year, per the user's own request: "Mass Ave
+and Cambridge St," not "2025 and 2026," since that's how a restaurateur
+actually thinks about the comparison.
+
+- **`locationBaselines`** (`server/api/capacity/history.get.ts`) exposes
+  two real numbers per metric — Mass Ave's and Cambridge St's own average
+  (covers/night and $/cover) — computed from data already on hand: Mass
+  Ave is 2025's own whole-year average (the only historical year, entirely
+  Mass Ave); Cambridge St is the new-location half of the existing
+  `LOCATION_MOVE_PERIODS` split. Hardcoded to this specific transition the
+  same way `LOCATION_MOVE_PERIODS` itself already is — both page and
+  component treat a null baseline as "don't show it," so this simply stops
+  rendering once next year rolls around and the pairing no longer applies,
+  rather than needing to be revisited by hand.
+- Rendered directly in `SeasonalityChart.vue`'s legend line, next to each
+  year's color swatch (e.g. "2025 — Mass Ave avg 42/night", "2026 (to
+  date) — Cambridge St avg 91/night") — exactly where the user pointed,
+  via two new optional props (`massAveBaselineLabel`/
+  `cambridgeStBaselineLabel`) rather than the component computing anything
+  location-specific itself, keeping the component metric-agnostic (it
+  already didn't know whether it was rendering covers or spend).
+- Verified in the browser against real local data: Covers legend read
+  "2025 — Mass Ave avg 42/night" / "2026 (to date) — Cambridge St avg
+  91/night" (the new space's much higher covers/night, as expected from
+  its larger capacity); the Spend chart's 2025 label came back with no
+  baseline at all, correctly, since local dev has no 2025 QBO revenue to
+  compute it from (the already-documented local dev limitation) — the
+  null-hides-label behavior working as designed, not a bug.
+
+## Production deploy-timing gap + a second real Toast/QBO mismatch found from a user screenshot — 2026-08-12
+
+Same day, after the user separately deployed a different change ("I
+deployed on another thread") mid-way through the backfill above — this
+explained a genuine mystery (the *already-deployed* image somehow had this
+session's brand-new sanity-cap code in it, confirmed by grepping the
+deployed script directly over `fly ssh console`) and, combined with a
+screenshot the user sent of the live Historical charts, surfaced two real
+data problems:
+
+- **One date's backfill ran against the pre-fix code, because the user's
+  deploy landed mid-run.** The first production backfill pass (2024-07-28
+  through the SSH-drop above) executed *before* that deploy went live for
+  part of its range; the resumed gap-fill pass (2026-03-23–2026-06-19) ran
+  *after*. 2025-12-19 fell in the first, unfixed portion and kept its
+  corrupted `numberOfGuests=788` (`covers=840` instead of a real ~50-90),
+  visibly spiking the Covers chart's December bar in a screenshot the user
+  sent. Fixed by re-running the backfill for just that one date
+  (`--since=2025-12-19 --until=2025-12-19`) now that the real fix was
+  live; verified no other date has a similar outlier via a blanket
+  `covers > 200` scan across the whole table (empty result).
+- **A second, previously-undiscovered mismatch, found from the same
+  screenshot**: the user also flagged January's Average Spend Per Cover
+  reading unusually low. Investigated directly against production data
+  (not assumed): ~6% of open days (29 of 505, all-time) show real Toast
+  covers alongside exactly $0 in *core* QBO revenue — not a missing sync,
+  but real $0 rows. Checking a few individually found real money that day,
+  just posted to a different GL bucket: 2025-06-22 (171 covers) shows $0
+  core revenue but $12,519 to "Off-Site Events – Food Revenue" — a private
+  catering event Toast still logged real covers for, correctly excluded
+  from *core dine-in* revenue by `CORE_REVENUE_ACCOUNT_NUMBERS` (same
+  reasoning as excluding Event Sales/Catering everywhere else in this
+  file), but with nothing filtering those covers out the same way on the
+  Toast side. Left in, this produces a nonsensical ~$0/cover spend reading
+  that corrupts a whole month's spend average, and (for the covers index)
+  counts event attendance as regular walk-in demand. **Fixed** in
+  `server/api/capacity/history.get.ts`: a day is now excluded from *both*
+  indexes — not just spend — unless it has real, positive core revenue
+  (`revenue == null || revenue <= 0` is skipped entirely when building
+  `byYear`), not just real covers. `revenue == null` (no QBO sync yet for
+  that date) gets the same treatment as a confirmed $0, since neither can
+  confirm the day was genuine core dine-in. Verified the fix doesn't
+  regress anything: local dev's own dataset (2026-05-01 onward) has zero
+  days matching this pattern, so it was silently invisible there — this
+  bug could only have been caught against real historical production data,
+  which is exactly how the user's screenshot surfaced it. Not yet deployed
+  to production — see "Not yet done" below.
+
+## Revenue Seasonality restored as a third chart, composed from the other two — 2026-08-13
+
+The user had asked for the original blended revenue index gone (see the
+Historical tab section above) but, after seeing the new Covers and Spend
+charts live, wanted it back as a third, complementary chart rather than
+staying gone — a "which months actually made the most money" headline,
+with Covers and Spend underneath explaining *why*. Asked which layout to
+use — stacked on one page (revenue first) vs. tabs with revenue as the
+default — and recommended stacked: the whole point of splitting revenue
+into its two drivers was to let you connect "revenue was up" with "was
+that more covers or higher spend," which tabs would undermine by hiding
+the components behind a click. The user agreed.
+
+- **`revenueSeries`** (`server/api/capacity/history.get.ts`) uses the exact
+  same "index to own average" technique as `coversSeries`/`spendSeries`,
+  built directly off each `DayPoint`'s real `revenue` — not derived as
+  `coversIndex × spendIndex`, which would drift from a true revenue
+  average (averaging two ratios and multiplying isn't the same as
+  averaging their product, since covers and spend aren't independent).
+  Since `spend := revenue / covers`, `covers × spend` is definitionally
+  just `revenue` again — so building the index straight off `d.revenue`
+  is both simpler and more correct than multiplying two already-computed
+  indexes back together.
+  `yearAvg`/`periodAvgFor`/`buildSeries` were generalized from a
+  `'covers' | 'spend'` union to a `Metric = 'covers' | 'spend' | 'revenue'`
+  one (with a small `metricValue`/`avgOf` helper pair replacing the
+  inline ternaries that used to live in each function) rather than adding
+  a third near-duplicate function — this is exactly the kind of
+  three-times-repeated logic worth collapsing.
+- `locationBaselines` (see the section above) gained a matching `revenue`
+  entry the same way, via a small `baselinesFor(metric)` helper replacing
+  the two hand-written `covers`/`spend` object literals.
+- Rendered on [`app/pages/historical.vue`](app/pages/historical.vue) as
+  the first section on the page, ahead of Covers and Spend, using the same
+  generalized `SeasonalityChart.vue` component (`metric-label="Revenue"`).
+- Verified in the browser against real local data: June read 42% and July
+  123% on the new Revenue chart, closely tracking the already-verified
+  Spend chart's 44%/122% for the same months — expected, since Covers was
+  close to its own 100% average both months (96-104%), so
+  revenue ≈ spend × (covers ≈ 100%) tracks spend almost directly. Also
+  spot-checked that Edit Capacity's "Set by History" (which shares the
+  generalized `yearAvg`/`periodAvgFor` helpers but still reads only the
+  `covers` metric) still works unchanged.
+
+## Not yet done
+
+- Running the production Toast covers backfill (`npm run db:backfill-toast`
+  extended further back, via `fly ssh console`) so the Historical page's
+  two indexes show a real multi-year comparison in production the way
+  local dev now does — see the Historical tab section above. Deliberately
+  left for the user to confirm before touching production data.
+- Per-area (table-level) actuals — needed both for the Edit Capacity page's
+  per-area covers/spend projections (Dining Room/Outdoor/Chef's Table now,
+  Bar/Salon once Cambridge St has its own year of history — the user's own
+  framing) and for a truly measured historical fill % (see the bookmark
+  below). Blocked on Toast Config API access (403 under current
+  credentials, confirmed live — see the Historical tab section above), not
+  just on data availability.
 - Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
   production and saving once there to correct Salon's stale stored capacity
   (80/80 vs. the correct 60/60) — done in local dev only so far.
@@ -2264,6 +2555,18 @@ prior budgeted share.
   check `isLeafAccount`), but reaches further than just that one recompute
   button — it affects any code path that sums `budget_targets` without
   walking the account tree.
+- The Historical tab's covers index and the app's other Fill %/Capacity
+  Pace figures still mean two different things (covers-relative-to-own-
+  average vs. covers ÷ theoretical max seats) — bookmarked by the user
+  2026-08-10, partially closed 2026-08-12 (see the Historical tab section
+  above: real historical Toast covers data now exists, reaching back
+  through the Mass Ave era, which didn't before). What's still missing for
+  a truly *measured* historical fill % specifically is the old Mass Ave
+  location's actual seat/table capacity per area — never recorded anywhere
+  in this app (`capacity_areas` only ever held the current/new location's
+  config). Without it, the recommended approach is still the same: a
+  derived fill %, reusing "Set by History"'s own baseline-scaling
+  transformation, not a directly measured one.
 
 ## Where to look
 
@@ -2296,7 +2599,9 @@ prior budgeted share.
 - [`server/api/capacity/settings.get.ts`](server/api/capacity/settings.get.ts) / [`settings.post.ts`](server/api/capacity/settings.post.ts) — load/save capacity assumptions
 - [`scripts/import-capacity-projections.mjs`](scripts/import-capacity-projections.mjs) — one-time seed of `capacity_areas`/`capacity_seasonality` from the real capacity worksheet
 - [`scripts/migrate-capacity-revenue-split.mjs`](scripts/migrate-capacity-revenue-split.mjs) — one-time migration splitting `capacity_areas.per_cover_revenue` into Food/Beverage
-- [`server/api/capacity/history.get.ts`](server/api/capacity/history.get.ts) — historical seasonality index (monthly + weekly) derived from real core-revenue QBO history, backing both "Set by History" and the weekly chart
-- [`app/components/SeasonalityChart.vue`](app/components/SeasonalityChart.vue) — the weekly multi-year seasonality chart on the Capacity Pace page
+- [`app/pages/historical.vue`](app/pages/historical.vue) — Historical tab: covers + spend-per-cover seasonality charts (route `/historical`)
+- [`server/api/capacity/history.get.ts`](server/api/capacity/history.get.ts) — covers + spend-per-cover seasonality indexes, derived from real Toast covers and core-revenue QBO history, backing both "Set by History" and the Historical tab's two charts
+- [`app/components/SeasonalityChart.vue`](app/components/SeasonalityChart.vue) — the monthly grouped-bar seasonality chart used twice on the Historical tab (covers, spend-per-cover)
+- [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast covers/labor-hours backfill (see "Toast POS integration" above); re-run with an extended `--since` 2026-08-12 to reach back through the Mass Ave era for the Historical tab's two indexes
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue)'s "Recompute Revenue from Capacity" section — feeds Capacity's projected Food/Beverage revenue into the Budget tab's real revenue accounts (see "Capacity revenue feeds the Budget tab" above)
 - [`server/api/budget/beverage-revenue-mix.get.ts`](server/api/budget/beverage-revenue-mix.get.ts) — real Beer/Liquor/Wine/Non-Alcoholic revenue split since the location move, used by the Recompute Revenue action above

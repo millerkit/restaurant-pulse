@@ -1,10 +1,12 @@
 <script setup lang="ts">
 // Historical seasonality reference — added 2026-08-10 alongside Edit
 // Capacity's "Set by History" button, so the number that button computes
-// isn't a black box: this shows the same underlying index (per-open-day
-// core dine-in revenue, indexed to each year's own average) that feeds it,
-// with the current year plotted against last year's. See
-// server/api/capacity/history.get.ts for how the index itself is derived.
+// isn't a black box: this shows the same underlying index that feeds it,
+// with the current year plotted against last year's. Generalized
+// 2026-08-12 to render either of the Historical page's two indexes (covers,
+// or spend-per-cover) via the `metricLabel`/`ariaLabel` props — same
+// mechanics either way, only the data and labels differ. See
+// server/api/capacity/history.get.ts for how the indexes are derived.
 //
 // Rebuilt as a monthly grouped bar chart, same day, after two earlier line-
 // chart attempts: raw weekly (too noisy — this restaurant's only open
@@ -36,7 +38,24 @@
 // isn't a continuous series), showing both years side by side in one
 // tooltip since the whole point of this chart is that comparison.
 type MonthPoint = { year: number, month: number, indexPct: number, openDays: number }
-const props = defineProps<{ monthlySeries: MonthPoint[], historicalYears: number[], currentYear: number | null }>()
+const props = defineProps<{
+  monthlySeries: MonthPoint[]
+  historicalYears: number[]
+  currentYear: number | null
+  // e.g. "Covers" / "Avg Spend/Cover" — short label used in the table caption
+  metricLabel: string
+  // full sentence used as the chart's aria-label
+  ariaLabel: string
+  // Pre-formatted "what 100% actually is" labels (e.g. "62/night",
+  // "$118/cover") — added 2026-08-12 so the "Year average (100%)"
+  // reference line isn't just an abstract ratio. Framed by location
+  // (Mass Ave / Cambridge St), not by calendar year, per the user's own
+  // request — see history.get.ts's locationBaselines for why. Null hides
+  // the parenthetical entirely (e.g. once this pairing stops applying next
+  // year — see that same comment).
+  massAveBaselineLabel?: string | null
+  cambridgeStBaselineLabel?: string | null
+}>()
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -134,7 +153,7 @@ const showTable = ref(false)
     <div class="chart-legend">
       <span v-for="y in years" :key="y" class="legend-item">
         <span class="legend-swatch" :class="colorRoleFor(y)"></span>
-        {{ y }}{{ y === currentYear ? ' (to date)' : '' }}
+        {{ y }}{{ y === currentYear ? ' (to date)' : '' }}<template v-if="colorRoleFor(y) === 'prior' && massAveBaselineLabel"> — Mass Ave avg {{ massAveBaselineLabel }}</template><template v-if="colorRoleFor(y) === 'current' && cambridgeStBaselineLabel"> — Cambridge St avg {{ cambridgeStBaselineLabel }}</template>
       </span>
       <span class="legend-item ref-line"><span class="legend-swatch ref"></span>Year average (100%)</span>
       <button type="button" class="table-toggle" @click="showTable = !showTable">{{ showTable ? 'Show chart' : 'Show as table' }}</button>
@@ -145,7 +164,7 @@ const showTable = ref(false)
         :viewBox="`0 0 ${W} ${H}`"
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label="Monthly per-open-day core revenue, indexed to each year's own average, current year vs. prior year"
+        :aria-label="ariaLabel"
       >
         <!-- gridlines + y-axis labels -->
         <g v-for="t in yTicks" :key="t">
@@ -199,7 +218,7 @@ const showTable = ref(false)
 
     <div v-else class="pl-table-card table-view">
       <table class="pl-table">
-        <caption>Monthly per-open-day core revenue index by year</caption>
+        <caption>Monthly {{ metricLabel }} index by year</caption>
         <thead>
           <tr>
             <th scope="col">Month</th>

@@ -56,6 +56,9 @@ function parseArgs(argv) {
 }
 const args = parseArgs(process.argv.slice(2))
 
+// See MAX_PLAUSIBLE_GUESTS_PER_ORDER's comment in server/utils/toast-metrics-sync.ts
+const MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50
+
 function isoDate(d) {
   return d.toISOString().slice(0, 10)
 }
@@ -170,7 +173,19 @@ for (const isoDay of days) {
     process.exit(1)
   }
 
-  const covers = orders.filter(o => !o.deleted).reduce((sum, o) => sum + (o.numberOfGuests ?? 0), 0)
+  // See MAX_PLAUSIBLE_GUESTS_PER_ORDER in server/utils/toast-metrics-sync.ts
+  // for why this cap exists (a handful of otherwise-normal orders carry an
+  // implausible numberOfGuests — a staff data-entry slip, confirmed against
+  // the live API, not a CSV-export artifact) — duplicated here for the same
+  // Node-22-can't-reliably-strip-TypeScript reason as the rest of this file.
+  const covers = orders.filter(o => !o.deleted).reduce((sum, o) => {
+    const guests = o.numberOfGuests ?? 0
+    if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) {
+      console.warn(`  dropping implausible numberOfGuests=${guests} on order ${o.guid} (${isoDay})`)
+      return sum
+    }
+    return sum + guests
+  }, 0)
   const laborHours = timeEntries.reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
 
   // A day with zero orders AND zero time entries is either a real closed

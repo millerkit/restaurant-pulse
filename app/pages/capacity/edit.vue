@@ -184,13 +184,14 @@ function historyIndexFor(month: number): number | null {
   return historyData.value?.monthlyIndex?.find(m => m.month === month)?.indexPct ?? null
 }
 // The fraction "Set by History" would apply to a given month: this month's
-// historical index (its per-open-day core dine-in revenue as a % of that
-// year's own average, from the most recent prior year's QBO history — see
-// server/api/capacity/history.get.ts) scaled against the current overall
-// annual average above, so history determines the *shape* across months
-// while the total-year level stays anchored to what's already entered. Null
-// (and the button disabled) when either input is missing — no historical
-// reading for that month, or nothing entered anywhere yet to anchor to.
+// historical index (its covers per open day as a % of that year's own
+// average, from the most recent prior year's Toast history — see
+// server/api/capacity/history.get.ts; switched from a revenue-based proxy
+// to real covers 2026-08-12) scaled against the current overall annual
+// average above, so history determines the *shape* across months while the
+// total-year level stays anchored to what's already entered. Null (and the
+// button disabled) when either input is missing — no historical reading
+// for that month, or nothing entered anywhere yet to anchor to.
 function historyTargetFraction(s: MonthlyDraft): number | null {
   const indexPct = historyIndexFor(s.month)
   const baseline = currentAnnualFillPct.value
@@ -199,9 +200,9 @@ function historyTargetFraction(s: MonthlyDraft): number | null {
 }
 function historyTooltip(s: MonthlyDraft): string {
   const indexPct = historyIndexFor(s.month)
-  if (indexPct == null) return 'No historical QuickBooks data available for this month yet.'
+  if (indexPct == null) return 'No historical Toast covers data available for this month yet.'
   if (currentAnnualFillPct.value == null) return 'Enter at least some covers below first — Set by History scales its own average against whatever is already on this page.'
-  return `${MONTH_NAMES[s.month - 1]} historically runs ${indexPct.toFixed(0)}% of the year's average dine-in revenue (${historyYearsLabel.value} QuickBooks, food & beverage only) — applied to this page's current ${fmtPct(currentAnnualFillPct.value)} year-round average.`
+  return `${MONTH_NAMES[s.month - 1]} historically runs ${indexPct.toFixed(0)}% of the year's average covers per night (${historyYearsLabel.value} Toast) — applied to this page's current ${fmtPct(currentAnnualFillPct.value)} year-round average.`
 }
 // "Set by History" (replaced the manually-typed "Set %" 2026-08-10) applies
 // one blended fill % — derived from real historical seasonality rather than
@@ -370,7 +371,7 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Expected Nightly Covers by Area &amp; Holiday Closures</div>
-          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} QuickBooks dine-in revenue, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
+          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
