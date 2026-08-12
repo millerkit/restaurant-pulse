@@ -29,9 +29,17 @@ export default defineEventHandler(async (event) => {
 
   const db = useDb()
   const accountExists = db.prepare('SELECT 1 FROM accounts WHERE id = ? AND is_active = 1')
+  const nonLeafIds = nonLeafAccountIds(db)
   for (const t of targets) {
     if (!accountExists.get(t.accountId)) {
       throw createError({ statusCode: 400, statusMessage: `No active account with id ${t.accountId}` })
+    }
+    // Budget entry is leaf-accounts-only — a parent's own stored amount gets
+    // double-counted by categoryTotals()/hybridYearTotals() while budget/
+    // edit.vue's tree ignores it entirely, so the two pages disagree. See
+    // server/utils/accounts.ts.
+    if (nonLeafIds.has(t.accountId)) {
+      throw createError({ statusCode: 400, statusMessage: `Account ${t.accountId} has sub-accounts — budget the sub-accounts instead, not the parent` })
     }
   }
 

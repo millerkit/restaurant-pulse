@@ -19,7 +19,8 @@
     "db:seed-dev-actuals": "node scripts/seed-dev-actuals.mjs",
     "db:pull-accounts": "node scripts/pull-accounts-from-prod.mjs",
     "db:migrate-other-categories": "node scripts/migrate-other-categories.mjs",
-    "db:migrate-capacity-revenue-split": "node scripts/migrate-capacity-revenue-split.mjs"
+    "db:migrate-capacity-revenue-split": "node scripts/migrate-capacity-revenue-split.mjs",
+    "db:migrate-leaf-only-budgets": "node scripts/migrate-leaf-only-budgets.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

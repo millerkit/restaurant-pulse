@@ -61,6 +61,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const db = useDb()
+  const nonLeafIds = nonLeafAccountIds(db)
   const { start, end } = monthBounds({ year: sourceYear, month: sourceMonth })
   const accountFilter = accountIds && accountIds.length > 0
     ? `AND account_id IN (${accountIds.map(() => '?').join(',')})`
@@ -105,6 +106,13 @@ export default defineEventHandler(async (event) => {
   } else {
     throw createError({ statusCode: 422, statusMessage: `No actuals available for ${sourceLabel} yet` })
   }
+
+  // Budget entry is leaf-accounts-only (see server/utils/accounts.ts) but
+  // the actuals source can legitimately include a parent account's own
+  // direct QBO posting (see CLAUDE.md's "parent account ... can also carry
+  // its own direct postings" note) — skip those rather than failing the
+  // whole copy, since this runs across every account in bulk.
+  rows = rows.filter(r => !nonLeafIds.has(r.accountId))
 
   // onlyMissing (the per-line-item "fill gaps" action) never touches an
   // account that already has a budget_targets row for the target month —

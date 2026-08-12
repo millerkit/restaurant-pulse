@@ -198,6 +198,15 @@ function isLeafAccount(acc: BudgetAccount): boolean {
   return directChildren(acc.accountId).length === 0
 }
 
+// Same leaf check as isLeafAccount, but against an arbitrary month's own
+// MonthData rather than editMonthData — the account hierarchy is identical
+// across every month's fetch (each returns every active account), so this
+// lets the trailing-average COGS recompute (which reads other months'
+// MonthData, not just the one being edited) apply the same leaf-only rule.
+function isLeafAccountIn(data: MonthData, acc: BudgetAccount): boolean {
+  return !data.accounts.some(a => a.parentAccountId === acc.accountId)
+}
+
 function computedAccountAmount(acc: BudgetAccount): number {
   const children = directChildren(acc.accountId)
   if (children.length === 0) return parseEditableAmount(editableAccountAmounts.value[acc.accountId])
@@ -207,6 +216,24 @@ function computedAccountAmount(acc: BudgetAccount): number {
 function categoryComputedTotal(cat: Category): number {
   const roots = (editMonthData.value?.accounts || []).filter(a => a.category === cat && a.parentAccountId === null)
   return roots.reduce((sum, a) => sum + computedAccountAmount(a), 0)
+}
+
+// Total tab's category subtotal — the hybrid full-year figure (budget
+// where one's set, real actuals as a fallback for a month that's already
+// closed with no budget), not categoryComputedTotal's plain sum of
+// budget_targets rows. Requested directly by the user after the Total
+// tab's pure-budget figure and Budget Pace's year total disagreed for any
+// category with unbudgeted past months — "Total" now reads as this year's
+// actual P&L trajectory (real results so far + planned results for the
+// rest of the year) on both pages, using the same yearHybridTotals this
+// page's own Live Preview card (below) already computes. The per-account
+// rows underneath still show the plain budget figure (there's no cheap way
+// to get real per-account actuals for every past unbudgeted month here),
+// so an expanded category's visible line items won't always sum to this
+// number when a fallback is in effect — the Live Preview card's "X/12 mo
+// budgeted" note is what surfaces that.
+function yearDisplayCategoryTotal(cat: Category): number {
+  return yearHybridTotals.value[cat]
 }
 
 // Actual-side mirror of computedAccountAmount/categoryComputedTotal above —
@@ -698,6 +725,11 @@ function trailingMonthsWithData(targetMonth: number, count = COGS_TRAILING_WINDO
   return months.reverse()
 }
 
+// Restricted to leaf accounts, same as the Revenue-from-Capacity recompute
+// below — budget entry is leaf-only (see server/utils/accounts.ts), and
+// summing a parent alongside its own children here double-counts it, the
+// same bug that produced Beverage COGS's stray parent-level budget rows
+// (see CLAUDE.md's Budget tab section).
 function cogsGroupPctOverMonths(monthNumbers: number[], group: 'Food' | 'Beverage'): number | null {
   let groupCogsTotal = 0
   let groupRevenueTotal = 0
@@ -705,7 +737,7 @@ function cogsGroupPctOverMonths(monthNumbers: number[], group: 'Food' | 'Beverag
     const data = monthlyData.value[m - 1]
     if (!data) continue
     for (const acc of data.accounts) {
-      if (acc.amount === null) continue
+      if (acc.amount === null || !isLeafAccountIn(data, acc)) continue
       if (acc.category === 'revenue' && acc.subcategory === group) groupRevenueTotal += acc.amount
       if (acc.category === 'cogs' && acc.subcategory === group) groupCogsTotal += acc.amount
     }
@@ -715,7 +747,7 @@ function cogsGroupPctOverMonths(monthNumbers: number[], group: 'Food' | 'Beverag
 
 function groupRevenueBudget(data: MonthData, group: 'Food' | 'Beverage'): number {
   return data.accounts
-    .filter(a => a.category === 'revenue' && a.subcategory === group && a.amount !== null)
+    .filter(a => a.category === 'revenue' && a.subcategory === group && a.amount !== null && isLeafAccountIn(data, a))
     .reduce((sum, a) => sum + (a.amount || 0), 0)
 }
 
@@ -734,7 +766,7 @@ function currentGroupPct(data: MonthData, group: 'Food' | 'Beverage'): number | 
   const revenue = groupRevenueBudget(data, group)
   if (revenue <= 0) return null
   const cogs = data.accounts
-    .filter(a => a.category === 'cogs' && a.subcategory === group && a.amount !== null)
+    .filter(a => a.category === 'cogs' && a.subcategory === group && a.amount !== null && isLeafAccountIn(data, a))
     .reduce((sum, a) => sum + (a.amount || 0), 0)
   return cogs / revenue
 }
@@ -775,7 +807,7 @@ async function recomputeCogsFromTrailingAverage() {
     const data = editMonthData.value
     if (!data) throw new Error('Budget data not loaded yet')
     const revenueBudget = data.accounts
-      .filter(a => a.category === 'revenue' && a.amount !== null)
+      .filter(a => a.category === 'revenue' && a.amount !== null && isLeafAccountIn(data, a))
       .reduce((sum, a) => sum + (a.amount || 0), 0)
     if (!revenueBudget) throw new Error(`Set a Revenue budget for ${MONTH_NAMES[editMonth.value - 1]} first`)
 
@@ -790,7 +822,7 @@ async function recomputeCogsFromTrailingAverage() {
       // Group-specific revenue budget, not the whole month's revenue — see
       // the comment above cogsGroupPctOverMonths for why.
       const groupBudget = pct * groupRevenueBudget(data, group)
-      const accounts = data.accounts.filter(a => a.category === 'cogs' && a.subcategory === group)
+      const accounts = data.accounts.filter(a => a.category === 'cogs' && a.subcategory === group && isLeafAccountIn(data, a))
       if (accounts.length === 0) continue
       const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
       for (const a of accounts) {
@@ -825,12 +857,12 @@ async function recomputeCogsFromTrailingAverage() {
 // COGS, Revenue isn't itself a % of some other total; Capacity's covers x
 // per-cover model IS the projection.
 //
-// Restricted to leaf accounts (no children) via isLeafAccount, unlike
-// groupRevenueBudget/currentGroupPct above (used only by the COGS section,
-// left as-is) — 4020 Restaurant Beverage is a parent whose own stored
-// budget_targets amount happens to always be 0 today, so including it there
-// is harmless by convention, not by filtering. Excluding it here avoids
-// relying on that same convention for a brand-new write path.
+// Restricted to leaf accounts (no children) via isLeafAccount — budget
+// entry is leaf-only everywhere now (see server/utils/accounts.ts and the
+// same isLeafAccountIn checks added to the COGS section above), after a
+// missing leaf check there let the COGS recompute write its own amount
+// directly onto a parent account (Beverage COGS) alongside its children,
+// which categoryTotals()/hybridYearTotals() then double-counted.
 type CapacityAssumedMonth = { expectedRevenueFood: number, expectedRevenueBeverage: number }
 type CapacityMonth = { month: number, assumed: CapacityAssumedMonth }
 const capacityMonths = ref<CapacityMonth[] | null>(null)
@@ -1173,7 +1205,7 @@ function exportForQuickBooks() {
             </div>
           </div>
           <div class="live-pace-net">
-            Net income (draft): <strong :class="yearLiveNetIncome >= 0 ? 'good' : 'critical'">{{ yearLiveNetIncome >= 0 ? '+' : '' }}${{ Math.round(yearLiveNetIncome).toLocaleString() }}</strong>
+            Net income (projected): <strong :class="yearLiveNetIncome >= 0 ? 'good' : 'critical'">{{ yearLiveNetIncome >= 0 ? '+' : '' }}${{ Math.round(yearLiveNetIncome).toLocaleString() }}</strong>
           </div>
         </div>
 
@@ -1247,11 +1279,21 @@ function exportForQuickBooks() {
                 <th scope="col">Projected</th>
               </tr>
             </thead>
-            <!-- Annual total: a straight sum across all 12 months per line
-                 item, read-only (there's nothing to edit or compare against
-                 for an aggregate) — no Actual/Variance columns, no
-                 COGS-recompute banner (that's for planning one month, not
-                 reviewing a year). -->
+            <!-- Annual total: the hybrid full-year figure per category —
+                 budget where one's set, real actuals as a fallback for a
+                 month that's already closed with no budget — same
+                 yearHybridTotals this page's own Live Preview card above
+                 already computes, so "Total" reads as this year's actual
+                 P&L trajectory (real results so far + planned results for
+                 the rest of the year) instead of just a sum of whatever's
+                 typed into budget_targets. Read-only either way (there's
+                 nothing to edit or compare against for an aggregate) — no
+                 Actual/Variance columns, no COGS-recompute banner (that's
+                 for planning one month, not reviewing a year). Per-account
+                 rows underneath still show the plain budget figure (see
+                 yearDisplayCategoryTotal's own comment), so a category note
+                 flags it when its subtotal is leaning on actuals for any
+                 already-elapsed month. -->
             <tbody v-if="viewingAnnualTotal">
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
@@ -1260,7 +1302,14 @@ function exportForQuickBooks() {
                       {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
-                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
+                  <td><span class="amount-input readonly">${{ Math.round(yearDisplayCategoryTotal(cat)).toLocaleString() }}</span></td>
+                </tr>
+                <tr v-if="yearMonthsBudgeted(cat) < 12" class="cogs-avg-row">
+                  <td colspan="2">
+                    <div class="section-note">
+                      Only {{ yearMonthsBudgeted(cat) }} of 12 months budgeted — the rest of this total uses real actuals for already-elapsed months, planned budget for the rest.
+                    </div>
+                  </td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
@@ -1272,8 +1321,8 @@ function exportForQuickBooks() {
                 </template>
               </template>
               <tr class="net-income-row">
-                <th scope="row">Net Income (Budgeted)</th>
-                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
+                <th scope="row">Net Income (Projected)</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearLiveNetIncome)">{{ formatNetIncome(yearLiveNetIncome) }}</strong></span></td>
               </tr>
               <tr v-if="yearActualNetIncome !== null" class="net-income-row">
                 <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
