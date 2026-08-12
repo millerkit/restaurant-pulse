@@ -12,10 +12,38 @@ interface ToastCredentials {
   restaurantGuid: string
 }
 
+interface ToastCheck {
+  voided: boolean
+  totalAmount: number | null
+}
+
 interface ToastOrder {
   guid: string
   deleted: boolean
   numberOfGuests: number | null
+  openedDate: string
+  table: { guid: string } | null
+  checks: ToastCheck[]
+}
+
+// Urban Hearth is dinner-only; a daytime pop-up/market event (confirmed by
+// the user, e.g. 2025-01-19: 39 separate orders between 11:59am-3:48pm,
+// every one a guests=1 stub from a single server, no evening orders at all)
+// still creates real Toast orders and shouldn't count as dinner covers.
+// Orders opened before 5pm local are excluded entirely — verified against
+// a real sample of normal dinner nights first: pre-5pm activity on those
+// days is 0-3 stray guests=1 orders (gift cards, not seated guests), so the
+// cutoff costs a real dinner night essentially nothing while correctly
+// zeroing out an all-daytime day like 2025-01-19 (which previously
+// inflated that day's covers to 39, on par with a real dinner night).
+// 5pm, not midnight — matches the user's own stated rule ("ignore anything
+// that happened before 5pm... unlikely they could have been seated early
+// enough to order anything by then").
+const MIN_DINNER_HOUR_LOCAL = 17
+const RESTAURANT_TIME_ZONE = 'America/New_York' // see nuxt.config.ts's own confirmation of this
+function isDinnerHour(openedDateIso: string): boolean {
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: RESTAURANT_TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(new Date(openedDateIso)))
+  return hour >= MIN_DINNER_HOUR_LOCAL
 }
 
 // A single order's numberOfGuests above this is treated as a data-entry
@@ -62,8 +90,8 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   const businessDate = toBusinessDateParam(isoDate)
 
   const orders = await fetchAllPages<ToastOrder>(creds, '/orders/v2/ordersBulk', businessDate)
-  const covers = orders
-    .filter(o => !o.deleted)
+  const dinnerOrders = orders.filter(o => !o.deleted && isDinnerHour(o.openedDate))
+  const covers = dinnerOrders
     .reduce((sum, o) => {
       const guests = o.numberOfGuests ?? 0
       if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) {
@@ -86,6 +114,41 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
       labor_hours = excluded.labor_hours,
       synced_at = excluded.synced_at
   `).run(isoDate, covers, laborHours, new Date().toISOString())
+
+  // Per-area breakdown — see toast-table-map.ts. Reuses the same
+  // dinnerOrders (already deleted/dinner-hour filtered) rather than a
+  // second Toast API call. Orders with no table (deleted/gift-card/API
+  // orders, per the live spot-check in toast-table-map.ts) or a table
+  // whose name didn't match a known area pattern are excluded from the
+  // per-area sums but still counted in the whole-restaurant covers above.
+  const areaMap = await getTableAreaMap(creds)
+  const areaIds = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map((r: any) => [r.name, r.id]))
+  const perArea = new Map<string, { covers: number; revenue: number }>()
+  for (const o of dinnerOrders) {
+    const areaName = o.table ? areaMap.get(o.table.guid) : null
+    if (!areaName) continue
+    const guests = o.numberOfGuests ?? 0
+    if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
+    const checkTotal = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.totalAmount ?? 0), 0)
+    const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0 }
+    entry.covers += guests
+    entry.revenue += checkTotal
+    perArea.set(areaName, entry)
+  }
+  const upsertArea = db.prepare(`
+    INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, synced_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (date, area_id) DO UPDATE SET
+      covers = excluded.covers,
+      revenue = excluded.revenue,
+      synced_at = excluded.synced_at
+  `)
+  const syncedAt = new Date().toISOString()
+  for (const [areaName, { covers: areaCovers, revenue }] of perArea) {
+    const areaId = areaIds.get(areaName)
+    if (areaId == null) continue
+    upsertArea.run(isoDate, areaId, areaCovers, revenue, syncedAt)
+  }
 
   return { covers, laborHours }
 }

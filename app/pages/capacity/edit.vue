@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { MONTH_NAMES } from '~/composables/useBudgetData'
+import { MONTH_NAMES, paceStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Capacity` })
 
@@ -22,6 +22,59 @@ const { data: historyData } = await useFetch<{ monthlyIndex: MonthlyIndexRow[], 
 // year (simplified 2026-08-10, at the user's request, from an earlier
 // multi-year average) but this stays correct if that ever changes.
 const historyYearsLabel = computed(() => (historyData.value?.historicalYears ?? []).join('/') || 'prior years')
+
+// Real per-area actuals (this month / last month), added 2026-08-13 once
+// Toast Configuration API scope unblocked resolving table.guid to an area
+// (see server/utils/toast-table-map.ts). Shown next to the aspirational
+// Per-Cover Revenue (Total) column so it reads as "assumed vs. actually
+// happening" rather than a separate table — display only, never fed back
+// into the editable assumption inputs (unlike Set by History's covers,
+// this is a $/cover figure with no natural place in the covers-based
+// draft shape, and doing so silently would blur "what we assume" with
+// "what Toast measured").
+type AreaActualsRow = { areaId: number, covers: number, revenue: number, perCover: number | null }
+type AreaActualsPeriod = { start: string, end: string, cappedAt: string, perArea: AreaActualsRow[] }
+const { data: areaActualsData } = await useFetch<{ asOfDate: string | null, thisMonth: AreaActualsPeriod | null, lastMonth: AreaActualsPeriod | null }>('/api/capacity/area-actuals')
+function areaActualPerCover(areaId: number, period: 'thisMonth' | 'lastMonth'): number | null {
+  const p = areaActualsData.value?.[period]
+  return p?.perArea.find(r => r.areaId === areaId)?.perCover ?? null
+}
+function fmtMoneyOrDash(n: number | null): string {
+  return n == null ? '—' : `$${n.toFixed(2)}`
+}
+
+// Colors the two Actual columns against that area's own assumed Per-Cover
+// Revenue (Total) draft — same ratio-based status/chip pattern the
+// Capacity Pace page already uses for its fill%/per-cover comparisons
+// (ratioStatus in app/pages/capacity/index.vue), and the same "icon must
+// always pair with color, never stand alone" rule as the P&L/Edit Budget
+// pages' ✓/▲/▼ treatment. Judged against the *live draft* assumption
+// (perCoverTotal(a)), not the last-saved value, so an in-progress edit to
+// Per-Cover Revenue immediately re-colors the actual next to it.
+function areaActualVariance(a: AreaDraft, period: 'thisMonth' | 'lastMonth') {
+  const actual = areaActualPerCover(a.id, period)
+  const assumed = perCoverTotal(a)
+  if (actual == null || !assumed) return null
+  const status = paceStatus((actual / assumed) * 100, 100, 'higher-is-better')
+  return { actual, delta: actual - assumed, status }
+}
+function varianceIcon(v: ReturnType<typeof areaActualVariance>): string {
+  if (!v) return ''
+  return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
+}
+function varianceDeltaLabel(v: ReturnType<typeof areaActualVariance>): string {
+  if (!v) return ''
+  const sign = v.delta >= 0 ? '+' : '−'
+  return `(${sign}$${Math.abs(v.delta).toFixed(2)})`
+}
+const thisMonthLabel = computed(() => {
+  const d = areaActualsData.value?.thisMonth
+  return d ? MONTH_NAMES[Number(d.start.slice(5, 7)) - 1] : 'This Month'
+})
+const lastMonthLabel = computed(() => {
+  const d = areaActualsData.value?.lastMonth
+  return d ? MONTH_NAMES[Number(d.start.slice(5, 7)) - 1] : 'Last Month'
+})
 
 function isMayThroughOct(month: number): boolean {
   return month >= 5 && month <= 10
@@ -335,11 +388,11 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Per-Area Capacity &amp; Revenue</div>
-          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter.</div>
+          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter. Per-Cover Revenue (Total) is an assumed target; Actual This/Last Month is real Toast covers/revenue by area, for comparison — see <NuxtLink to="/capacity">Capacity Pace</NuxtLink> for the blended (non-area) version of this comparison.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
-            <caption>Editable per-area seats, turns/night, and revenue assumptions, with calculated seasonal capacity</caption>
+            <caption>Editable per-area seats, turns/night, and revenue assumptions, with calculated seasonal capacity and real actual per-cover revenue for this month and last month</caption>
             <thead>
               <tr>
                 <th scope="col">Area</th>
@@ -350,6 +403,8 @@ async function save() {
                 <th scope="col">Per-Cover Revenue (Food)</th>
                 <th scope="col">Per-Cover Revenue (Beverage)</th>
                 <th scope="col">Per-Cover Revenue (Total)</th>
+                <th scope="col">Actual ({{ thisMonthLabel }})</th>
+                <th scope="col">Actual ({{ lastMonthLabel }})</th>
               </tr>
             </thead>
             <tbody>
@@ -362,6 +417,20 @@ async function save() {
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td class="derived">${{ perCoverTotal(a).toFixed(2) }}</td>
+                <td class="derived">
+                  <span v-if="areaActualVariance(a, 'thisMonth')" :class="['variance-text', `v-${areaActualVariance(a, 'thisMonth')!.status}`]">
+                    <span class="variance-main">{{ fmtMoneyOrDash(areaActualPerCover(a.id, 'thisMonth')) }}</span>
+                    <span class="variance-delta"><span class="variance-icon">{{ varianceIcon(areaActualVariance(a, 'thisMonth')) }}</span> {{ varianceDeltaLabel(areaActualVariance(a, 'thisMonth')) }}</span>
+                  </span>
+                  <span v-else>{{ fmtMoneyOrDash(areaActualPerCover(a.id, 'thisMonth')) }}</span>
+                </td>
+                <td class="derived">
+                  <span v-if="areaActualVariance(a, 'lastMonth')" :class="['variance-text', `v-${areaActualVariance(a, 'lastMonth')!.status}`]">
+                    <span class="variance-main">{{ fmtMoneyOrDash(areaActualPerCover(a.id, 'lastMonth')) }}</span>
+                    <span class="variance-delta"><span class="variance-icon">{{ varianceIcon(areaActualVariance(a, 'lastMonth')) }}</span> {{ varianceDeltaLabel(areaActualVariance(a, 'lastMonth')) }}</span>
+                  </span>
+                  <span v-else>{{ fmtMoneyOrDash(areaActualPerCover(a.id, 'lastMonth')) }}</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -485,6 +554,22 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
    <td> a normal table cell. */
 .money-cell { display: inline-flex; align-items: center; gap: 3px; }
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* Actual (Month) columns' colored figure + icon/delta — same v-good/
+   v-warning/v-serious/v-critical status coloring and ✓/▲/▼ icon pairing
+   as app/pages/budget/edit.vue's variance-text (status color must always
+   pair with an icon, never stand alone — see the Design direction
+   section in CLAUDE.md). Kept local rather than shared: the two pages'
+   surrounding cell markup already differs enough that sharing would add
+   more indirection than it saves. */
+.variance-text.v-good { color: var(--good); }
+.variance-text.v-warning { color: var(--warning); }
+.variance-text.v-serious { color: var(--serious); }
+.variance-text.v-critical { color: var(--critical); }
+.variance-text { display: inline-flex; flex-direction: column; align-items: center; font-weight: 600; }
+.variance-main { white-space: nowrap; }
+.variance-icon { display: inline-block; }
+.variance-delta { display: block; font-weight: 500; opacity: 0.8; white-space: nowrap; font-size: 11px; }
 
 .setpct-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
 .setpct-row { display: flex; align-items: center; justify-content: center; gap: 5px; }

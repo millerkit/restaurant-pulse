@@ -2475,6 +2475,118 @@ the components behind a click. The user agreed.
   generalized `yearAvg`/`periodAvgFor` helpers but still reads only the
   `covers` metric) still works unchanged.
 
+## Daytime pop-up/market events were inflating covers — 5pm dinner-hour cutoff — 2026-08-13
+
+Found by the user manually cross-checking January 2025 against the real
+Toast CSV export in Numbers (grouped by date) after the ranked-months
+answer above showed January with an oddly thin 9 open days out of 31 — they
+counted ~18 "regular-looking dinner service days" themselves and flagged
+the mismatch, then spotted the cause directly in the data: 2025-01-19
+shows 39 separate orders between 11:59am-3:48pm, every one a `guests=1`
+stub from a single server, no evening orders at all — a daytime pop-up or
+winter-market event, not dinner service, but still landing in that day's
+Toast covers total. The user's rule: ignore anything before 5pm, on the
+reasoning that a real dinner guest couldn't plausibly be seated and have
+ordered before then.
+
+- Verified two things live against the API before building anything (same
+  discipline as every other fix in this file): pulled 2025-01-19's real
+  orders and confirmed all 39 are pre-5pm stubs exactly as described; then
+  sampled ~17 other January dates and confirmed normal dinner nights carry
+  only 0-3 stray pre-5pm orders (always `guests=1`, e.g. a gift card sale,
+  never a real seated party) — so a 5pm cutoff costs a real dinner night
+  almost nothing while fully zeroing out an all-daytime day like
+  2025-01-19 (which previously inflated its covers to 39, on par with a
+  real dinner night, and had been slipping through undetected because its
+  core revenue happened to be $0 — not a rule this app enforces, just a
+  coincidence of which GL account market-event revenue landed in).
+- **Fixed** with `MIN_DINNER_HOUR_LOCAL = 17` in both
+  `server/utils/toast-metrics-sync.ts` (the live nightly sync) and
+  `scripts/backfill-toast-metrics.mjs` (duplicated, same reasoning as
+  `MAX_PLAUSIBLE_GUESTS_PER_ORDER`/`MIN_COVERS_FOR_OPEN_DAY` elsewhere in
+  this file) — an order only counts toward a day's covers if its
+  `openedDate`, converted to `America/New_York` local time via
+  `Intl.DateTimeFormat` (matching `qbo-nightly-sync.ts`'s own
+  IANA-zone-aware pattern), falls at or after 5pm.
+- **Local dev re-backfilled** (`npm run db:backfill-toast --
+  --since=2024-08-01`, all 741 days, idempotent re-write) — verified
+  January 2025 now shows exactly 18 days with covers ≥15
+  (`MIN_COVERS_FOR_OPEN_DAY`), an exact match to the user's own manual
+  count from the CSV, and 2025-01-19 correctly reads `covers=0`.
+- **Not yet deployed or re-backfilled in production** — this is a code
+  change (not just a data backfill like the earlier production fixes), so
+  it needs `fly deploy` first, then the same `--since=2024-07-28` backfill
+  re-run via `fly ssh console` used for the earlier production backfills.
+
+## Real per-area covers/revenue on the Edit Capacity page — 2026-08-13
+
+Closes the per-area actuals gap flagged in "Not yet done" below (previously
+blocked on Toast's Configuration API 403ing). The user granted the
+existing `TOAST_*` credential Configuration API scope in Toast's own
+developer console (`orders:read`/`labor:read` plus a new config scope),
+which unblocked `/config/v2/tables` live — confirmed before writing any
+code, following the same "verify against the live API first" discipline
+as every other Toast/QBO integration in this file.
+
+- **Classifies by the restaurant's own table-numbering convention, not
+  Toast's `RevenueCenter` field** — confirmed live that `RevenueCenter` is
+  a worse signal for this restaurant's real 5-area breakdown: it groups
+  Bar and Salon tables into one "Bar" revenue center, and misfiles table
+  `C2` under "Dining Room" instead of "Chef's Counter" (a real Toast admin
+  misconfiguration, not a bug in this code). The user supplied the real
+  naming convention directly (confirmed against the live floor plan and
+  `/config/v2/tables`, 44 real tables): banquette 1-7 and 20s → Dining
+  Room, 30s/40s → Salon, 50s → Outdoor, `B<n>` → Bar, `C<n>` → Chef's
+  Counter. See `classifyTableName()` in
+  [`server/utils/toast-table-map.ts`](server/utils/toast-table-map.ts)
+  (duplicated into `scripts/backfill-toast-metrics.mjs` for the usual
+  Node-22 reason).
+- **`daily_toast_area_metrics`** (schema.sql) is a new table — one row per
+  (date, area), `covers`/`revenue` summed from each dinner-hour,
+  non-deleted order's classified table and non-voided check totals. Reuses
+  the exact same order fetch as the existing whole-restaurant
+  `daily_toast_metrics` sync (no second API call) —
+  [`server/utils/toast-metrics-sync.ts`](server/utils/toast-metrics-sync.ts)'s
+  `syncToastMetricsForDate` now writes both tables from one
+  `ordersBulk` pull, folded into the same nightly sync
+  (`runNightlySync`) with no separate scheduler.
+- **Revenue here is necessarily Toast's own check totals, not QBO's** —
+  unlike `history.get.ts`'s "core dine-in revenue" concept (which excludes
+  event/catering revenue via QBO account numbers), there's no per-check
+  revenue-category signal to do the same exclusion at the table level, so
+  a day with a private buyout at a given table will read high. Documented
+  as a known simplification directly in schema.sql, not silently accepted.
+- **[`server/api/capacity/area-actuals.get.ts`](server/api/capacity/area-actuals.get.ts)**
+  returns this-month/last-month per-area covers, revenue, and $/cover,
+  capped at `MAX(date)` in `daily_toast_area_metrics` (not today's
+  calendar date) — mirrors `capacity.get.ts`'s own `asOfDate` pattern,
+  since Toast sync freshness can lag the wall clock by a day or two.
+  [`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue)'s
+  Per-Area Capacity & Revenue table gained two new read-only "Actual
+  (Month)" columns next to the existing aspirational Per-Cover Revenue
+  (Total) column — display only, never fed back into the editable covers
+  inputs (unlike "Set by History," a $/cover actual has no natural slot in
+  the covers-based draft shape, and silently blending "what we assume"
+  with "what Toast measured" would be the wrong call here).
+- **Verified against real local data**: local dev backfilled for
+  2026-07-01 through 2026-08-11 (`npm run db:backfill-toast --
+  --since=2026-07-01 --until=2026-08-11`); per-area covers summed across
+  Aug 1-11 (727 of 757 whole-restaurant covers — the gap is orders with no
+  table or an unclassified table name, e.g. gift cards) and the resulting
+  $/cover figures rendered in the browser look directionally sane against
+  the assumed targets (Dining Room actual ~$118-123 vs. assumed $110;
+  Chef's Counter actual ~$180-191 vs. assumed $258 — a real gap worth the
+  user's own follow-up, not investigated further here).
+- **Not yet deployed to production** — needs `daily_toast_area_metrics`
+  created on the production volume by hand (same manual-migration posture
+  as every other schema addition to an existing volume in this file), a
+  `fly deploy`, and a production backfill re-run
+  (`npm run db:backfill-toast -- --since=2024-07-28`, matching production's
+  existing QBO revenue floor) to populate historical per-area rows. The
+  Toast credential's new Configuration API scope is shared by both
+  environments (same client id/secret), so no separate production
+  credential change is needed.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast`
@@ -2482,13 +2594,13 @@ the components behind a click. The user agreed.
   two indexes show a real multi-year comparison in production the way
   local dev now does — see the Historical tab section above. Deliberately
   left for the user to confirm before touching production data.
-- Per-area (table-level) actuals — needed both for the Edit Capacity page's
-  per-area covers/spend projections (Dining Room/Outdoor/Chef's Table now,
-  Bar/Salon once Cambridge St has its own year of history — the user's own
-  framing) and for a truly measured historical fill % (see the bookmark
-  below). Blocked on Toast Config API access (403 under current
-  credentials, confirmed live — see the Historical tab section above), not
-  just on data availability.
+- Per-area (table-level) actuals for the Edit Capacity page's Per-Cover
+  Revenue table — unblocked and built 2026-08-13 (see "Real per-area
+  covers/revenue on the Edit Capacity page" above), but not yet deployed
+  to production. Still open: feeding this into a truly measured historical
+  fill % (see the bookmark below), and Bar/Salon's own multi-year history
+  once Cambridge St has a full year of real data the way Mass Ave's
+  RevenueCenter-based Bar grouping never needed to distinguish from Salon.
 - Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
   production and saving once there to correct Salon's stale stored capacity
   (80/80 vs. the correct 60/60) — done in local dev only so far.
@@ -2587,8 +2699,10 @@ the components behind a click. The user agreed.
 - [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
 - [`server/utils/db.ts`](server/utils/db.ts) — `useDb()` helper for server routes/API endpoints
 - [`server/utils/toast.ts`](server/utils/toast.ts) — Toast POS auth/fetch helper
-- [`server/utils/toast-metrics-sync.ts`](server/utils/toast-metrics-sync.ts) — covers + labor-hours sync
-- [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast backfill
+- [`server/utils/toast-metrics-sync.ts`](server/utils/toast-metrics-sync.ts) — covers + labor-hours sync, plus per-area covers/revenue
+- [`server/utils/toast-table-map.ts`](server/utils/toast-table-map.ts) — resolves a Toast table GUID to a real dining area by table-name convention
+- [`server/api/capacity/area-actuals.get.ts`](server/api/capacity/area-actuals.get.ts) — this-month/last-month real per-area covers/revenue, shown on the Edit Capacity page
+- [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast backfill (whole-restaurant + per-area)
 - [`server/api/budget/`](server/api/budget/) — budget read/write, copy-actuals, and QBO export routes
 - [`scripts/init-db.mjs`](scripts/init-db.mjs) — creates the SQLite file from `schema.sql`
 - [`scripts/import-budget-xlsx.mjs`](scripts/import-budget-xlsx.mjs) — one-time seed of accounts + budget from a real QBO budget export

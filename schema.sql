@@ -141,6 +141,33 @@ CREATE TABLE daily_toast_metrics (
   synced_at    TEXT NOT NULL
 );
 
+-- Per-area covers + revenue, added 2026-08-13 once the TOAST_* credential
+-- was granted Configuration API scope (previously 403, see CLAUDE.md's
+-- "Toast Config API access" note) — resolves each order's opaque
+-- table.guid to a real table name via /config/v2/tables, then classifies
+-- that name into one of capacity_areas' 5 areas by the restaurant's own
+-- table-numbering convention (server/utils/toast-table-map.ts), NOT
+-- Toast's own RevenueCenter grouping — Toast's RevenueCenter conflates
+-- Bar+Salon into one "Bar" center and misfiles table C2 under "Dining
+-- Room" (both confirmed live), so the name-pattern classification the
+-- restaurant actually uses is more accurate than Toast's own config.
+-- revenue is the sum of each area's non-voided check totalAmount for
+-- dinner-hour, non-deleted orders (same isDinnerHour/deleted filters as
+-- daily_toast_metrics) — necessarily Toast's own dollar total, not QBO's,
+-- since QBO's P&L has no per-area breakdown to draw from. Unlike
+-- daily_line_items/history.get.ts's "core dine-in revenue" concept, this
+-- can't exclude event/catering revenue at the per-check level, so an area
+-- day with a private buyout will read high — a known simplification, not
+-- attempted given no per-check revenue-category signal exists.
+CREATE TABLE daily_toast_area_metrics (
+  date       TEXT NOT NULL,
+  area_id    INTEGER NOT NULL REFERENCES capacity_areas(id),
+  covers     INTEGER NOT NULL,
+  revenue    REAL NOT NULL,
+  synced_at  TEXT NOT NULL,
+  PRIMARY KEY (date, area_id)
+);
+
 -- The revenue-projection model behind the Capacity tab (added 2026-08-07):
 -- "how many covers, at what revenue per cover, are we assuming per seating
 -- area, and are we actually hitting that." One row per dining area (bar,

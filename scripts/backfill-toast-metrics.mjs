@@ -59,6 +59,35 @@ const args = parseArgs(process.argv.slice(2))
 // See MAX_PLAUSIBLE_GUESTS_PER_ORDER's comment in server/utils/toast-metrics-sync.ts
 const MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50
 
+// See MIN_DINNER_HOUR_LOCAL's comment in server/utils/toast-metrics-sync.ts
+const MIN_DINNER_HOUR_LOCAL = 17
+const RESTAURANT_TIME_ZONE = 'America/New_York'
+function isDinnerHour(openedDateIso) {
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: RESTAURANT_TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(new Date(openedDateIso)))
+  return hour >= MIN_DINNER_HOUR_LOCAL
+}
+
+// See server/utils/toast-table-map.ts for the full rationale — duplicated
+// here for the same Node-22 reason as the rest of this file.
+const NUMERIC_RANGES = [
+  { min: 1, max: 19, area: 'dining room' },
+  { min: 20, max: 29, area: 'dining room' },
+  { min: 30, max: 49, area: 'salon' },
+  { min: 50, max: 59, area: 'outdoor' }
+]
+function classifyTableName(name) {
+  if (!name) return null
+  const trimmed = name.trim()
+  if (/^B\d+$/i.test(trimmed)) return 'bar'
+  if (/^C\d+$/i.test(trimmed)) return 'chefs counter'
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number(trimmed)
+    const match = NUMERIC_RANGES.find(r => n >= r.min && n <= r.max)
+    return match?.area ?? null
+  }
+  return null
+}
+
 function isoDate(d) {
   return d.toISOString().slice(0, 10)
 }
@@ -153,6 +182,41 @@ const upsert = db.prepare(`
   VALUES (@date, @covers, @laborHours, @syncedAt)
   ON CONFLICT(date) DO UPDATE SET covers = excluded.covers, labor_hours = excluded.labor_hours, synced_at = excluded.synced_at
 `)
+const upsertArea = db.prepare(`
+  INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, synced_at)
+  VALUES (@date, @areaId, @covers, @revenue, @syncedAt)
+  ON CONFLICT(date, area_id) DO UPDATE SET covers = excluded.covers, revenue = excluded.revenue, synced_at = excluded.synced_at
+`)
+const areaIdByName = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map(r => [r.name, r.id]))
+
+// Table config (name per guid) is fetched once, not per-day — a physical
+// floor plan doesn't change day to day, and re-fetching 700+ times for a
+// multi-year backfill would be wasteful. Requires the TOAST_* credential
+// to have Configuration API scope (granted 2026-08-13 — see
+// server/utils/toast-table-map.ts); falls back to skipping per-area
+// metrics entirely (with a warning) if that scope isn't present, so a
+// credential without it doesn't fail the whole-restaurant backfill.
+let tableAreaMap = new Map()
+try {
+  const token = cachedToken ?? await login()
+  const res = await fetch(`${HOST}/config/v2/tables`, {
+    headers: { Authorization: `Bearer ${token}`, 'Toast-Restaurant-External-ID': TOAST_RESTAURANT_GUID }
+  })
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  const tables = await res.json()
+  const unclassified = new Set()
+  for (const t of tables) {
+    const area = classifyTableName(t.name)
+    tableAreaMap.set(t.guid, area)
+    if (!area) unclassified.add(t.name)
+  }
+  if (unclassified.size > 0) {
+    console.warn(`${unclassified.size} Toast table(s) didn't match a known naming pattern, excluded from per-area metrics: ${[...unclassified].join(', ')}`)
+  }
+  console.log(`Loaded ${tables.length} Toast table(s) for per-area classification.`)
+} catch (err) {
+  console.warn(`Could not fetch /config/v2/tables (${err.message}) — per-area metrics will be skipped for this run, whole-restaurant covers/labor still backfilled.`)
+}
 
 const days = isoDaysInRange(since, until)
 console.log(`Backfilling ${days.length} day(s) from ${since} to ${until}...`)
@@ -178,7 +242,7 @@ for (const isoDay of days) {
   // implausible numberOfGuests — a staff data-entry slip, confirmed against
   // the live API, not a CSV-export artifact) — duplicated here for the same
   // Node-22-can't-reliably-strip-TypeScript reason as the rest of this file.
-  const covers = orders.filter(o => !o.deleted).reduce((sum, o) => {
+  const covers = orders.filter(o => !o.deleted && isDinnerHour(o.openedDate)).reduce((sum, o) => {
     const guests = o.numberOfGuests ?? 0
     if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) {
       console.warn(`  dropping implausible numberOfGuests=${guests} on order ${o.guid} (${isoDay})`)
@@ -187,6 +251,22 @@ for (const isoDay of days) {
     return sum + guests
   }, 0)
   const laborHours = timeEntries.reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
+
+  const perArea = new Map()
+  if (tableAreaMap.size > 0) {
+    for (const o of orders) {
+      if (o.deleted || !isDinnerHour(o.openedDate)) continue
+      const guests = o.numberOfGuests ?? 0
+      if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
+      const areaName = o.table ? tableAreaMap.get(o.table.guid) : null
+      if (!areaName) continue
+      const checkTotal = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.totalAmount ?? 0), 0)
+      const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0 }
+      entry.covers += guests
+      entry.revenue += checkTotal
+      perArea.set(areaName, entry)
+    }
+  }
 
   // A day with zero orders AND zero time entries is either a real closed
   // day (Urban Hearth is closed Mondays — see CLAUDE.md) or a day before
@@ -203,7 +283,13 @@ for (const isoDay of days) {
   }
 
   db.transaction(() => {
-    upsert.run({ date: isoDay, covers, laborHours, syncedAt: new Date().toISOString() })
+    const syncedAt = new Date().toISOString()
+    upsert.run({ date: isoDay, covers, laborHours, syncedAt })
+    for (const [areaName, { covers: areaCovers, revenue }] of perArea) {
+      const areaId = areaIdByName.get(areaName)
+      if (areaId == null) continue
+      upsertArea.run({ date: isoDay, areaId, covers: areaCovers, revenue, syncedAt })
+    }
   })()
   totalDaysWritten++
   console.log(`${isoDay}: covers=${covers} laborHours=${laborHours.toFixed(2)}${orders.length === 0 && timeEntries.length === 0 ? ' (quiet — no orders or time entries)' : ''}`)
