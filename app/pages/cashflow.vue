@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { YEAR } from '~/composables/useBudgetData'
+import { YEAR, useBudgetYear, useActualsYear, hybridYearTotals, monthCategoryBudget, netIncome, currentAsOfMonth } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Cash Flow` })
 
@@ -10,11 +10,11 @@ type PeriodFigures = {
   freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, reserveTransfers: number, principal: number, catchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
 type ReserveTransfer = { date: string, amount: number, note: string | null }
+type YearProjection = { principal: number, catchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
 type CashFlowResponse = {
   year: number
-  month: number
-  thisMonth: PeriodFigures
   thisYear: PeriodFigures
+  yearProjection: YearProjection
   reserve: {
     target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
     catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
@@ -23,26 +23,37 @@ type CashFlowResponse = {
   upcomingPayments: Payment[]
 }
 
-const now = new Date()
-const asOfMonth = now.getFullYear() === YEAR ? now.getMonth() + 1 : 12
-
 const data = ref<CashFlowResponse | null>(null)
 const loadError = ref<string | null>(null)
 async function load() {
   loadError.value = null
   try {
-    data.value = await $fetch<CashFlowResponse>('/api/cashflow', { query: { year: YEAR, month: asOfMonth } })
+    data.value = await $fetch<CashFlowResponse>('/api/cashflow', { query: { year: YEAR } })
   } catch (err: any) {
     loadError.value = err?.data?.statusMessage || err?.message || 'Failed to load cash flow data'
   }
 }
 onMounted(load)
 
-const selectedPeriod = ref<'month' | 'year'>('month')
-const period = computed(() => data.value ? (selectedPeriod.value === 'month' ? data.value.thisMonth : data.value.thisYear) : null)
-
-const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const periodLabel = computed(() => selectedPeriod.value === 'month' ? `${MONTH_NAMES[asOfMonth - 1]} ${YEAR}` : `${YEAR} year-to-date`)
+// Projected full-year Net Income, "budget as-is" — reuses the exact same
+// hybrid (budget-preferred, actual-fallback-for-elapsed-unbudgeted-months)
+// annual total the Budget Pace page's Year view is built from, so this
+// number can't drift from what that page already calls "the budget."
+const { monthlyData: budgetMonthlyData } = useBudgetYear()
+const { monthlyActuals } = useActualsYear()
+const projectedNetIncomeForYear = computed<number | null>(() => {
+  if (!budgetMonthlyData.value.length) return null
+  const totals = hybridYearTotals(
+    (m, cat) => monthCategoryBudget(budgetMonthlyData.value[m - 1], cat),
+    monthlyActuals.value,
+    currentAsOfMonth()
+  )
+  return netIncome(totals)
+})
+const projectedFreeCashFlowForYear = computed<number | null>(() => {
+  if (projectedNetIncomeForYear.value === null || !data.value) return null
+  return projectedNetIncomeForYear.value - data.value.yearProjection.breakevenNetIncome
+})
 
 function fmt(n: number) {
   return `${n < 0 ? '−' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
@@ -125,37 +136,66 @@ async function submitPlan() {
       <span class="quiet-note">{{ loadError }}</span>
     </div>
 
-    <template v-else-if="data && period">
+    <template v-else-if="data">
       <section>
         <div class="section-head">
           <div class="section-label">Free Cash Flow</div>
-          <div class="period-tabs">
-            <span :class="['period-tab', selectedPeriod === 'month' && 'active']" @click="selectedPeriod = 'month'">Month</span>
-            <span :class="['period-tab', selectedPeriod === 'year' && 'active']" @click="selectedPeriod = 'year'">Year</span>
-          </div>
         </div>
 
         <div class="hero-row">
           <div class="hero-card anchor">
             <div class="hero-top">
-              <span class="period">Free Cash Flow — {{ periodLabel }}</span>
-              <span :class="['chip', period.freeCashFlow.freeCashFlow >= 0 ? 'good' : 'critical']">
-                {{ period.freeCashFlow.freeCashFlow >= 0 ? 'Positive' : 'Negative' }}
+              <span class="period">{{ YEAR }} year-to-date</span>
+              <span :class="['chip', data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'good' : 'critical']">
+                {{ data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'Positive' : 'Negative' }}
               </span>
             </div>
-            <div class="figure">{{ fmt(period.freeCashFlow.freeCashFlow) }}</div>
+            <div class="figure">{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</div>
             <div class="caption">Net Income + Depreciation − Principal − Catch-up interest − Reserve transfers</div>
-            <div v-if="!period.freeCashFlow.hasData" class="caption">No synced actuals for this period yet — Net Income is $0 below.</div>
+            <div v-if="!data.thisYear.freeCashFlow.hasData" class="caption">No synced actuals for this period yet — Net Income is $0 below.</div>
           </div>
         </div>
 
         <div class="fcf-breakdown">
-          <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(period.freeCashFlow.netIncome) }}</span></div>
-          <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(period.freeCashFlow.depreciation) }}</span></div>
-          <div class="fcf-row"><span>− Principal payments</span><span>{{ fmt(-period.freeCashFlow.principal) }}</span></div>
-          <div class="fcf-row"><span>− Catch-up interest (already accrued, not a new P&amp;L expense)</span><span>{{ fmt(-period.freeCashFlow.catchUpInterest) }}</span></div>
-          <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-period.freeCashFlow.reserveTransfers) }}</span></div>
-          <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(period.freeCashFlow.freeCashFlow) }}</span></div>
+          <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
+          <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
+          <div class="fcf-row"><span>− Principal payments</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
+          <div class="fcf-row"><span>− Catch-up interest (already accrued, not a new P&amp;L expense)</span><span>{{ fmt(-data.thisYear.freeCashFlow.catchUpInterest) }}</span></div>
+          <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
+          <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
+        </div>
+      </section>
+
+      <!-- Year-end projection (budget as-is) — how much profit is needed to
+           actually service the loans (not just interest, which is already
+           inside Net Income) vs. how much profit the current budget
+           projects for the full year. -->
+      <section v-if="data.yearProjection">
+        <div class="section-head">
+          <div class="section-label">Year-End Projection — Budget As-Is</div>
+          <div class="section-note">{{ YEAR }} full year</div>
+        </div>
+        <div class="hero-row two-up">
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">Profit needed to cover the loans</span>
+            </div>
+            <div class="figure">{{ fmt(data.yearProjection.breakevenNetIncome) }}</div>
+            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0 — covers principal, the one-time catch-up interest, and reserve transfers. (Interest itself is already inside Net Income, so it doesn't need a separate check.)</div>
+          </div>
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">Profit projected this year</span>
+              <span v-if="projectedNetIncomeForYear !== null" :class="['chip', projectedNetIncomeForYear >= data.yearProjection.breakevenNetIncome ? 'good' : 'critical']">
+                {{ projectedNetIncomeForYear >= data.yearProjection.breakevenNetIncome ? 'On pace to cover it' : 'Short of covering it' }}
+              </span>
+            </div>
+            <div class="figure">{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</div>
+            <div class="caption">Full year of currently entered budget (falls back to actuals for any already-elapsed month with no budget entered).</div>
+          </div>
+        </div>
+        <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
+          Projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
         </div>
       </section>
 
@@ -163,7 +203,7 @@ async function submitPlan() {
       <section>
         <div class="section-head">
           <div class="section-label">P&amp;L View vs. Cash Flow View</div>
-          <div class="section-note">{{ periodLabel }}</div>
+          <div class="section-note">{{ YEAR }} year-to-date</div>
         </div>
         <div class="cf-table-card">
           <table class="cf-table">
@@ -173,34 +213,34 @@ async function submitPlan() {
             <tbody>
               <tr>
                 <th>Loan interest</th>
-                <td>{{ fmt(period.freeCashFlow.actualLoanInterest) }} (acct 7020, actual)</td>
-                <td>{{ fmt(period.debtService.interest) }} (per amortization schedule)</td>
+                <td>{{ fmt(data.thisYear.freeCashFlow.actualLoanInterest) }} (acct 7020, actual)</td>
+                <td>{{ fmt(data.thisYear.debtService.interest) }} (per amortization schedule)</td>
               </tr>
               <tr>
                 <th>Principal</th>
-                <td>Not shown (balance sheet)</td>
-                <td>{{ fmt(period.debtService.principal) }}</td>
+                <td>—</td>
+                <td>{{ fmt(data.thisYear.debtService.principal) }}</td>
               </tr>
               <tr>
                 <th>Catch-up interest</th>
-                <td>Not shown (already accrued monthly)</td>
-                <td>{{ period.debtService.catchUpInterest > 0 ? fmt(period.debtService.catchUpInterest) + ' (one-time)' : '—' }}</td>
+                <td>—</td>
+                <td>{{ data.thisYear.debtService.catchUpInterest > 0 ? fmt(data.thisYear.debtService.catchUpInterest) + ' (one-time)' : '—' }}</td>
               </tr>
               <tr>
                 <th>Reserve transfers</th>
-                <td>Not shown</td>
-                <td>{{ period.freeCashFlow.reserveTransfers > 0 ? fmt(period.freeCashFlow.reserveTransfers) : '—' }}</td>
+                <td>—</td>
+                <td>{{ data.thisYear.freeCashFlow.reserveTransfers > 0 ? fmt(data.thisYear.freeCashFlow.reserveTransfers) : '—' }}</td>
               </tr>
               <tr class="total">
                 <th>Bottom line</th>
-                <td>Net Income: {{ fmt(period.freeCashFlow.netIncome) }}</td>
-                <td>Free Cash Flow: {{ fmt(period.freeCashFlow.freeCashFlow) }}</td>
+                <td>Net Income: {{ fmt(data.thisYear.freeCashFlow.netIncome) }}</td>
+                <td>Free Cash Flow: {{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="section-note">
-          Acct 7020's real actual can differ from the amortization schedule's figure — it may include interest from debt outside these 10 loans (e.g. from before this move).
+          Only loan interest ever shows up on the P&amp;L — principal, the one-time catch-up interest, and reserve transfers don't, since none of those are P&amp;L expenses. Acct 7020's own actual can also differ from the amortization schedule's interest figure shown here — it may include interest from debt outside these 10 loans (e.g. from before this move).
         </div>
       </section>
 
@@ -319,6 +359,7 @@ async function submitPlan() {
 
 <style scoped>
 .hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 1rem; }
+.hero-row.two-up { grid-template-columns: 1fr 1fr; }
 .hero-card {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
   box-shadow: var(--card-shadow); padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;
@@ -328,13 +369,6 @@ async function submitPlan() {
 .hero-card .period { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .hero-card .figure { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--ink); }
 .hero-card .caption { font-size: 12px; color: var(--ink-3); }
-
-.period-tabs { display: flex; gap: 6px; }
-.period-tab {
-  font-size: 11px; font-weight: 700; padding: 4px 11px; border-radius: 100px;
-  border: 1px solid var(--hair); color: var(--ink-3); cursor: pointer; user-select: none;
-}
-.period-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
 
 .fcf-breakdown {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
@@ -408,5 +442,6 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 @media (max-width: 760px) {
   .cf-table th, .cf-table td { padding: 8px 10px; }
+  .hero-row.two-up { grid-template-columns: 1fr; }
 }
 </style>

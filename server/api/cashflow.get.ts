@@ -5,10 +5,10 @@
 // service — interest + principal + one-time catch-up interest + reserve
 // transfers — from loan_schedule, which QBO's P&L can never show).
 //
-// query: year, month (1-12). Returns both the requested month's figures and
-// the requested year's, so the page can offer a Month/Year toggle without a
-// second round trip (mirrors /api/budget/targets' per-month shape, just
-// bundled instead of fetched 12x).
+// query: year. Year-to-date only — the page dropped its Month view
+// 2026-08-11: a single in-progress month's accrued loan interest isn't
+// posted until month-end, so a partial month never had a meaningful number
+// to show here.
 type LoanRow = { loan_key: string, lender: string, payment_date: string, payment_type: 'catch_up' | 'regular', interest: number, principal: number, total_payment: number }
 type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null }
 
@@ -26,24 +26,21 @@ function nextMonday(asOfIso: string): string {
 export default defineEventHandler((event) => {
   const query = getQuery(event)
   const year = Number(query.year)
-  const month = Number(query.month)
-  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
-    throw createError({ statusCode: 400, statusMessage: 'year and month query params are required' })
+  if (!Number.isInteger(year)) {
+    throw createError({ statusCode: 400, statusMessage: 'year query param is required' })
   }
 
   const db = useDb()
   const today = new Date().toISOString().slice(0, 10)
-  const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
-  const monthEndFull = `${year}-${String(month).padStart(2, '0')}-31`
   const yearStart = `${year}-01-01`
   const yearEndFull = `${year}-12-31`
   // Free Cash Flow compares actual net income (only ever known through
   // today) against debt service — so both sides of that comparison must be
-  // capped at today too, or a Year view would subtract full-year scheduled
-  // principal/catch-up (including payments months in the future, like the
-  // Dec 20 catch-up) from a net income figure that only covers Jan–today,
-  // understating cash position for months that haven't happened yet.
-  const monthEnd = monthEndFull < today ? monthEndFull : today
+  // capped at today too, or the Year view would subtract full-year
+  // scheduled principal/catch-up (including payments months in the future,
+  // like the Dec 20 catch-up) from a net income figure that only covers
+  // Jan–today, understating cash position for months that haven't happened
+  // yet.
   const yearEnd = yearEndFull < today ? yearEndFull : today
 
   const allLoanRows = db.prepare('SELECT * FROM loan_schedule ORDER BY payment_date').all() as LoanRow[]
@@ -60,7 +57,6 @@ export default defineEventHandler((event) => {
         .sort((a, b) => a.date.localeCompare(b.date))
     }
   }
-  const monthRows = allLoanRows.filter(r => r.payment_date >= monthStart && r.payment_date <= monthEnd)
   const yearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEnd)
 
   // Reserve target: the one-time catch-up interest due Dec 20, 2026 across
@@ -207,19 +203,60 @@ export default defineEventHandler((event) => {
     return { ...actuals, reserveTransfers, principal: debtService.principal, catchUpInterest: debtService.catchUpInterest, freeCashFlow }
   }
 
-  const monthDebtService = summarizeDebtService(monthRows)
   const yearDebtService = summarizeDebtService(yearRows)
+
+  // ---- Year-end projection (budget as-is) --------------------------------
+  // Backs the Year view's "profit needed to cover the loans" / "profit
+  // projected" headline numbers. Deliberately the FULL calendar year
+  // (uncapped at today), unlike yearRows/yearDebtService above (which stay
+  // capped at today so they compare fairly against actual-to-date Net
+  // Income) — this is a forward-looking target for the whole year, not a
+  // to-date figure.
+  const fullYearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEndFull)
+  const fullYearDebtService = summarizeDebtService(fullYearRows)
+
+  const depBudgetRow = db.prepare(`
+    SELECT SUM(bt.amount) AS total
+    FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+    WHERE a.name = 'Depreciation' AND a.is_active = 1 AND bt.year = ?
+  `).get(year) as { total: number | null }
+  const budgetedDepreciationForYear = depBudgetRow.total ?? 0
+
+  // Reserve transfers for the full year: actual net transfers already made
+  // (through today) plus every remaining Monday through Dec 31 at the
+  // currently-declared weekly plan — same fallback reserveProgress() uses
+  // (last real positive transfer) if no plan has ever been declared.
+  const transfersInYearToDate = allTransfers.filter(t => t.transfer_date >= yearStart && t.transfer_date <= today)
+  const savedInYearToDate = transfersInYearToDate.reduce((s, t) => s + t.amount, 0)
+  const lastPositiveTransfer = [...allTransfers].reverse().find(t => t.amount > 0)
+  const currentWeeklyAmountForProjection = plan?.weekly_amount ?? lastPositiveTransfer?.amount ?? 0
+  let remainingMondaysInYear = 0
+  for (let d = nextMonday(today); d <= yearEndFull; ) {
+    if (d > today) remainingMondaysInYear++ // nextMonday(today) returns today itself when today's a Monday — already covered by savedInYearToDate, so don't double-count it
+    const next = new Date(`${d}T00:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 7)
+    d = next.toISOString().slice(0, 10)
+  }
+  const reserveTransfersProjectedForYear = savedInYearToDate + remainingMondaysInYear * currentWeeklyAmountForProjection
+
+  // Net Income needed for full-year Free Cash Flow to hit $0 — i.e. profit
+  // needed to cover what the P&L doesn't show (principal, the one-time
+  // catch-up interest, reserve transfers), since loan interest itself is
+  // already netted into Net Income and so doesn't need a separate check.
+  const breakevenNetIncomeForYear = fullYearDebtService.principal + fullYearDebtService.catchUpInterest + reserveTransfersProjectedForYear - budgetedDepreciationForYear
 
   return {
     year,
-    month,
-    thisMonth: {
-      debtService: monthDebtService,
-      freeCashFlow: freeCashFlow(monthStart, monthEnd, monthDebtService)
-    },
     thisYear: {
       debtService: yearDebtService,
       freeCashFlow: freeCashFlow(yearStart, yearEnd, yearDebtService)
+    },
+    yearProjection: {
+      principal: fullYearDebtService.principal,
+      catchUpInterest: fullYearDebtService.catchUpInterest,
+      depreciation: budgetedDepreciationForYear,
+      reserveTransfers: reserveTransfersProjectedForYear,
+      breakevenNetIncome: breakevenNetIncomeForYear
     },
     reserve: reserveProgress(today),
     upcomingPayments: allLoanRows
