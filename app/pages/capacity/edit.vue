@@ -15,7 +15,19 @@ type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: num
 const { data, pending, error, refresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[] }>('/api/capacity/settings')
 
 type MonthlyIndexRow = { month: number, indexPct: number | null, years: number[] }
-const { data: historyData } = await useFetch<{ monthlyIndex: MonthlyIndexRow[], historicalYears: number[] }>('/api/capacity/history')
+type AreaFillIndexRow = { areaId: number, indexValue: number | null }
+const { data: historyData } = await useFetch<{ monthlyIndex: MonthlyIndexRow[], historicalYears: number[], areaFillIndex: AreaFillIndexRow[] | null, areaFillIndexSince: string | null, dataAnnualFillPct: number | null }>('/api/capacity/history')
+// Real per-area fill-rate index, since the Cambridge St move — see
+// areaFillIndex's own comment in server/api/capacity/history.get.ts for
+// why this is a flat (non-seasonal) index rather than a month-by-month
+// one (the user's own explicit call, 2026-08-13: ~8 weeks of real
+// per-area data isn't enough to trust a seasonal shape, and Bar/Salon have
+// no prior-location history at all). Falls back to 1 (equal weighting,
+// today's pre-existing behavior) for any area with no real index value
+// yet, rather than leaving that area at 0.
+function areaFillIndexFor(areaId: number): number {
+  return historyData.value?.areaFillIndex?.find(r => r.areaId === areaId)?.indexValue ?? 1
+}
 // Built from the API's own historicalYears rather than hardcoded, so this
 // label can't go stale as years roll forward — e.g. reads "2025" today,
 // "2026" once 2027 rolls around. See history.get.ts: normally just one
@@ -27,20 +39,66 @@ const historyYearsLabel = computed(() => (historyData.value?.historicalYears ?? 
 // Toast Configuration API scope unblocked resolving table.guid to an area
 // (see server/utils/toast-table-map.ts). Shown next to the aspirational
 // Per-Cover Revenue (Total) column so it reads as "assumed vs. actually
-// happening" rather than a separate table — display only, never fed back
-// into the editable assumption inputs (unlike Set by History's covers,
-// this is a $/cover figure with no natural place in the covers-based
-// draft shape, and doing so silently would blur "what we assume" with
-// "what Toast measured").
-type AreaActualsRow = { areaId: number, covers: number, revenue: number, perCover: number | null }
+// happening" rather than a separate table — display only by default
+// (unlike Set by History's covers, a $/cover actual has no natural place
+// in the covers-based draft shape) except via the explicit "Set from
+// Actuals" button below, the same one-shot-action-not-ambient-binding
+// posture Set by History itself uses for the same reason.
+type AreaActualsRow = { areaId: number, covers: number, revenue: number, foodRevenue: number | null, beverageRevenue: number | null, perCover: number | null }
 type AreaActualsPeriod = { start: string, end: string, cappedAt: string, perArea: AreaActualsRow[] }
-const { data: areaActualsData } = await useFetch<{ asOfDate: string | null, thisMonth: AreaActualsPeriod | null, lastMonth: AreaActualsPeriod | null }>('/api/capacity/area-actuals')
+type TrailingTwoMonthRow = { areaId: number, covers: number, revenue: number, perCover: number | null, perCoverFood: number | null, perCoverBeverage: number | null }
+type TrailingTwoMonth = { start: string, end: string, perArea: TrailingTwoMonthRow[], foodBeveragePct: { food: number, beverage: number } | null }
+const { data: areaActualsData } = await useFetch<{ asOfDate: string | null, thisMonth: AreaActualsPeriod | null, lastMonth: AreaActualsPeriod | null, trailingTwoMonth: TrailingTwoMonth | null }>('/api/capacity/area-actuals')
 function areaActualPerCover(areaId: number, period: 'thisMonth' | 'lastMonth'): number | null {
   const p = areaActualsData.value?.[period]
   return p?.perArea.find(r => r.areaId === areaId)?.perCover ?? null
 }
 function fmtMoneyOrDash(n: number | null): string {
   return n == null ? '—' : `$${n.toFixed(2)}`
+}
+
+// "Set from Actuals" — writes that area's real trailing two-month (this +
+// last month combined) per-cover $ into the Food/Beverage draft inputs, an
+// explicit button rather than a live binding for the same reason Set by
+// History's covers aren't live-bound either (see its own comment above):
+// overwriting a hand-tuned per-area assumption should be something the
+// user chooses, not a side effect of a derived figure existing.
+//
+// Chef's Counter gets a real per-area Food/Beverage split
+// (perCoverFood/perCoverBeverage, from daily_toast_area_metrics'
+// food_revenue/beverage_revenue) instead of the restaurant-wide mix below
+// — its real food revenue isn't reliably in Toast at all (prepaid tickets
+// go through Stripe), so it's assumed flat at $190/cover and only the
+// beverage side comes from real Toast data; see
+// CHEFS_COUNTER_FOOD_PRICE_PER_COVER's comment in
+// server/utils/toast-metrics-sync.ts. Every other area has no real
+// per-area food/beverage signal (Toast's check totals aren't split that
+// way), so it falls back to dividing the blended actual using this
+// restaurant's real, whole-restaurant Food/Beverage revenue mix (see
+// area-actuals.get.ts's own comment on that approximation).
+function trailingTwoMonthRow(areaId: number): TrailingTwoMonthRow | null {
+  return areaActualsData.value?.trailingTwoMonth?.perArea.find(r => r.areaId === areaId) ?? null
+}
+function trailingTwoMonthPerCover(areaId: number): number | null {
+  return trailingTwoMonthRow(areaId)?.perCover ?? null
+}
+function canSetFromActuals(a: AreaDraft): boolean {
+  const row = trailingTwoMonthRow(a.id)
+  if (!row || row.perCover == null) return false
+  return row.perCoverFood != null || areaActualsData.value?.trailingTwoMonth?.foodBeveragePct != null
+}
+function setFromActuals(a: AreaDraft) {
+  const row = trailingTwoMonthRow(a.id)
+  if (!row || row.perCover == null) return
+  if (row.perCoverFood != null && row.perCoverBeverage != null) {
+    a.perCoverRevenueFood = row.perCoverFood.toFixed(2)
+    a.perCoverRevenueBeverage = row.perCoverBeverage.toFixed(2)
+    return
+  }
+  const pct = areaActualsData.value?.trailingTwoMonth?.foodBeveragePct
+  if (!pct) return
+  a.perCoverRevenueFood = (row.perCover * pct.food).toFixed(2)
+  a.perCoverRevenueBeverage = (row.perCover * pct.beverage).toFixed(2)
 }
 
 // Colors the two Actual columns against that area's own assumed Per-Cover
@@ -218,21 +276,6 @@ function fmtMoney2(n: number | null): string {
   return n == null ? '—' : n.toFixed(2)
 }
 
-// The current blended fill % implied by whatever's already typed into the
-// covers grid, across every area and month — the "overall ambition level"
-// that "Set by History" reshapes around, rather than a separately-entered
-// target. Live/reactive off the in-progress drafts, same as monthDerived.
-const currentAnnualFillPct = computed(() => {
-  let covers = 0, capacity = 0
-  for (const s of monthlyDrafts.value) {
-    for (const a of areaDrafts.value) {
-      const c = Number(s.areaCoversInput[a.id])
-      if (Number.isFinite(c)) covers += c
-      capacity += areaCapacityForMonth(a, s.month)
-    }
-  }
-  return capacity > 0 ? covers / capacity : null
-})
 function historyIndexFor(month: number): number | null {
   return historyData.value?.monthlyIndex?.find(m => m.month === month)?.indexPct ?? null
 }
@@ -240,45 +283,62 @@ function historyIndexFor(month: number): number | null {
 // historical index (its covers per open day as a % of that year's own
 // average, from the most recent prior year's Toast history — see
 // server/api/capacity/history.get.ts; switched from a revenue-based proxy
-// to real covers 2026-08-12) scaled against the current overall annual
-// average above, so history determines the *shape* across months while the
-// total-year level stays anchored to what's already entered. Null (and the
-// button disabled) when either input is missing — no historical reading
-// for that month, or nothing entered anywhere yet to anchor to.
+// to real covers 2026-08-12) scaled against a fully data-driven annual
+// baseline (`dataAnnualFillPct`, server-computed) rather than whatever
+// happened to already be typed into the covers grid — replaced 2026-08-13
+// at the user's own request, after they pointed out that anchoring to
+// on-page numbers meant a stale or optimistic guess would silently distort
+// "Set by History"'s output. `dataAnnualFillPct` de-seasonalizes the real
+// ~8 weeks of Cambridge St data using this same historical shape, so it's
+// not just "raw summer fill %" either — see its own comment in
+// history.get.ts. Null (and the button disabled) when either input is
+// missing — no historical reading for that month, or not enough real
+// Cambridge St data yet to compute a baseline from.
 function historyTargetFraction(s: MonthlyDraft): number | null {
   const indexPct = historyIndexFor(s.month)
-  const baseline = currentAnnualFillPct.value
+  const baseline = historyData.value?.dataAnnualFillPct ?? null
   if (indexPct == null || baseline == null) return null
   return baseline * (indexPct / 100)
 }
 function historyTooltip(s: MonthlyDraft): string {
   const indexPct = historyIndexFor(s.month)
+  const baseline = historyData.value?.dataAnnualFillPct ?? null
   if (indexPct == null) return 'No historical Toast covers data available for this month yet.'
-  if (currentAnnualFillPct.value == null) return 'Enter at least some covers below first — Set by History scales its own average against whatever is already on this page.'
-  return `${MONTH_NAMES[s.month - 1]} historically runs ${indexPct.toFixed(0)}% of the year's average covers per night (${historyYearsLabel.value} Toast) — applied to this page's current ${fmtPct(currentAnnualFillPct.value)} year-round average.`
+  if (baseline == null) return 'Not enough real Cambridge St Toast data yet to compute a data-driven baseline.'
+  return `${MONTH_NAMES[s.month - 1]} historically runs ${indexPct.toFixed(0)}% of the year's average covers per night (${historyYearsLabel.value} Toast) — applied to a real, data-driven ${fmtPct(baseline)} annual baseline (real Cambridge St covers since the move, de-seasonalized using this same historical shape).`
 }
 // "Set by History" (replaced the manually-typed "Set %" 2026-08-10) applies
 // one blended fill % — derived from real historical seasonality rather than
-// typed in by hand — equally across every area's own capacity for that
-// month, overwriting whatever per-area covers were there before. Still a
-// one-shot action (a button), not a live two-way-bound field, for the same
-// reason the old Set % was: continuous syncing would fight direct per-area
-// edits. A closed-season area (areaCapacityForMonth already returns 0 for
-// that case, e.g. Outdoor Nov-Apr) naturally stays at 0 covers.
+// typed in by hand — across every area's own capacity for that month,
+// weighted by each area's real relative fill-rate index (areaFillIndexFor,
+// added 2026-08-13 — see its own comment above; falls back to equal
+// weighting, the original behavior, for any area with no real index yet).
+// Still a one-shot action (a button), not a live two-way-bound field, for
+// the same reason the old Set % was: continuous syncing would fight direct
+// per-area edits. A closed-season area (areaCapacityForMonth already
+// returns 0 for that case, e.g. Outdoor Nov-Apr) naturally stays at 0
+// covers regardless of its index — 0 capacity × any index is still 0.
 //
-// Uses largest-remainder rounding rather than rounding each area
-// independently — unchanged from the old Set %'s own fix for the same
-// issue (see git history): computes the exact (unrounded) share per area,
-// floors every one, then hands out the leftover whole covers (the total's
-// own rounding, computed once) to the areas with the largest fractional
-// remainder, so the summed result matches round(fraction × total capacity)
-// exactly instead of drifting from n independently-rounded areas.
+// Uses largest-remainder rounding, same technique the old equal-weighted
+// version already used (see git history) — computes the exact (unrounded)
+// target per area, floors every one, then hands out the leftover whole
+// covers (the total's own rounding, computed once from the *unweighted*
+// total so the overall total stays anchored to the seasonal figure
+// regardless of the per-area weighting) to the areas with the largest
+// fractional remainder. Each area's exact target is clamped to its own
+// capacity first — a real possibility once weighting is uneven (e.g. an
+// area with a >1 index in an already-high-fill month could otherwise be
+// asked for more covers than it physically seats) — with the leftover
+// then distributed only among areas still below their own cap, so the
+// total still lands on the seasonal target without asking any one area to
+// overbook itself.
 function applySetByHistory(s: MonthlyDraft) {
   const fraction = historyTargetFraction(s)
   if (fraction == null) return
   const areas = areaDrafts.value
-  const exact = areas.map(a => fraction * areaCapacityForMonth(a, s.month))
-  const totalCapacity = areas.reduce((sum, a) => sum + areaCapacityForMonth(a, s.month), 0)
+  const caps = areas.map(a => areaCapacityForMonth(a, s.month))
+  const exact = areas.map((a, i) => Math.min(fraction * caps[i] * areaFillIndexFor(a.id), caps[i]))
+  const totalCapacity = caps.reduce((sum, c) => sum + c, 0)
   const totalTarget = Math.round(fraction * totalCapacity)
   const floors = exact.map(Math.floor)
   const floorSum = floors.reduce((sum, v) => sum + v, 0)
@@ -287,8 +347,10 @@ function applySetByHistory(s: MonthlyDraft) {
     .sort((x, y) => (exact[y] - floors[y]) - (exact[x] - floors[x]))
   const result = [...floors]
   let leftover = Math.max(0, totalTarget - floorSum)
-  for (let k = 0; k < order.length && leftover > 0; k++, leftover--) {
+  for (let k = 0; k < order.length && leftover > 0; k++) {
+    if (result[order[k]] >= caps[order[k]]) continue
     result[order[k]] += 1
+    leftover--
   }
   areas.forEach((a, i) => { s.areaCoversInput[a.id] = String(result[i]) })
 }
@@ -388,7 +450,7 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Per-Area Capacity &amp; Revenue</div>
-          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter. Per-Cover Revenue (Total) is an assumed target; Actual This/Last Month is real Toast covers/revenue by area, for comparison — see <NuxtLink to="/capacity">Capacity Pace</NuxtLink> for the blended (non-area) version of this comparison.</div>
+          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter. Per-Cover Revenue (Total) is an assumed target; Actual This/Last Month is real Toast covers/revenue by area, for comparison — see <NuxtLink to="/capacity">Capacity Pace</NuxtLink> for the blended (non-area) version of this comparison. "Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
@@ -400,6 +462,7 @@ async function save() {
                 <th scope="col">Max Turns/Night</th>
                 <th scope="col">Capacity Nov–Apr</th>
                 <th scope="col">Capacity May–Oct</th>
+                <th scope="col">Set from Actuals</th>
                 <th scope="col">Per-Cover Revenue (Food)</th>
                 <th scope="col">Per-Cover Revenue (Beverage)</th>
                 <th scope="col">Per-Cover Revenue (Total)</th>
@@ -414,6 +477,19 @@ async function save() {
                 <td><input v-model="a.maxTurnsPerNight" class="cell-input decimal" inputmode="decimal" /></td>
                 <td class="derived">{{ fmtCapacity(computedCapacity(a, 'novApr')) }}</td>
                 <td class="derived">{{ fmtCapacity(computedCapacity(a, 'mayOct')) }}</td>
+                <td class="setpct-cell">
+                  <div class="setpct-row">
+                    <button
+                      type="button"
+                      class="apply-pct-btn"
+                      :disabled="!canSetFromActuals(a)"
+                      :title="canSetFromActuals(a) ? `Set Food/Beverage from ${fmtMoneyOrDash(trailingTwoMonthPerCover(a.id))}/cover, this + last month combined` : 'No real per-area actuals available yet for this area'"
+                      @click="setFromActuals(a)"
+                    >Set from Actuals</button>
+                    <span class="setpct-arrow" aria-hidden="true">→</span>
+                  </div>
+                  <span v-if="canSetFromActuals(a)" class="setpct-result">≈{{ fmtMoneyOrDash(trailingTwoMonthPerCover(a.id)) }}/cover</span>
+                </td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td class="derived">${{ perCoverTotal(a).toFixed(2) }}</td>

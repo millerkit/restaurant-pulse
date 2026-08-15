@@ -88,6 +88,19 @@ function classifyTableName(name) {
   return null
 }
 
+// See CHEFS_COUNTER_FOOD_PRICE_PER_COVER's comment in
+// server/utils/toast-metrics-sync.ts — duplicated here for the same
+// Node-22 reason as the rest of this file.
+const CHEFS_COUNTER_FOOD_PRICE_PER_COVER = 190
+const CHEFS_COUNTER_FOOD_ITEM_NAMES = new Set(["Day Of Chef's Counter", "Pre-Paid Chef's Counter"])
+function chefsCounterBeverageTotal(checks) {
+  return (checks ?? [])
+    .filter(c => !c.voided)
+    .flatMap(c => c.selections ?? [])
+    .filter(s => !s.voided && !CHEFS_COUNTER_FOOD_ITEM_NAMES.has(s.displayName ?? ''))
+    .reduce((sum, s) => sum + (s.receiptLinePrice ?? s.price ?? 0), 0)
+}
+
 function isoDate(d) {
   return d.toISOString().slice(0, 10)
 }
@@ -183,9 +196,9 @@ const upsert = db.prepare(`
   ON CONFLICT(date) DO UPDATE SET covers = excluded.covers, labor_hours = excluded.labor_hours, synced_at = excluded.synced_at
 `)
 const upsertArea = db.prepare(`
-  INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, synced_at)
-  VALUES (@date, @areaId, @covers, @revenue, @syncedAt)
-  ON CONFLICT(date, area_id) DO UPDATE SET covers = excluded.covers, revenue = excluded.revenue, synced_at = excluded.synced_at
+  INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, food_revenue, beverage_revenue, synced_at)
+  VALUES (@date, @areaId, @covers, @revenue, @foodRevenue, @beverageRevenue, @syncedAt)
+  ON CONFLICT(date, area_id) DO UPDATE SET covers = excluded.covers, revenue = excluded.revenue, food_revenue = excluded.food_revenue, beverage_revenue = excluded.beverage_revenue, synced_at = excluded.synced_at
 `)
 const areaIdByName = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map(r => [r.name, r.id]))
 
@@ -260,10 +273,21 @@ for (const isoDay of days) {
       if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
       const areaName = o.table ? tableAreaMap.get(o.table.guid) : null
       if (!areaName) continue
-      const checkTotal = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.totalAmount ?? 0), 0)
-      const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0 }
+      const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0, foodRevenue: areaName === 'chefs counter' ? 0 : null, beverageRevenue: areaName === 'chefs counter' ? 0 : null }
       entry.covers += guests
-      entry.revenue += checkTotal
+      if (areaName === 'chefs counter') {
+        const foodRevenue = guests * CHEFS_COUNTER_FOOD_PRICE_PER_COVER
+        const beverageRevenue = chefsCounterBeverageTotal(o.checks)
+        entry.foodRevenue += foodRevenue
+        entry.beverageRevenue += beverageRevenue
+        entry.revenue += foodRevenue + beverageRevenue
+      } else {
+        // See the comment in server/utils/toast-metrics-sync.ts on
+        // check.amount (pre-tax, pre-tip) vs. check.totalAmount (amount +
+        // tax + tip) — duplicated here for the same Node-22 reason.
+        const checkAmount = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
+        entry.revenue += checkAmount
+      }
       perArea.set(areaName, entry)
     }
   }
@@ -285,10 +309,10 @@ for (const isoDay of days) {
   db.transaction(() => {
     const syncedAt = new Date().toISOString()
     upsert.run({ date: isoDay, covers, laborHours, syncedAt })
-    for (const [areaName, { covers: areaCovers, revenue }] of perArea) {
+    for (const [areaName, { covers: areaCovers, revenue, foodRevenue, beverageRevenue }] of perArea) {
       const areaId = areaIdByName.get(areaName)
       if (areaId == null) continue
-      upsertArea.run({ date: isoDay, areaId, covers: areaCovers, revenue, syncedAt })
+      upsertArea.run({ date: isoDay, areaId, covers: areaCovers, revenue, foodRevenue, beverageRevenue, syncedAt })
     }
   })()
   totalDaysWritten++

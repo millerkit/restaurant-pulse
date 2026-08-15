@@ -2587,6 +2587,205 @@ as every other Toast/QBO integration in this file.
   environments (same client id/secret), so no separate production
   credential change is needed.
 
+## Chef's Counter's real food revenue isn't reliably in Toast — flat $190/cover assumption — 2026-08-13
+
+The user flagged that production's Chef's Counter actuals (from the section
+above) looked off, and explained why: Chef's Counter tickets are sold at a
+flat $190/person, but purchased two ways — day-of walk-up (rung directly in
+Toast) or prepaid in advance via Stripe, which never touches Toast at all.
+Confirmed against a real Toast Product Mix CSV export the user shared
+(2026-08-12) and the live Orders API for the same date: a "Day Of Chef's
+Counter" selection rings at $190, but "Pre-Paid Chef's Counter" rings at
+exactly $0.00 — the real money already moved through Stripe when the
+ticket was bought, so summing `check.totalAmount` (the existing per-area
+revenue calculation) silently drops that revenue on any day with prepaid
+tickets. Per the user's own explicit instruction: assume every Chef's
+Counter cover is worth a flat $190 of food regardless of which path it
+came through, and only trust Toast for the beverage side (drinks are
+always ordered/paid through Toast directly, no Stripe involved there).
+
+- **`daily_toast_area_metrics` gained two new nullable columns**,
+  `food_revenue`/`beverage_revenue` — NULL for every area except Chef's
+  Counter. For Chef's Counter specifically (only),
+  `syncToastMetricsForDate` (`server/utils/toast-metrics-sync.ts`) now
+  computes `food_revenue = numberOfGuests × 190` and
+  `beverage_revenue` = the sum of every non-voided check selection
+  *except* the two known prix-fixe item names ("Day Of Chef's Counter",
+  "Pre-Paid Chef's Counter") — confirmed live that every other selection
+  on a real Chef's Counter check is a real drink (cocktail/wine/beer/
+  zero-proof), so no separate allowlist is needed. `revenue` (the existing
+  column) is now `food_revenue + beverage_revenue` for this one area,
+  replacing the old check-total sum; every other area's `revenue` is
+  unchanged. Duplicated into `scripts/backfill-toast-metrics.mjs` for the
+  usual Node-22 reason.
+- **`area-actuals.get.ts`'s trailing-two-month blend now prefers this real
+  split over the whole-restaurant Food/Beverage mix approximation** — the
+  Edit Capacity page's "Set from Actuals" button (see the section above)
+  writes Chef's Counter's real `perCoverFood`/`perCoverBeverage` (always
+  $190.00 flat for food) directly, only falling back to the mix-based
+  split for areas with no real per-area food/beverage signal (everywhere
+  else).
+- **Verified against real local data**: re-backfilled Jul 1 – Aug 12 2026;
+  2026-08-12 shows `covers=4, food_revenue=760` (exactly 4×190) and a real,
+  distinct `beverage_revenue=114` — no longer $0-contaminated. The trailing
+  two-month blend moved from the old (wrong) ~$190-198/cover blended actual
+  to Food $190.00/cover (exactly the assumption, as expected) + Beverage
+  ~$50.37/cover — a materially more plausible number than the old
+  check-total-based one, and directly comparable to the assumed $190
+  Food / $70 Beverage split on the Edit Capacity page.
+- **Not yet deployed or re-backfilled in production** — same deploy +
+  backfill steps as the section above; this is now bundled into the same
+  not-yet-deployed change.
+
+## Per-area revenue was using check.totalAmount (includes tax + tip), not the real subtotal — 2026-08-13
+
+Same day, right after production's first deploy of the per-area actuals
+feature: the user flagged that Dining Room's actuals (the largest area,
+~1,678 of ~3,179 classified covers over the verification window) looked
+too high compared to expectations. Investigated by pulling a handful of
+real checks live rather than guessing: `check.totalAmount` is **not** a
+revenue figure at all — it's `check.amount` (the real pre-tax, pre-tip
+subtotal) **plus** `taxAmount` **plus** the payment's tip, confirmed
+exactly against several real checks (e.g. `amount=244, taxAmount=17.08,
+tip=52.22` summing to the observed `totalAmount=313.30`). Every per-area
+revenue sum except Chef's Counter's (which already summed real selection
+prices, never `totalAmount`) had been overstating real revenue by
+whatever fraction of each check was tax + gratuity — commonly 20%+.
+
+- **Fixed** in both `syncToastMetricsForDate`
+  (`server/utils/toast-metrics-sync.ts`) and
+  `scripts/backfill-toast-metrics.mjs`: the non-Chef's-Counter revenue sum
+  now uses `check.amount`, not `check.totalAmount`.
+  `schema.sql`'s `daily_toast_area_metrics.revenue` comment updated to
+  match.
+- **Verified against real local data** (re-backfilled Jul 1 – Aug 12
+  2026): Dining Room's blended actual dropped from ~$118-123/cover to a
+  much more plausible **$91.86/cover**, with no more single-day outliers
+  (previously up to $140/cover on some days, now a tight $87-111/cover
+  range). Cross-checked against the whole-restaurant blended core avg
+  check from QBO (`$76.19/cover` over the same window, via
+  `history.get.ts`'s own `CORE_REVENUE_ACCOUNT_NUMBERS`) — Dining Room
+  running somewhat above that blended figure, and Chef's Counter well
+  above it, both make directional sense (Chef's Counter is a premium
+  fixed-price experience; Bar/Salon/Outdoor's lower per-covers pull the
+  restaurant-wide blend down). Bar, Salon, and Outdoor all dropped
+  similarly (e.g. Bar $88.90→$64.06, Salon $53-59→$43.54).
+- **Not yet deployed or re-backfilled in production** — bundled into the
+  same not-yet-deployed change as the two sections above; the production
+  re-backfill (`--since=2026-07-01`, or wider) will need to run again once
+  more after this fix deploys, on top of the Chef's Counter fix's own
+  re-backfill.
+
+## "Set by History" now weights per-area splits by a real fill-rate index — 2026-08-13
+
+The user asked how to make the Edit Capacity page's per-area covers more
+accurate, now that real per-area Toast data exists. "Set by History"
+previously split a month's seasonal covers target equally across every
+area's own capacity — a known simplification from when it was built (see
+"Per-area expected covers replace the blended fill %" above), not yet
+revisited since real per-area actuals existed.
+
+The real per-area data only covers the ~8 weeks since the Cambridge St
+move (2026-06-20) — nowhere near a full seasonal year, and Bar/Salon have
+*zero* prior-location history (Mass Ave never had those spaces). Discussed
+directly with the user whether the per-area split itself should vary by
+month given this thin sample; landed on **no** — a flat (non-seasonal)
+per-area index, at the user's explicit choice, rather than trying to
+extract month-to-month per-area shape from 8 weeks of data for 3 of the
+12 months and falling back to equal-split for the other 9 (considered and
+rejected as inconsistent). The existing whole-restaurant `monthlyIndex`
+(2+ years of real history) still drives the seasonal *total* per month,
+unchanged — only how that total splits across the 5 areas changes.
+
+- **`areaFillIndex`** (`server/api/capacity/history.get.ts`) is a flat,
+  per-area relative index: each area's own real fill% since the move
+  (`covers ÷ capacity_may_oct`) divided by the restaurant-wide blended
+  fill% over the same window — dimensionless, so it can be applied
+  directly against any month's capacity for that area on the client.
+  Deliberately a fill%-*ratio*, not a raw share of total covers — a raw
+  share would conflate room size with real demand (a bigger room always
+  gets more raw covers) and, more importantly, wouldn't respect a
+  seasonally-closed area's 0 capacity the way a ratio applied against that
+  month's own capacity does automatically. This is also why outdoor
+  seating's real seasonal question (does it ramp up/down slowly in spring/
+  fall, does peak-summer heat suppress it) didn't need answering here at
+  all: Outdoor's capacity is already 0 in Nov-Apr in the existing model,
+  so 0 capacity × any index is still 0 — the flat index doesn't fight that.
+  Real local values: Chef's Counter 1.99 (small, reservation-driven,
+  effectively always full), Dining Room 1.53, Bar 1.11, Outdoor 0.61,
+  Salon 0.28 (confirms the user's own earlier read that Salon is
+  underperforming).
+- **`applySetByHistory`** (`app/pages/capacity/edit.vue`) now weights each
+  area's exact target by `areaFillIndexFor(a.id)` (defaulting to 1 — equal
+  weighting, the old behavior — for any area with no real index) before
+  the existing largest-remainder rounding, but the *total* target is still
+  computed from the unweighted whole-restaurant fraction, so the overall
+  seasonal total per month is unchanged — only the mix across areas shifts.
+  Each area's exact target is also clamped to its own capacity (a real
+  possibility once weighting is uneven, e.g. Chef's Counter's 1.99 index
+  combined with an already-high-fill month could otherwise ask for more
+  covers than it seats), with the rounding leftover distributed only among
+  areas still below their cap.
+- **Verified**: `/api/capacity/history` returns the expected index values
+  against real local data (matching a hand calculation), and
+  `/capacity/edit` still renders (200) with the new weighting live.
+
+## "Set by History"'s baseline is now data-driven, not anchored to whatever's on the page — 2026-08-13
+
+Same day, after the user deployed the section above and asked where the
+"blended %" shown under each "Set by History" button actually came from.
+Answer at the time: only the *shape* (`monthlyIndex`, which month is
+busier/slower) was real Toast history — the *baseline level* it scaled
+against (`currentAnnualFillPct`) was just whatever fill % was implied by
+the numbers already typed into the covers grid, stale or optimistic or
+otherwise. The user said directly they didn't want that dependency; they
+want the expected-covers numbers "as data-driven as possible," accepting
+today's data limitations.
+
+- **The real complication, discussed with the user before building**: only
+  ~8 weeks of real Cambridge St data exist (since the 2026-06-20 move),
+  all of it summer — using that raw window's fill % as if it were the
+  annual average would just trade one bias (a stale manual guess) for
+  another (assuming summer performance is typical). Two options were
+  presented: use the raw summer average as-is, or de-seasonalize it using
+  the same historical monthly shape `monthlyIndex` already provides. The
+  user picked de-seasonalizing.
+- **`dataAnnualFillPct`** (`server/api/capacity/history.get.ts`) divides
+  real total covers since the move by an "expected capacity contribution"
+  that already accounts for each day's own month running historically hot
+  or cold (`totalCapacityMayOct × monthlyIndex[month]/100`, summed per real
+  open day) — so a summer running exactly at its historically-typical
+  elevated level correctly implies an annual baseline *below* the raw
+  summer fill %, not equal to it. This does lean on one assumption, stated
+  directly to the user rather than hidden: Mass Ave's historical
+  month-to-month demand *shape* is assumed to still roughly hold for
+  Cambridge St (the room-size-specific part — absolute fill level — is
+  already handled separately by `areaFillIndex`/`capacity_areas`, so this
+  assumption is narrower than it might first sound). Best available proxy
+  until a full year of Cambridge St-only history replaces it.
+- **`currentAnnualFillPct` was removed outright**, not left alongside the
+  new baseline — `historyTargetFraction`/`historyTooltip` in
+  `app/pages/capacity/edit.vue` now read `dataAnnualFillPct` from the
+  server exclusively, matching this file's own "delete rather than
+  half-finish" posture when a design genuinely pivots rather than gains an
+  option.
+- **Local dev can't show a real nonzero value for this** — the same
+  already-documented gap as the Historical tab's spend index:
+  `daily_line_items` (QBO) only reaches back to 2026-05-01 locally, so
+  `monthlyIndex` is null for every month in local dev (no 2024/2025 QBO
+  data to build `historicalYears` from), which makes `dataAnnualFillPct`
+  null too — correctly, not a bug. Verified instead by feeding the same
+  real local Toast-covers/capacity data through the formula with
+  substituted fake index values (110%/115%/105% for Jun/Jul/Aug), which
+  produced a sane, non-NaN baseline (~34.7%) — confirming the arithmetic
+  itself is sound; the real number will only be computable once checked
+  against production's full history. `/api/capacity/history` and
+  `/capacity/edit` were both confirmed to still return 200 locally with
+  `dataAnnualFillPct: null` handled gracefully throughout (button stays
+  disabled with an explanatory tooltip, same pattern as no historical
+  index for a month).
+- **Not yet deployed to production.**
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast`

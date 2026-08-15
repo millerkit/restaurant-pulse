@@ -88,7 +88,8 @@ export default defineEventHandler(() => {
     return {
       asOfYear: null, historicalYears: [], currentYear: null, monthlyIndex: [],
       coversSeries: [], spendSeries: [], revenueSeries: [],
-      locationBaselines: { covers: { massAve: null, cambridgeSt: null }, spend: { massAve: null, cambridgeSt: null }, revenue: { massAve: null, cambridgeSt: null } }
+      locationBaselines: { covers: { massAve: null, cambridgeSt: null }, spend: { massAve: null, cambridgeSt: null }, revenue: { massAve: null, cambridgeSt: null } },
+      areaFillIndex: null, areaFillIndexSince: null, dataAnnualFillPct: null
     }
   }
   const asOfYear = Number(asOfDate.slice(0, 4))
@@ -249,6 +250,85 @@ export default defineEventHandler(() => {
     revenue: baselinesFor('revenue')
   }
 
+  // ---- Per-area fill-rate index (for Edit Capacity's "Set by History") --
+  // How much more/less intensely each area fills, relative to the
+  // restaurant-wide average, since the Cambridge St move — a flat index
+  // (not month-varying), at the user's explicit choice 2026-08-13: the
+  // Cambridge St location only has ~8 weeks of real per-area data so far,
+  // nowhere near enough to trust a month-by-month per-area seasonal shape,
+  // and Bar/Salon have *no* prior-location history at all (Mass Ave never
+  // had those spaces). "Set by History" still applies the existing
+  // monthlyIndex's real seasonal *total* per month (2+ years of
+  // whole-restaurant Mass Ave + Cambridge St history) — only how that
+  // total splits across the 5 areas uses this flat index instead of an
+  // equal split.
+  //
+  // Expressed as fill% relative to the blended average
+  // (areaCovers/areaCapacity ÷ totalCovers/totalCapacity), not a raw share
+  // of covers — a raw covers share would conflate area size with real
+  // demand (a bigger room always gets more raw covers) and, worse, doesn't
+  // naturally respect a seasonally-closed area's 0 capacity. This ratio
+  // form is dimensionless and gets applied by the client against that
+  // area's own capacity for the target month (already 0 for Outdoor
+  // Nov-Apr), so a closed season needs no special-casing here — 0
+  // capacity × any index is still 0.
+  const areaCoversRows = db.prepare(`
+    SELECT area_id AS areaId, SUM(covers) AS covers
+    FROM daily_toast_area_metrics
+    WHERE date >= ?
+    GROUP BY area_id
+  `).all(LOCATION_MOVE_PERIODS[1].start) as { areaId: number; covers: number }[]
+  const areaCapacityRows = db.prepare('SELECT id, capacity_may_oct AS capacityMayOct FROM capacity_areas').all() as { id: number; capacityMayOct: number }[]
+  const areaCoversByAreaId = new Map(areaCoversRows.map(r => [r.areaId, r.covers]))
+  const totalAreaCovers = areaCoversRows.reduce((sum, r) => sum + r.covers, 0)
+  const totalCapacityMayOct = areaCapacityRows.reduce((sum, r) => sum + (r.capacityMayOct || 0), 0)
+  const areaFillIndex = (totalAreaCovers > 0 && totalCapacityMayOct > 0)
+    ? areaCapacityRows.map((a) => {
+        const covers = areaCoversByAreaId.get(a.id) ?? 0
+        if (!a.capacityMayOct) return { areaId: a.id, indexValue: null as number | null }
+        const areaFillPct = covers / a.capacityMayOct
+        const blendedFillPct = totalAreaCovers / totalCapacityMayOct
+        return { areaId: a.id, indexValue: areaFillPct / blendedFillPct }
+      })
+    : null
+
+  // ---- Data-driven annual baseline (for Edit Capacity's "Set by History")
+  // Previously "Set by History" scaled the historical monthly shape against
+  // whatever fill % was already typed into the covers grid — not a real
+  // number, just whatever assumption (optimistic, stale, or otherwise)
+  // happened to already be on the page. Replaced 2026-08-13 at the user's
+  // request for something fully data-driven instead.
+  //
+  // The real complication: only ~8 weeks of real Cambridge St data exist
+  // (2026-06-20 onward, all summer), and summer is very likely not
+  // representative of the whole year — using its raw fill % as "the
+  // annual average" would just trade one bias (a stale manual guess) for
+  // another (assuming summer = average). Fixed by de-seasonalizing: divide
+  // real covers by an "expected capacity contribution" that already
+  // accounts for each day's own month running historically hot or cold
+  // (via monthlyIndex, from 2+ years of real covers history) — so a summer
+  // that's running exactly at its historically-typical elevated level
+  // implies a baseline *below* the raw summer fill %, not equal to it.
+  // This does lean on one real assumption: that Mass Ave's historical
+  // month-to-month demand *shape* (not the absolute capacity/fill level,
+  // which is location-specific and already handled separately by
+  // areaFillIndex/capacity_areas) still roughly holds for Cambridge St —
+  // the best available proxy until a full year of Cambridge St-only
+  // history exists to replace it with.
+  let dataBaselineActual = 0
+  let dataBaselineExpected = 0
+  if (totalCapacityMayOct > 0) {
+    for (const r of coversRows) {
+      if (r.date < LOCATION_MOVE_PERIODS[1].start) continue
+      const month = Number(r.date.slice(5, 7))
+      const idx = monthlyIndex.find(m => m.month === month)?.indexPct
+      if (idx == null) continue
+      dataBaselineActual += r.covers
+      dataBaselineExpected += totalCapacityMayOct * (idx / 100)
+    }
+  }
+  const dataAnnualFillPct = dataBaselineExpected > 0 ? dataBaselineActual / dataBaselineExpected : null
+
   return {
     asOfYear,
     historicalYears,
@@ -257,6 +337,9 @@ export default defineEventHandler(() => {
     coversSeries: buildSeries('covers'),
     spendSeries: buildSeries('spend'),
     revenueSeries: buildSeries('revenue'),
-    locationBaselines
+    locationBaselines,
+    areaFillIndex,
+    areaFillIndexSince: LOCATION_MOVE_PERIODS[1].start,
+    dataAnnualFillPct
   }
 })

@@ -151,20 +151,34 @@ CREATE TABLE daily_toast_metrics (
 -- Bar+Salon into one "Bar" center and misfiles table C2 under "Dining
 -- Room" (both confirmed live), so the name-pattern classification the
 -- restaurant actually uses is more accurate than Toast's own config.
--- revenue is the sum of each area's non-voided check totalAmount for
--- dinner-hour, non-deleted orders (same isDinnerHour/deleted filters as
+-- revenue is the sum of each area's non-voided check *amount* (the
+-- pre-tax, pre-tip subtotal — NOT check.totalAmount, which is amount +
+-- taxAmount + tip and overstates real revenue by ~20%+, caught 2026-08-13
+-- when Dining Room's actuals looked implausibly high) for dinner-hour,
+-- non-deleted orders (same isDinnerHour/deleted filters as
 -- daily_toast_metrics) — necessarily Toast's own dollar total, not QBO's,
 -- since QBO's P&L has no per-area breakdown to draw from. Unlike
 -- daily_line_items/history.get.ts's "core dine-in revenue" concept, this
 -- can't exclude event/catering revenue at the per-check level, so an area
 -- day with a private buyout will read high — a known simplification, not
 -- attempted given no per-check revenue-category signal exists.
+-- food_revenue/beverage_revenue are NULL for every area except Chef's
+-- Counter (added 2026-08-13) — see toast-metrics-sync.ts's
+-- CHEFS_COUNTER_FOOD_PRICE_PER_COVER comment for why that one area needs
+-- a real split computed specially rather than derived from
+-- daily_line_items' restaurant-wide Food/Beverage mix the way
+-- area-actuals.get.ts's "Set from Actuals" button otherwise does. `revenue`
+-- for Chef's Counter is food_revenue + beverage_revenue (not Toast's own
+-- check totals) for the same reason; every other area's `revenue` is still
+-- Toast's real check totals, unchanged.
 CREATE TABLE daily_toast_area_metrics (
-  date       TEXT NOT NULL,
-  area_id    INTEGER NOT NULL REFERENCES capacity_areas(id),
-  covers     INTEGER NOT NULL,
-  revenue    REAL NOT NULL,
-  synced_at  TEXT NOT NULL,
+  date              TEXT NOT NULL,
+  area_id           INTEGER NOT NULL REFERENCES capacity_areas(id),
+  covers            INTEGER NOT NULL,
+  revenue           REAL NOT NULL,
+  food_revenue      REAL,
+  beverage_revenue  REAL,
+  synced_at         TEXT NOT NULL,
   PRIMARY KEY (date, area_id)
 );
 

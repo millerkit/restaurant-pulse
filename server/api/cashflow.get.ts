@@ -59,28 +59,45 @@ export default defineEventHandler((event) => {
   }
   const yearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEnd)
 
-  // Reserve target: the one-time catch-up interest due Dec 20, 2026 across
-  // the 7 original investor loans only — $50,562.50. Reverted 2026-07-31
-  // from a brief widening to $52,838.80 (all 10 loans, including Jones &
-  // Miller's own catch-up) — that widening double-counted Jones & Miller's
-  // piece once the real running-balance simulation below was built: their
-  // catch-up is now modeled as a scheduled withdrawal paid out of the
-  // reserve around Aug 15 (a pass-through, not money held until December),
-  // so folding it into a single static "amount to keep saved" overstated
-  // what actually needs to still be sitting in the account by Dec 20.
-  // Computed from loan_schedule rather than hardcoded so it can't drift
-  // from the actual imported schedule; catchUpDate is pulled the same way.
-  const catchUpRows = allLoanRows.filter(r => r.payment_type === 'catch_up' && r.loan_key !== 'jones' && r.loan_key !== 'miller')
-  const reserveTarget = catchUpRows.reduce((s, r) => s + r.interest, 0)
+  // Reserve target: the full Dec 20, 2026 cash payment across the 7
+  // original investor loans (catch-up interest + their first regular
+  // installment) — $61,693.48. Widened 2026-08-15 from just the catch-up
+  // interest portion ($50,562.50): that narrower figure was correct only
+  // as long as the 7 loans' regular installment was assumed to come from
+  // separate operating cash, per the filter comment on reserveFundedRows
+  // above — the SaasAnt Expense import built that day draws their ENTIRE
+  // Dec 20 payment (catch-up AND installment) from this same account, so
+  // the target — "how much needs to be sitting here right before Dec 20"
+  // — has to cover all of it, not just the catch-up piece. (This is a
+  // separate widening from the one reverted 2026-07-31, which was about
+  // folding Jones & Miller's OWN catch-up into a static target — that
+  // reasoning still holds: their catch-up stays modeled as an ordinary
+  // scheduled withdrawal in the simulation below, not part of this
+  // target.) Computed from loan_schedule rather than hardcoded so it can't
+  // drift from the actual imported schedule; catchUpDate is pulled the
+  // same way.
+  const catchUpLoanKeys = allLoanRows
+    .filter(r => r.payment_type === 'catch_up' && r.loan_key !== 'jones' && r.loan_key !== 'miller')
+    .map(r => r.loan_key)
+  const catchUpRows = allLoanRows.filter(r => r.payment_type === 'catch_up' && catchUpLoanKeys.includes(r.loan_key))
   const catchUpDate = catchUpRows[0]?.payment_date ?? null
+  const reserveTarget = allLoanRows
+    .filter(r => catchUpLoanKeys.includes(r.loan_key) && r.payment_date === catchUpDate)
+    .reduce((s, r) => s + r.total_payment, 0)
 
-  // Every loan_schedule row that's actually paid out of this same 1005
-  // Loan Payment Reserve account — Jones & Miller's full schedule (their
-  // catch-up AND every ongoing regular payment, per the user's 2026-07-31
-  // decision to fund their monthly payments from here too), NOT the
-  // original 7 loans' regular monthly payments (those still come from
-  // normal operating cash — only their one-time catch-up above does).
-  const reserveFundedRows = allLoanRows.filter(r => r.loan_key === 'jones' || r.loan_key === 'miller')
+  // Every loan_schedule row that's actually paid out of this same reserve
+  // account (QBO: "American Express Loan Reserve (1832)"). Widened
+  // 2026-08-15 to all 9 private loans, not just Jones & Miller — the
+  // SaasAnt Expense import built that day set up Chen/Savage/Schaefer/
+  // Gilreath/Mis/Price/Reid's payments (including their Dec 20 catch-up +
+  // first installment, not just the catch-up) to draw from this account
+  // too, not from separate operating cash as originally assumed when this
+  // filter was first written 2026-07-31. reserveTarget above stays scoped
+  // to just the pure catch-up interest figure ($50,562.50) — the 7 loans'
+  // regular installment is treated the same way Jones & Miller's regular
+  // payments always have been: an ordinary withdrawal event in the
+  // simulation below, not part of the minimum-balance target itself.
+  const reserveFundedRows = allLoanRows.filter(r => r.loan_key !== 'sba')
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
@@ -126,8 +143,14 @@ export default defineEventHandler((event) => {
         next.setUTCDate(next.getUTCDate() + 7)
         d = next.toISOString().slice(0, 10)
       }
+      // >= asOfIso, not >: a loan payment scheduled for today still draws
+      // the account down today regardless of what moment reserveProgress()
+      // happens to run at — found 2026-08-15 when this ran on a real
+      // Jones/Miller payment date and silently ignored that day's own
+      // $7,776.92 draw, since `saved` (from reserve_transfers) only ever
+      // reflects deposits and has no way to already account for it.
       const withdrawals = reserveFundedRows
-        .filter(r => r.payment_date > asOfIso && r.payment_date < catchUpDate)
+        .filter(r => r.payment_date >= asOfIso && r.payment_date < catchUpDate)
         .map(r => ({ date: r.payment_date, amount: -r.total_payment }))
       const events = [...deposits, ...withdrawals].sort((a, b) => a.date.localeCompare(b.date))
       projectedBalanceAtCatchUp = events.reduce((bal, e) => bal + e.amount, saved)

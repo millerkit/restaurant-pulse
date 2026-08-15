@@ -12,9 +12,18 @@ interface ToastCredentials {
   restaurantGuid: string
 }
 
+interface ToastSelection {
+  displayName: string | null
+  price: number | null
+  receiptLinePrice: number | null
+  voided: boolean
+}
+
 interface ToastCheck {
   voided: boolean
   totalAmount: number | null
+  amount: number | null
+  selections: ToastSelection[]
 }
 
 interface ToastOrder {
@@ -24,6 +33,32 @@ interface ToastOrder {
   openedDate: string
   table: { guid: string } | null
   checks: ToastCheck[]
+}
+
+// Chef's Counter's real food revenue can't be trusted from Toast's own
+// check totals — confirmed against a real Toast Product Mix export the
+// user shared (2026-08-12): the prix-fixe experience is sold two ways,
+// "Day Of Chef's Counter" ($190, rung in Toast for walk-up/day-of guests)
+// and "Pre-Paid Chef's Counter" ($0.00 in Toast — the real $190/guest was
+// already collected through Stripe when the ticket was purchased, so
+// Toast has no record of that money at all). Summing check.totalAmount
+// therefore undercounts real food revenue on any day with prepaid
+// tickets. Per the user's own explicit instruction: assume every Chef's
+// Counter cover is worth a flat $190 of food regardless of which path it
+// came through, and only trust Toast for the beverage side (drinks are
+// always ordered/paid through Toast directly, never prepaid). Beverage is
+// "every non-prix-fixe selection on the check" — confirmed against the
+// same export: everything else on a Chef's Counter check is a real drink
+// (cocktail/wine/beer/zero-proof), so there's no separate allowlist
+// needed, just excluding the two known food item names.
+const CHEFS_COUNTER_FOOD_PRICE_PER_COVER = 190
+const CHEFS_COUNTER_FOOD_ITEM_NAMES = new Set(["Day Of Chef's Counter", "Pre-Paid Chef's Counter"])
+function chefsCounterBeverageTotal(checks: ToastCheck[]): number {
+  return checks
+    .filter(c => !c.voided)
+    .flatMap(c => c.selections ?? [])
+    .filter(s => !s.voided && !CHEFS_COUNTER_FOOD_ITEM_NAMES.has(s.displayName ?? ''))
+    .reduce((sum, s) => sum + (s.receiptLinePrice ?? s.price ?? 0), 0)
 }
 
 // Urban Hearth is dinner-only; a daytime pop-up/market event (confirmed by
@@ -123,31 +158,50 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   // per-area sums but still counted in the whole-restaurant covers above.
   const areaMap = await getTableAreaMap(creds)
   const areaIds = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map((r: any) => [r.name, r.id]))
-  const perArea = new Map<string, { covers: number; revenue: number }>()
+  const perArea = new Map<string, { covers: number; revenue: number; foodRevenue: number | null; beverageRevenue: number | null }>()
   for (const o of dinnerOrders) {
     const areaName = o.table ? areaMap.get(o.table.guid) : null
     if (!areaName) continue
     const guests = o.numberOfGuests ?? 0
     if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
-    const checkTotal = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.totalAmount ?? 0), 0)
-    const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0 }
+    const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0, foodRevenue: areaName === 'chefs counter' ? 0 : null, beverageRevenue: areaName === 'chefs counter' ? 0 : null }
     entry.covers += guests
-    entry.revenue += checkTotal
+    if (areaName === 'chefs counter') {
+      const foodRevenue = guests * CHEFS_COUNTER_FOOD_PRICE_PER_COVER
+      const beverageRevenue = chefsCounterBeverageTotal(o.checks ?? [])
+      entry.foodRevenue = (entry.foodRevenue ?? 0) + foodRevenue
+      entry.beverageRevenue = (entry.beverageRevenue ?? 0) + beverageRevenue
+      entry.revenue += foodRevenue + beverageRevenue
+    } else {
+      // check.amount is the pre-tax, pre-tip subtotal; check.totalAmount is
+      // amount + taxAmount + tip (confirmed live: e.g. amount=244,
+      // taxAmount=17.08, tip=52.22, totalAmount=313.30 — the three sum
+      // exactly). Sales tax isn't restaurant revenue and a tip is a
+      // pass-through to staff, not revenue either, so totalAmount
+      // overstates real per-area revenue by a meaningful margin (tax +
+      // tip commonly ~20%+ of a check) — caught 2026-08-13 when the
+      // user's own Dining Room actuals looked implausibly high compared
+      // to the whole-restaurant blended average check.
+      const checkAmount = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
+      entry.revenue += checkAmount
+    }
     perArea.set(areaName, entry)
   }
   const upsertArea = db.prepare(`
-    INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, synced_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, food_revenue, beverage_revenue, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (date, area_id) DO UPDATE SET
       covers = excluded.covers,
       revenue = excluded.revenue,
+      food_revenue = excluded.food_revenue,
+      beverage_revenue = excluded.beverage_revenue,
       synced_at = excluded.synced_at
   `)
   const syncedAt = new Date().toISOString()
-  for (const [areaName, { covers: areaCovers, revenue }] of perArea) {
+  for (const [areaName, { covers: areaCovers, revenue, foodRevenue, beverageRevenue }] of perArea) {
     const areaId = areaIds.get(areaName)
     if (areaId == null) continue
-    upsertArea.run(isoDate, areaId, areaCovers, revenue, syncedAt)
+    upsertArea.run(isoDate, areaId, areaCovers, revenue, foodRevenue, beverageRevenue, syncedAt)
   }
 
   return { covers, laborHours }
