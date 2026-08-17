@@ -2786,6 +2786,75 @@ today's data limitations.
   index for a month).
 - **Not yet deployed to production.**
 
+## P&L Drill-Downs page — week-only Wages view, per-period revenue comparison basis, materiality thresholds — 2026-08-17
+
+Three related changes to [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) /
+[`server/api/pl.get.ts`](server/api/pl.get.ts) (the page behind the P&L tab's
+"Drill-Downs" nav link — not yet listed in Where to look below until this
+section, an existing gap), all from the same conversation:
+
+- **Week now gets a purpose-built Wages Drill-Down instead of the
+  anomaly-flagged Labor Drill-Down, and the Opex section is hidden
+  entirely** — per the user's own framing: wages (specifically everything
+  under 6010 BOH Wages, 6030 FOH Wages, 6050 Management Salaries) and income
+  are the only things worth a week-over-week look; Employee Benefits/
+  Employer Payroll Taxes and opex don't move meaningfully at weekly grain.
+  `pl.get.ts` narrows Week's `labor` rows server-side to exactly these three
+  subcategories (`WEEKLY_WAGE_SUBCATEGORIES`), always all three even at $0,
+  in a fixed order — the client renders a stable Total + 3-tile grid
+  (`isWeeklyWagesView` in drilldowns.vue) rather than an anomaly list, so
+  every row is always visible instead of being flag-gated. Comparison basis
+  is the prior week (not budget — budget targets have no weekly resolution,
+  and prorating one down to a week would need new approximation logic; the
+  user chose prior-week for consistency with the rest of this page). The
+  Revenue Calendar section is unchanged for Week — it was already the
+  income comparison the user wanted.
+- **The Revenue Calendar's per-day comparison basis now matches the
+  selected period, instead of always being a fixed 7-days-back shift.** A
+  real bug: previously Month and Year views' shortfall-day "gap" figure was
+  actually a week-over-week gap (each day compared to the same weekday
+  exactly 7 days earlier, even inside a Month/Year view), not a month- or
+  year-over-year one — easy to misread as "this month's shortfall vs. last
+  month." Fixed with real Nth-weekday-of-month matching
+  (`sameWeekdayPositionInMonth` in pl.get.ts) — Week still uses the plain
+  7-day shift (already same-weekday by construction); Month compares each
+  day to the same weekday-position last month (e.g. "3rd Thursday of July"
+  vs. "3rd Thursday of June"); Year compares to the same weekday-position,
+  same month, last year. Matches the Dashboard's own documented "same
+  weekday-position, not a fixed day-count offset" design (see the Design
+  direction section above) — applied here to a whole period instead of a
+  single day. The comparison-basis wording shown to the user ("the same
+  weekday last month", legend chips like "Beat last month") is computed
+  server-side (`revenueComparisonLabel`/`revenueComparisonShortLabel`) so
+  the copy can't drift from the calculation.
+- **Materiality threshold for flagging a Labor/Opex subcategory raised from
+  a flat $200, and made period-specific**: $250 for Week/Month, **$1,000
+  for Year** (`MATERIALITY_THRESHOLD_BY_PERIOD` in pl.get.ts) — a year's
+  dollar totals run much larger, so $250 flagged almost every subcategory.
+  Also fixed a real display issue while raising this: the threshold used to
+  gate only the dollar *delta*, so a steep % drop off a much larger
+  prior-period base (e.g. "Repairs & maintenance: $18, -99% vs. prior
+  month") could clear the delta threshold easily even though the resulting
+  figure was trivial and not worth a tile. `flagRows` now also requires the
+  *current-period* amount itself to clear the threshold. Verified against
+  real local data: this correctly dropped small-current-amount rows like
+  "Insurance $207"/"Meals – 50% Deductible $96" (Month) and "Labor $884"/
+  "Travel $799"/"Car Expenses $348" (Year) that were previously showing
+  despite being visual noise.
+- **Known, deliberately unaddressed caveat**: the Year drill-down's
+  year-over-year comparison logic itself is correct (calendar-accurate
+  `addMonthsClamped(-12)`, not a fixed-day-offset trick — verified while
+  investigating this), but doesn't correct for the 2026 location move (old,
+  smaller location through May vs. the new, larger, more expensive space
+  from Jun 20 — see the Historical tab / capacity sections above for the
+  same distortion documented elsewhere). A 2026-vs-2025 comparison on this
+  page will show large increases across nearly every Labor/Opex
+  subcategory that reflect the bigger space, not overspending — the same
+  kind of distortion the Dashboard's year revenue pace and the Historical
+  tab's charts already correct for, but this page does not. Flagged to the
+  user 2026-08-17; they chose to leave it as-is for now rather than build a
+  location-move correction here.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast`
@@ -2885,7 +2954,9 @@ today's data limitations.
 - [`design/dashboard-mockup.html`](design/dashboard-mockup.html) — approved static mockup (reference only)
 - [`design/pl-mockup.html`](design/pl-mockup.html) — tentatively approved P&L tab mockup (reference only)
 - [`app/pages/index.vue`](app/pages/index.vue) — the real Dashboard page
-- [`app/pages/pl.vue`](app/pages/pl.vue) — the real P&L page
+- [`app/pages/pl/index.vue`](app/pages/pl/index.vue) — the real P&L page (route `/pl`)
+- [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) — P&L Drill-Downs: Labor/Wages, Opex, and Revenue Calendar by Week/Month/Year (route `/pl/drilldowns`)
+- [`server/api/pl.get.ts`](server/api/pl.get.ts) — data route shared by both P&L pages above
 - [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending (route `/budget`)
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)

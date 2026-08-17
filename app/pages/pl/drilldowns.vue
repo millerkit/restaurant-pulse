@@ -72,6 +72,14 @@ function sortByDirection(rows: DeltaRow[]): DeltaRow[] {
 // Opex, Revenue) — see the shared control bar in the template.
 const drilldownPeriod = ref<Period>('month')
 
+// Week gets a purpose-built Wages-vs-last-week view instead of the
+// anomaly-flagged Labor Drill-Down, and drops the Opex section entirely —
+// per the user's request, wages and income are the only things worth a
+// week-over-week look; benefits/payroll taxes and opex don't move
+// meaningfully at weekly grain. Revenue Calendar (below) already is the
+// income comparison, unchanged for every period including week.
+const isWeeklyWagesView = computed(() => drilldownPeriod.value === 'week')
+
 // ---- Labor drill-down -----------------------------------------------------
 const laborRowsAll = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.labor ?? [])
 // Only subcategories that varied significantly vs. the prior period are
@@ -104,6 +112,25 @@ const laborCallout = computed(() => {
   const isAre = flagged.length > 1 ? 'are' : 'is'
   const tail = onTarget ? ' — worth a look even though the top-line number is on target.' : '.'
   return `Labor is ${onTarget ? 'on target' : 'off target'} overall this ${PERIOD_LABEL[drilldownPeriod.value]} (${(laborPeriodStatus.value.pct * 100).toFixed(1)}%), but ${names} ${isAre} up sharply vs. the prior ${PERIOD_LABEL[drilldownPeriod.value]}${tail}`
+})
+
+// ---- Weekly wages view (replaces the Labor Drill-Down for period='week')
+// laborRowsAll is already narrowed server-side to exactly BOH/FOH/Management
+// Wages, in that fixed order, always all three (see WEEKLY_WAGE_SUBCATEGORIES
+// in pl.get.ts) — a direct comparison, not an anomaly list, so every row
+// shows regardless of how much it moved, in a stable order week to week.
+function sumForTotal(rows: { amount: number, comparisonAmount: number }[], label: string) {
+  const amount = rows.reduce((sum, r) => sum + r.amount, 0)
+  const comparisonAmount = rows.reduce((sum, r) => sum + r.comparisonAmount, 0)
+  const pctChange = comparisonAmount > 0 ? ((amount - comparisonAmount) / comparisonAmount) * 100 : null
+  return { label, amount, comparisonAmount, pctChange }
+}
+const weeklyWagesTotalRow = computed(() => buildDeltaRow(sumForTotal(laborRowsAll.value, 'Total Wages'), 'week'))
+const weeklyWageRows = computed(() => laborRowsAll.value.map(r => buildDeltaRow(r, 'week')))
+const weeklyWageTiles = computed(() => [weeklyWagesTotalRow.value, ...weeklyWageRows.value])
+const weeklyWagesCallout = computed(() => {
+  const t = weeklyWagesTotalRow.value
+  return `Total wages this week: $${Math.round(t.amount).toLocaleString()} (${t.deltaText}).`
 })
 
 // ---- Opex drill-down --------------------------------------------------
@@ -144,20 +171,23 @@ const opexCallout = computed(() => {
 })
 
 // ---- Revenue calendar -----------------------------------------------------
-// Every day in the period compared to the same weekday one week earlier —
-// applies the Dashboard's single-day "last night vs. last week" comparison
-// to every day in the selected period, laid out as a real calendar instead
-// of a ranked list, so a reader can see spatially whether a shortfall is
-// concentrated (e.g. every Monday) or spread evenly across the period —
-// the exact question the old ranked-list-of-shortfalls view could only
-// answer by reading dates one at a time.
+// Every day in the period compared against the selected period's own
+// comparison basis (same weekday last week / same weekday-position last
+// month / same weekday-position last year — see revenueComparisonDate in
+// pl.get.ts, matching the Dashboard's "not a fixed day-count offset" design)
+// — applies the Dashboard's single-day comparison to every day in the
+// selected period, laid out as a real calendar instead of a ranked list, so
+// a reader can see spatially whether a shortfall is concentrated (e.g.
+// every Monday) or spread evenly across the period — the exact question the
+// old ranked-list-of-shortfalls view could only answer by reading dates one
+// at a time.
 const revenueDaysMap = computed(() => new Map((data.value?.drilldowns[drilldownPeriod.value]?.revenueDays ?? []).map(d => [d.date, d])))
 type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
 type DayCell = { date: string, day: number, status: DayStatus, deltaPct: number | null, actual: number | null, comparison: number | null }
-// A day within ±5% of the same weekday last week reads as "normal
-// fluctuation," not a signal — below that, red; above, green. -18.75%
-// mirrors the same "critical" cutoff the old ranked list used, so a truly
-// bad day still stands out from a merely-soft one.
+// A day within ±5% of its comparison day reads as "normal fluctuation," not
+// a signal — below that, red; above, green. -18.75% mirrors the same
+// "critical" cutoff the old ranked list used, so a truly bad day still
+// stands out from a merely-soft one.
 function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
   if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null }
@@ -199,11 +229,18 @@ const revenueDays = computed(() => data.value?.drilldowns[drilldownPeriod.value]
 const shortfallDays = computed(() => revenueDays.value.filter(d => d.actual < d.comparison))
 const revenueFlagged = computed(() => shortfallDays.value.length > 0)
 const revenueGapTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (d.comparison - d.actual), 0))
+// Comparison basis matches the selected period (Week -> same weekday last
+// week, Month/Year -> same weekday-position last month/year) — see
+// revenueComparisonDate/REVENUE_COMPARISON_LABEL in pl.get.ts, the single
+// source of truth for both the calculation and this wording so they can't
+// drift apart.
+const revenueComparisonLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonLabel ?? 'the same weekday last week')
+const revenueComparisonShortLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonShortLabel ?? 'last week')
 const revenueCallout = computed(() => {
   const total = revenueDays.value.length
   const met = total - shortfallDays.value.length
   if (!total || !revenueFlagged.value) return ''
-  return `${met} of ${total} days this ${PERIOD_LABEL[drilldownPeriod.value]} met or beat their same-weekday-last-week comparison. The shortfall is concentrated in ${shortfallDays.value.length} day${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for $${Math.round(revenueGapTotal.value).toLocaleString()} of the gap.`
+  return `${met} of ${total} days this ${PERIOD_LABEL[drilldownPeriod.value]} met or beat their comparison to ${revenueComparisonLabel.value}. The shortfall is concentrated in ${shortfallDays.value.length} day${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for $${Math.round(revenueGapTotal.value).toLocaleString()} of the gap.`
 })
 </script>
 
@@ -244,34 +281,50 @@ const revenueCallout = computed(() => {
       </div>
 
       <div class="drilldown-group">
-        <!-- Drill-down: what's driving labor cost -->
+        <!-- Drill-down: what's driving labor cost (month/year), or a direct
+             wages-vs-last-week comparison (week) -->
         <section>
           <div class="section-head">
-            <div class="section-label">Labor Drill-Down — What's Driving the Cost</div>
+            <div class="section-label">{{ isWeeklyWagesView ? 'Wages Drill-Down — This Week vs. Last Week' : "Labor Drill-Down — What's Driving the Cost" }}</div>
           </div>
 
-          <div v-if="laborCardExpanded" class="drill-card">
-            <div class="callout">{{ laborCallout }}</div>
-            <div class="anomaly-grid">
-              <div v-for="row in laborRows" :key="row.label" :class="['anomaly-tile', row.direction]">
-                <div class="label">{{ row.label }}</div>
-                <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
-                <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
+          <template v-if="isWeeklyWagesView">
+            <div class="drill-card">
+              <div class="callout">{{ weeklyWagesCallout }}</div>
+              <div class="anomaly-grid">
+                <div v-for="row in weeklyWageTiles" :key="row.label" :class="['anomaly-tile', row.direction]">
+                  <div class="label">{{ row.label }}</div>
+                  <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                  <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
+                </div>
               </div>
             </div>
-          </div>
-          <div v-else-if="laborRowsAll.length" class="drill-card quiet">
-            <span class="chip good">Nothing unusual</span>
-            <span class="quiet-note">Labor is within target this {{ drilldownPeriod }}, and no single cost driver stands out.</span>
-          </div>
-          <div v-else class="drill-card quiet">
-            <span class="chip warning">No data</span>
-            <span class="quiet-note">No labor data synced for this {{ drilldownPeriod }} yet.</span>
-          </div>
+          </template>
+          <template v-else>
+            <div v-if="laborCardExpanded" class="drill-card">
+              <div class="callout">{{ laborCallout }}</div>
+              <div class="anomaly-grid">
+                <div v-for="row in laborRows" :key="row.label" :class="['anomaly-tile', row.direction]">
+                  <div class="label">{{ row.label }}</div>
+                  <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                  <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="laborRowsAll.length" class="drill-card quiet">
+              <span class="chip good">Nothing unusual</span>
+              <span class="quiet-note">Labor is within target this {{ drilldownPeriod }}, and no single cost driver stands out.</span>
+            </div>
+            <div v-else class="drill-card quiet">
+              <span class="chip warning">No data</span>
+              <span class="quiet-note">No labor data synced for this {{ drilldownPeriod }} yet.</span>
+            </div>
+          </template>
         </section>
 
-        <!-- Drill-down: what's driving opex -->
-        <section>
+        <!-- Drill-down: what's driving opex (hidden for week — see
+             isWeeklyWagesView above) -->
+        <section v-if="!isWeeklyWagesView">
           <div class="section-head">
             <div class="section-label">Operating Cost Drill-Down — What's Driving the Cost</div>
           </div>
@@ -329,7 +382,7 @@ const revenueCallout = computed(() => {
 
           <div v-if="calendarView" class="drill-card">
             <div v-if="revenueFlagged" class="callout">{{ revenueCallout }}</div>
-            <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All days this {{ drilldownPeriod }} met or beat their same-weekday-last-week comparison.</span></div>
+            <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All days this {{ drilldownPeriod }} met or beat their comparison to {{ revenueComparisonLabel }}.</span></div>
 
             <template v-if="calendarView.kind === 'week'">
               <div class="calendar-grid week">
@@ -373,16 +426,16 @@ const revenueCallout = computed(() => {
             </template>
 
             <div class="calendar-legend">
-              <span class="legend-chip good">▲ Beat last week</span>
-              <span class="legend-chip bad">▼ Below last week</span>
-              <span class="legend-chip critical">▼ Well below last week</span>
+              <span class="legend-chip good">▲ Beat {{ revenueComparisonShortLabel }}</span>
+              <span class="legend-chip bad">▼ Below {{ revenueComparisonShortLabel }}</span>
+              <span class="legend-chip critical">▼ Well below {{ revenueComparisonShortLabel }}</span>
               <span class="legend-chip neutral">Within normal range</span>
               <span class="legend-chip no-data">No data / closed</span>
             </div>
           </div>
           <div v-else class="drill-card quiet">
             <span class="chip warning">No data</span>
-            <span class="quiet-note">Not enough history yet to compare this {{ drilldownPeriod }} against the same weekday last week.</span>
+            <span class="quiet-note">Not enough history yet to compare this {{ drilldownPeriod }} against {{ revenueComparisonLabel }}.</span>
           </div>
         </section>
       </div>
