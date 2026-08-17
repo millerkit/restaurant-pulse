@@ -650,11 +650,13 @@ const revenueCallout = computed(() => {
 }
 /* The variation is the whole point of a drill-down tile — direct user
    feedback that it should read as more prominent than the period's total
-   spend below it, not the other way around. Sized up well past the label
-   and total so it's the first thing the eye lands on; the total keeps its
-   own small caption (see amount-caption below) so it's still unambiguous,
-   just no longer competing for attention. */
-.anomaly-tile .delta-chip { font-size: 15px; font-weight: 800; padding: 4px 12px; }
+   spend below it, not the other way around. Bolder and a touch larger than
+   the label/total so it's the first thing the eye lands on, without
+   ballooning past what the pill shape (and the tile's own width) can
+   comfortably hold — 15px ran too big, per direct follow-up feedback. The
+   total keeps its own small caption (see amount-caption below) so it's
+   still unambiguous, just no longer competing for attention. */
+.anomaly-tile .delta-chip { font-size: 12px; font-weight: 800; padding: 3px 10px; }
 /* Distinguishes the now-secondary total below from the delta chip above
    it — without this, a reader can plausibly misread the dollar figure as
    the size of the change the chip describes, rather than the period's
