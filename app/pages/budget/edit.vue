@@ -724,11 +724,22 @@ const yearLiveNetIncome = computed(() => netIncome(yearHybridTotals.value))
 // for a month that's already happened.
 const COGS_TRAILING_WINDOW = 3
 
+// A month qualifies either because it has its own budget_targets rows (the
+// original check) or because it's already closed, in which case real
+// daily_line_items actuals exist for it regardless of budget_targets —
+// cogsGroupPctOverMonths/subgroupPctOverMonths already prefer actuals for
+// any closed month once it's included here. Before this fix, a closed month
+// with zero budget_targets rows (e.g. June 2026, never formally budgeted)
+// was invisible to this gate, so the "3-month trailing average" silently
+// degraded to whatever earlier months happened to have budget rows — in
+// production this meant Aug–Dec's COGS budgets were effectively built from
+// July alone.
 function trailingMonthsWithData(targetMonth: number, count = COGS_TRAILING_WINDOW): number[] {
   const months: number[] = []
   for (let m = targetMonth - 1; m >= 1 && months.length < count; m--) {
     const data = monthlyData.value[m - 1]
-    if (data && data.accounts.some(a => a.category === 'revenue' && a.amount !== null)) months.push(m)
+    const hasBudgetData = data && data.accounts.some(a => a.category === 'revenue' && a.amount !== null)
+    if (hasBudgetData || isMonthClosed(YEAR, m)) months.push(m)
   }
   return months.reverse()
 }
