@@ -219,11 +219,36 @@ export default defineEventHandler((event) => {
     return { hasData, netIncome, depreciation, actualLoanInterest, totals }
   }
 
-  function freeCashFlow(startIso: string, endIso: string, debtService: ReturnType<typeof summarizeDebtService>) {
+  // Only SBA's debt service is paid directly from operating cash — every
+  // other loan (reserveFundedRows, above) draws from the 1005 reserve
+  // account, which is itself built up FROM operating cash via the reserve
+  // transfers subtracted below. Subtracting those loans' principal/catch-up
+  // interest AGAIN here would double-count the same cash outflow: once when
+  // it left operating cash as a reserve transfer, again when it left the
+  // reserve to pay the lender. Found 2026-08-16 after the user pointed out
+  // the reserve transfers exist specifically TO cover these loan payments,
+  // which made adding both to "profit needed" confusing — and, on
+  // inspection, not just confusing but wrong once reserveFundedRows was
+  // widened to all 9 private loans (was a much smaller double-count back
+  // when only Jones/Miller drew from reserve). rows is still summarized in
+  // full for display elsewhere (thisYear.debtService below, and
+  // fullYearReserveFunded further down — both informational totals) — only
+  // this subtraction is scoped to SBA.
+  function freeCashFlow(startIso: string, endIso: string, rows: LoanRow[]) {
     const actuals = actualsFor(startIso, endIso)
     const reserveTransfers = reserveTransferredInRange(startIso, endIso)
-    const freeCashFlow = actuals.netIncome + actuals.depreciation - debtService.principal - debtService.catchUpInterest - reserveTransfers
-    return { ...actuals, reserveTransfers, principal: debtService.principal, catchUpInterest: debtService.catchUpInterest, freeCashFlow }
+    const direct = summarizeDebtService(rows.filter(r => r.loan_key === 'sba'))
+    const reserveFunded = summarizeDebtService(rows.filter(r => r.loan_key !== 'sba'))
+    const freeCashFlow = actuals.netIncome + actuals.depreciation - direct.principal - direct.catchUpInterest - reserveTransfers
+    return {
+      ...actuals,
+      reserveTransfers,
+      principal: direct.principal,
+      catchUpInterest: direct.catchUpInterest,
+      reserveFundedPrincipal: reserveFunded.principal,
+      reserveFundedCatchUpInterest: reserveFunded.catchUpInterest,
+      freeCashFlow
+    }
   }
 
   const yearDebtService = summarizeDebtService(yearRows)
@@ -236,7 +261,6 @@ export default defineEventHandler((event) => {
   // Income) — this is a forward-looking target for the whole year, not a
   // to-date figure.
   const fullYearRows = allLoanRows.filter(r => r.payment_date >= yearStart && r.payment_date <= yearEndFull)
-  const fullYearDebtService = summarizeDebtService(fullYearRows)
 
   const depBudgetRow = db.prepare(`
     SELECT SUM(bt.amount) AS total
@@ -263,20 +287,26 @@ export default defineEventHandler((event) => {
   const reserveTransfersProjectedForYear = savedInYearToDate + remainingMondaysInYear * currentWeeklyAmountForProjection
 
   // Net Income needed for full-year Free Cash Flow to hit $0 — i.e. profit
-  // needed to cover what the P&L doesn't show (principal, the one-time
-  // catch-up interest, reserve transfers), since loan interest itself is
-  // already netted into Net Income and so doesn't need a separate check.
-  const breakevenNetIncomeForYear = fullYearDebtService.principal + fullYearDebtService.catchUpInterest + reserveTransfersProjectedForYear - budgetedDepreciationForYear
+  // needed to cover what the P&L doesn't show. Only SBA's principal is
+  // added directly (see the freeCashFlow() comment above for why the other
+  // 9 loans' principal/catch-up interest isn't also added here — it's
+  // already inside reserveTransfersProjectedForYear). Loan interest itself
+  // is already netted into Net Income and so doesn't need a separate check.
+  const fullYearDirect = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba'))
+  const fullYearReserveFunded = summarizeDebtService(fullYearRows.filter(r => r.loan_key !== 'sba'))
+  const breakevenNetIncomeForYear = fullYearDirect.principal + fullYearDirect.catchUpInterest + reserveTransfersProjectedForYear - budgetedDepreciationForYear
 
   return {
     year,
     thisYear: {
       debtService: yearDebtService,
-      freeCashFlow: freeCashFlow(yearStart, yearEnd, yearDebtService)
+      freeCashFlow: freeCashFlow(yearStart, yearEnd, yearRows)
     },
     yearProjection: {
-      principal: fullYearDebtService.principal,
-      catchUpInterest: fullYearDebtService.catchUpInterest,
+      principal: fullYearDirect.principal,
+      catchUpInterest: fullYearDirect.catchUpInterest,
+      reserveFundedPrincipal: fullYearReserveFunded.principal,
+      reserveFundedCatchUpInterest: fullYearReserveFunded.catchUpInterest,
       depreciation: budgetedDepreciationForYear,
       reserveTransfers: reserveTransfersProjectedForYear,
       breakevenNetIncome: breakevenNetIncomeForYear

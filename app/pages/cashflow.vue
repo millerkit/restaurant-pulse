@@ -7,10 +7,10 @@ useHead({ title: `${site.restaurantName} — Cash Flow` })
 type Payment = { loanKey: string, lender: string, date: string, type: 'catch_up' | 'regular', interest: number, principal: number, total: number }
 type PeriodFigures = {
   debtService: { principal: number, interest: number, catchUpInterest: number, totalCashOut: number, payments: Payment[] }
-  freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, reserveTransfers: number, principal: number, catchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
+  freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
 type ReserveTransfer = { date: string, amount: number, note: string | null }
-type YearProjection = { principal: number, catchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
 type CashFlowResponse = {
   year: number
   thisYear: PeriodFigures
@@ -151,7 +151,7 @@ async function submitPlan() {
               </span>
             </div>
             <div class="figure">{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</div>
-            <div class="caption">Net Income + Depreciation − Principal − Catch-up interest − Reserve transfers</div>
+            <div class="caption">Net Income + Depreciation − SBA principal − Reserve transfers</div>
             <div v-if="!data.thisYear.freeCashFlow.hasData" class="caption">No synced actuals for this period yet — Net Income is $0 below.</div>
           </div>
         </div>
@@ -159,10 +159,12 @@ async function submitPlan() {
         <div class="fcf-breakdown">
           <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
-          <div class="fcf-row"><span>− Principal payments</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
-          <div class="fcf-row"><span>− Catch-up interest (already accrued, not a new P&amp;L expense)</span><span>{{ fmt(-data.thisYear.freeCashFlow.catchUpInterest) }}</span></div>
+          <div class="fcf-row"><span>− SBA principal payments (paid directly from operating cash)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
           <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
           <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
+        </div>
+        <div class="section-note">
+          The other 9 loans' principal ({{ fmt(data.thisYear.freeCashFlow.reserveFundedPrincipal) }}) and catch-up interest ({{ fmt(data.thisYear.freeCashFlow.reserveFundedCatchUpInterest) }}) are paid out of the loan reserve account, not directly from operating cash — already covered by the reserve transfers above, so they aren't subtracted a second time.
         </div>
       </section>
 
@@ -181,7 +183,7 @@ async function submitPlan() {
               <span class="period">Profit needed to cover the loans</span>
             </div>
             <div class="figure">{{ fmt(data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0 — covers principal, the one-time catch-up interest, and reserve transfers. (Interest itself is already inside Net Income, so it doesn't need a separate check.)</div>
+            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0 — covers SBA's principal directly, plus reserve transfers (which fund the other 9 loans' principal and one-time catch-up interest). Interest itself is already inside Net Income, so it doesn't need a separate check.</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
@@ -240,7 +242,7 @@ async function submitPlan() {
           </table>
         </div>
         <div class="section-note">
-          Only loan interest ever shows up on the P&amp;L — principal, the one-time catch-up interest, and reserve transfers don't, since none of those are P&amp;L expenses. Acct 7020's own actual can also differ from the amortization schedule's interest figure shown here — it may include interest from debt outside these 10 loans (e.g. from before this move).
+          Only loan interest ever shows up on the P&amp;L — principal, the one-time catch-up interest, and reserve transfers don't, since none of those are P&amp;L expenses. Acct 7020's own actual can also differ from the amortization schedule's interest figure shown here — it may include interest from debt outside these 10 loans (e.g. from before this move). Principal and catch-up interest above are totals across all 10 loans; the Bottom line only subtracts SBA's share directly — the other 9 loans' share is paid from the reserve account and already covered by the reserve transfers row.
         </div>
       </section>
 
