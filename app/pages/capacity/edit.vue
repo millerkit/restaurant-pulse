@@ -53,8 +53,13 @@ function areaActualPerCover(areaId: number, period: 'thisMonth' | 'lastMonth'): 
   const p = areaActualsData.value?.[period]
   return p?.perArea.find(r => r.areaId === areaId)?.perCover ?? null
 }
+// Rounded to the nearest dollar for quick readability (2026-08-17, at the
+// user's request) — this is a display-only rounding of a derived/read-only
+// figure, not the underlying stored precision; the editable Food/Beverage
+// per-cover inputs above keep their exact decimal value on purpose (see
+// their own comment).
 function fmtMoneyOrDash(n: number | null): string {
-  return n == null ? '—' : `$${n.toFixed(2)}`
+  return n == null ? '—' : `$${Math.round(n)}`
 }
 
 // "Set from Actuals" — writes that area's real trailing two-month (this +
@@ -123,7 +128,7 @@ function varianceIcon(v: ReturnType<typeof areaActualVariance>): string {
 function varianceDeltaLabel(v: ReturnType<typeof areaActualVariance>): string {
   if (!v) return ''
   const sign = v.delta >= 0 ? '+' : '−'
-  return `(${sign}$${Math.abs(v.delta).toFixed(2)})`
+  return `(${sign}$${Math.round(Math.abs(v.delta))})`
 }
 const thisMonthLabel = computed(() => {
   const d = areaActualsData.value?.thisMonth
@@ -269,11 +274,14 @@ function monthDerived(s: MonthlyDraft) {
     avgCheck: covers > 0 ? revenue / covers : null
   }
 }
+// Rounded to the nearest whole percent / dollar for quick readability
+// (2026-08-17, at the user's request) — display-only, not the underlying
+// stored precision.
 function fmtPct(n: number | null): string {
-  return n == null ? '—' : `${(n * 100).toFixed(1)}%`
+  return n == null ? '—' : `${Math.round(n * 100)}%`
 }
 function fmtMoney2(n: number | null): string {
-  return n == null ? '—' : n.toFixed(2)
+  return n == null ? '—' : String(Math.round(n))
 }
 
 function historyIndexFor(month: number): number | null {
@@ -492,7 +500,7 @@ async function save() {
                 </td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
                 <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
-                <td class="derived">${{ perCoverTotal(a).toFixed(2) }}</td>
+                <td class="derived">${{ Math.round(perCoverTotal(a)) }}</td>
                 <td class="derived">
                   <span v-if="areaActualVariance(a, 'thisMonth')" :class="['variance-text', `v-${areaActualVariance(a, 'thisMonth')!.status}`]">
                     <span class="variance-main">{{ fmtMoneyOrDash(areaActualPerCover(a.id, 'thisMonth')) }}</span>
