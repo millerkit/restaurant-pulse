@@ -1,6 +1,11 @@
+<script setup lang="ts">
+import site from '~/config/site.json'
+</script>
+
 <template>
   <div class="wrap">
     <nav class="tabnav">
+      <NuxtLink to="/" class="brand">{{ site.restaurantName }}</NuxtLink>
       <NuxtLink to="/" exact-active-class="active">Dashboard</NuxtLink>
       <NuxtLink to="/pl" exact-active-class="active">P&amp;L</NuxtLink>
       <NuxtLink to="/pl/drilldowns" exact-active-class="active">Drill-Downs</NuxtLink>

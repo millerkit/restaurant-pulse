@@ -166,7 +166,7 @@ type AreaDraft = {
   id: number, name: string, seats: string, maxTurnsPerNight: string,
   perCoverRevenueFood: string, perCoverRevenueBeverage: string
 }
-// One row per month: holiday closures (unchanged) plus each area's own
+// One row per month: closures (unchanged) plus each area's own
 // expected nightly covers, keyed by area id — the real editable projection
 // input as of 2026-08-07 (replacing a single blended Expected Fill %),
 // per the user's own request after $86.12/cover looked low blended across
@@ -420,7 +420,7 @@ async function save() {
     }
     for (const s of seasonality) {
       if (Number.isNaN(s.holidayClosures)) {
-        throw new Error(`Invalid holiday closures number in the ${MONTH_NAMES[s.month - 1]} row`)
+        throw new Error(`Invalid closures number in the ${MONTH_NAMES[s.month - 1]} row`)
       }
     }
     for (const s of areaSeasonality) {
@@ -450,7 +450,7 @@ async function save() {
     <template v-else>
       <header class="page-head">
         <div>
-          <h1>{{ site.restaurantName }} — Edit Capacity</h1>
+          <h1>Edit Capacity</h1>
           <div class="sub">Capacity, turns/night, and per-cover revenue assumptions, plus the monthly fill % and holiday-closure counts these get tested against. See <NuxtLink to="/capacity">Capacity Pace</NuxtLink> to see how real fill % and per-cover spend compare.</div>
         </div>
       </header>
@@ -523,8 +523,8 @@ async function save() {
 
       <section>
         <div class="section-head">
-          <div class="section-label">Expected Nightly Covers by Area &amp; Holiday Closures</div>
-          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Holiday closures are additional nights closed beyond the standing Monday closure.</div>
+          <div class="section-label">Expected Nightly Covers by Area &amp; Closures</div>
+          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Closures are additional nights closed beyond the standing Monday closure.</div>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
@@ -537,7 +537,7 @@ async function save() {
                 <th scope="col">Total</th>
                 <th scope="col">Fill %</th>
                 <th scope="col">Per-Cover $</th>
-                <th scope="col">Holiday Closures</th>
+                <th scope="col">Closures</th>
               </tr>
             </thead>
             <tbody>
@@ -603,7 +603,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .pl-table th, .pl-table td { padding: 10px 12px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pl-table th:first-child, .pl-table td:first-child { text-align: left; white-space: normal; }
 /* Header labels wrap instead of forcing their column wide (added
-   2026-08-09, at the user's request) — "Chefs Counter"/"Holiday Closures"/
+   2026-08-09, at the user's request) — "Chefs Counter"/"Closures"/
    "Per-Cover Revenue" no longer set the column width on their own; the
    narrow input boxes now do, and center comfortably under a 2-line
    header. */

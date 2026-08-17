@@ -48,29 +48,67 @@ const benchmarkByCategory = computed(() => {
 // that comparison directly rather than a bar encoding an unrelated
 // dimension (share-of-group). null comparisonAmount/pctChange means the
 // subcategory had nothing in the prior period — shown as "new" since a
-// percentage against zero isn't meaningful.
-type DeltaRow = { label: string, amount: number, direction: 'up' | 'down', deltaText: string }
+// percentage against zero isn't meaningful. The chip states both the
+// percentage AND the dollar swing (not just the percentage) — the tile's
+// own bold number below is the period's full total, not the change amount,
+// and a reader glancing at a colored chip next to a big dollar figure could
+// otherwise easily read that figure as the size of the change rather than
+// the total it actually is. Deliberately doesn't spell out "vs. prior
+// week/month/year" on every chip — that's real width a narrow tile doesn't
+// have to spare, and the comparison basis is already established once, by
+// the section's own callout sentence or header (e.g. "Wages Drill-Down —
+// This Week vs. Last Week").
+type Direction = 'up' | 'down' | 'flat'
+type DeltaRow = { label: string, amount: number, direction: Direction, deltaText: string }
+function fmtSignedDollars(n: number): string {
+  return `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString()}`
+}
+// A change that rounds to 0% at the precision the chip actually displays
+// (anything inside ±0.5%) reads as "flat," not colored up/down — tinting a
+// tile red or green over a swing the chip itself displays as "0%" is
+// misleading (a real case: a salaried subcategory paying the exact same
+// amount two weeks running still computes a tiny nonzero float somewhere
+// upstream). This mainly matters for the Week Wages view, which shows every
+// subcategory regardless of size, unlike Month/Year's flagged-only list —
+// that list requires a >=50% swing to appear at all, so it can never land
+// in this rounds-to-zero band.
 function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, pctChange: number | null }, periodLabel: string): DeltaRow {
+  const deltaAmount = Math.round(r.amount - r.comparisonAmount)
   if (r.pctChange === null) {
-    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ new this ${periodLabel}` }
+    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ new this ${periodLabel} (${fmtSignedDollars(deltaAmount)})` }
   }
-  const direction = r.pctChange >= 0 ? 'up' : 'down'
+  const roundedPct = Math.round(Math.abs(r.pctChange))
+  if (roundedPct === 0) {
+    const deltaText = deltaAmount === 0 ? 'No change' : `${fmtSignedDollars(deltaAmount)} (<1% change)`
+    return { label: r.label, amount: r.amount, direction: 'flat', deltaText: `● ${deltaText}` }
+  }
+  const direction: Direction = r.pctChange > 0 ? 'up' : 'down'
   const arrow = direction === 'up' ? '▲' : '▼'
-  const sign = r.pctChange >= 0 ? '+' : '−'
-  return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${sign}${Math.abs(r.pctChange).toFixed(0)}% vs. prior ${periodLabel}` }
+  const pctSign = r.pctChange > 0 ? '+' : '−'
+  return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${pctSign}${roundedPct}% (${fmtSignedDollars(deltaAmount)})` }
 }
 
-// Groups the red (up) tiles together and the green (down) tiles together —
-// scanning the grid for "what's driving this red/green" is easier when the
-// two colors form two clusters instead of alternating. Stable sort keeps
-// each group's existing amount-descending order from the server.
+// Groups the red (up) tiles together and the green (down) tiles together,
+// with flat/neutral tiles in their own middle group — scanning the grid for
+// "what's driving this red/green" is easier when the colors form clusters
+// instead of alternating. Stable sort keeps each group's existing
+// amount-descending order from the server.
 function sortByDirection(rows: DeltaRow[]): DeltaRow[] {
-  return [...rows].sort((a, b) => (a.direction === b.direction ? 0 : a.direction === 'up' ? -1 : 1))
+  const rank: Record<Direction, number> = { up: 0, flat: 1, down: 2 }
+  return [...rows].sort((a, b) => rank[a.direction] - rank[b.direction])
 }
 
 // Single shared period toggle for all three drill-down sections (Labor,
 // Opex, Revenue) — see the shared control bar in the template.
 const drilldownPeriod = ref<Period>('month')
+
+// The page's own on-page heading states the actual comparison being shown
+// ("This Month vs. Last Month") rather than a static "Drill-Downs" that
+// never changes as the toggle above it does — the nav tab already says
+// "Drill-Downs", so the heading is free to be the more useful, specific
+// thing instead of repeating that.
+const PAGE_TITLE: Record<Period, string> = { week: 'This Week vs. Last Week', month: 'This Month vs. Last Month', year: 'This Year vs. Last Year' }
+const pageTitle = computed(() => PAGE_TITLE[drilldownPeriod.value])
 
 // Week gets a purpose-built Wages-vs-last-week view instead of the
 // anomaly-flagged Labor Drill-Down, and drops the Opex section entirely —
@@ -130,7 +168,7 @@ const weeklyWageRows = computed(() => laborRowsAll.value.map(r => buildDeltaRow(
 const weeklyWageTiles = computed(() => [weeklyWagesTotalRow.value, ...weeklyWageRows.value])
 const weeklyWagesCallout = computed(() => {
   const t = weeklyWagesTotalRow.value
-  return `Total wages this week: $${Math.round(t.amount).toLocaleString()} (${t.deltaText}).`
+  return `Total wages this week: $${Math.round(t.amount).toLocaleString()} — ${t.deltaText} vs. last week.`
 })
 
 // ---- Opex drill-down --------------------------------------------------
@@ -192,7 +230,14 @@ function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
   if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null }
   const entry = revenueDaysMap.value.get(dateStr)
-  if (!entry) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null }
+  // A $0 comparison day (e.g. a Monday closure where both this week's and
+  // last week's revenue summed to exactly $0) can't support a percentage —
+  // dividing by zero produced a literal "NaN%" in the UI before this check.
+  // Treated the same as no data at all, matching how most closed days
+  // already render (no daily_line_items rows posted, so there's no entry
+  // here in the first place) — either way there's nothing meaningful to
+  // compare.
+  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null }
   const deltaPct = ((entry.actual - entry.comparison) / entry.comparison) * 100
   const status: DayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
   return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison }
@@ -258,7 +303,7 @@ const revenueCallout = computed(() => {
 
     <template v-else>
       <PageHeader
-        page-name="Drill-Downs"
+        :page-name="pageTitle"
         :description="`What's driving Labor, Operating Cost, and Revenue · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
@@ -295,6 +340,7 @@ const revenueCallout = computed(() => {
                 <div v-for="row in weeklyWageTiles" :key="row.label" :class="['anomaly-tile', row.direction]">
                   <div class="label">{{ row.label }}</div>
                   <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                  <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
                   <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
                 </div>
               </div>
@@ -307,6 +353,7 @@ const revenueCallout = computed(() => {
                 <div v-for="row in laborRows" :key="row.label" :class="['anomaly-tile', row.direction]">
                   <div class="label">{{ row.label }}</div>
                   <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                  <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
                   <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
                 </div>
               </div>
@@ -341,6 +388,7 @@ const revenueCallout = computed(() => {
                   <div v-for="row in fixedOpexRows" :key="row.label" :class="['anomaly-tile', row.direction]">
                     <div class="label">{{ row.label }}</div>
                     <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                    <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
                     <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
                   </div>
                 </div>
@@ -358,6 +406,7 @@ const revenueCallout = computed(() => {
                   <div v-for="row in variableOpexRows" :key="row.label" :class="['anomaly-tile', row.direction]">
                     <div class="label">{{ row.label }}</div>
                     <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                    <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
                     <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
                   </div>
                 </div>
@@ -378,6 +427,7 @@ const revenueCallout = computed(() => {
         <section>
           <div class="section-head">
             <div class="section-label">Revenue Calendar — Where It Fell Short</div>
+            <div class="section-note">Percentage is the change vs. {{ revenueComparisonLabel }}; the dollar figure below it is that day's actual revenue, not the size of the change.</div>
           </div>
 
           <div v-if="calendarView" class="drill-card">
@@ -587,8 +637,7 @@ const revenueCallout = computed(() => {
 .anomaly-tile.up, .anomaly-tile.serious { background: color-mix(in srgb, var(--serious) 32%, var(--surface-alt)); }
 .anomaly-tile.down, .anomaly-tile.good { background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
 .anomaly-tile.critical { background: color-mix(in srgb, var(--critical) 38%, var(--surface-alt)); }
-.anomaly-tile .label { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
-.anomaly-tile .amount { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.anomaly-tile .label { font-size: 11.5px; font-weight: 600; line-height: 1.3; color: var(--ink-2); }
 .delta-chip {
   display: inline-flex;
   align-items: center;
@@ -599,6 +648,19 @@ const revenueCallout = computed(() => {
   border-radius: 100px;
   white-space: nowrap;
 }
+/* The variation is the whole point of a drill-down tile — direct user
+   feedback that it should read as more prominent than the period's total
+   spend below it, not the other way around. Sized up well past the label
+   and total so it's the first thing the eye lands on; the total keeps its
+   own small caption (see amount-caption below) so it's still unambiguous,
+   just no longer competing for attention. */
+.anomaly-tile .delta-chip { font-size: 15px; font-weight: 800; padding: 4px 12px; }
+/* Distinguishes the now-secondary total below from the delta chip above
+   it — without this, a reader can plausibly misread the dollar figure as
+   the size of the change the chip describes, rather than the period's
+   full total. */
+.anomaly-tile .amount-caption { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-3); margin-top: 2px; margin-bottom: -3px; }
+.anomaly-tile .amount { font-size: 12px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .delta-chip.up, .delta-chip.serious { color: var(--serious); background: var(--serious-wash); }
 .delta-chip.down, .delta-chip.good { color: var(--good); background: var(--good-wash); }
 .delta-chip.critical { color: var(--critical); background: var(--critical-wash); }

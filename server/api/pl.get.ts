@@ -144,13 +144,27 @@ export default defineEventHandler((event) => {
 
   // account_number is used to order subcategory rows in a stable, roughly
   // chart-of-accounts order rather than alphabetically or by insertion.
+  //
+  // Six labor accounts (Additional Pay, BOH Wages, FOH Wages, Management
+  // Salaries, Employee Benefits, Employer Payroll Taxes — the group-header
+  // accounts one level under "6000 Labor") carry the literal subcategory
+  // value 'Labor', a generic default rather than a real subcategory name.
+  // A direct posting to one of *those* accounts (not one of their own
+  // children — see the "parent account can also carry its own direct
+  // postings" note above) would otherwise surface in this drill-down under
+  // the bare label "Labor," which reads as nonsense next to the callout's
+  // own "Labor is off target... but Labor is up sharply" phrasing. Relabeled
+  // to "Other Labor" so it reads as its own real category — every regular
+  // wage subcategory already has its own specific label, so this bucket
+  // only ever catches these rare unattributed direct postings.
+  const LABEL_CASE = `CASE WHEN a.subcategory = 'Labor' THEN 'Other Labor' ELSE COALESCE(a.subcategory, a.name) END`
   function subcategoryTotalsForRange(category: 'labor' | 'opex', start: string, end: string, costBehavior?: 'fixed' | 'variable') {
     const rows = db.prepare(`
-      SELECT COALESCE(a.subcategory, a.name) AS label, SUM(dli.amount) AS total
+      SELECT ${LABEL_CASE} AS label, SUM(dli.amount) AS total
       FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
       WHERE a.category = ? AND dli.date BETWEEN ? AND ?
         ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
-      GROUP BY COALESCE(a.subcategory, a.name)
+      GROUP BY ${LABEL_CASE}
       ORDER BY total DESC
     `).all(...(costBehavior ? [category, start, end, costBehavior] : [category, start, end])) as { label: string, total: number }[]
     return rows

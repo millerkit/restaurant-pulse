@@ -102,6 +102,18 @@ body {
 }
 .tabnav a + a { margin-left: 18px; }
 .tabnav a.active { color: var(--ink); border-bottom-color: var(--accent); }
+/* Restaurant name/brand mark, moved here from every page's own <h1> (each
+   page's own heading now just states the page/view — e.g. "Budget Pace" —
+   without repeating "Urban Hearth" in front of it every time) — set off
+   from the tab links themselves with a divider so it doesn't read as one
+   more tab to click through. */
+.tabnav .brand {
+  font-weight: 800;
+  color: var(--ink);
+  padding-right: 16px;
+  border-right: 1px solid var(--hair);
+  border-bottom: none;
+}
 
 /* ---------- footer ---------- */
 .app-footer {

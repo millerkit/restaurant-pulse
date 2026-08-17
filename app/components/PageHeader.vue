@@ -8,8 +8,6 @@
 // sync-status.get.ts) so every page gets the same real data for free,
 // rather than each page needing to fold sync_runs into its own bigger API
 // response just for the header.
-import site from '~/config/site.json'
-
 const props = defineProps<{
   pageName: string
   description: string
@@ -96,7 +94,7 @@ async function syncNow() {
 <template>
   <header>
     <div>
-      <h1>{{ site.restaurantName }} — {{ props.pageName }}</h1>
+      <h1>{{ props.pageName }}</h1>
       <div class="sub">{{ props.description }}</div>
     </div>
     <div class="as-of">

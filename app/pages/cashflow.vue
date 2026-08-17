@@ -126,7 +126,7 @@ async function submitPlan() {
   <div>
     <header>
       <div>
-        <h1>{{ site.restaurantName }} — Cash Flow</h1>
+        <h1>Cash Flow</h1>
         <div class="sub">Are we covering total debt service — principal included, not just interest?</div>
       </div>
     </header>
