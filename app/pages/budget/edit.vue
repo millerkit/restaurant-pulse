@@ -936,7 +936,6 @@ async function recomputeCogsFromTrailingAverage() {
     if (months.length === 0) throw new Error('No prior months with revenue and COGS data to average from')
 
     const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-    const summary: string[] = []
 
     // Food stays a single blended group — see the comment above
     // cogsGroupPctOverMonths for why redistributing across its (today,
@@ -953,7 +952,6 @@ async function recomputeCogsFromTrailingAverage() {
           const weight = oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length
           targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(groupBudget * weight * 100) / 100 })
         }
-        summary.push(`Food ${(pct * 100).toFixed(1)}% → $${Math.round(groupBudget).toLocaleString()}`)
       }
     }
 
@@ -969,14 +967,13 @@ async function recomputeCogsFromTrailingAverage() {
       if (!cogsAcc || !revAcc) continue
       const subgroupBudget = sg.pct * (revAcc.amount || 0)
       targets.push({ year: YEAR, month: editMonth.value, accountId: cogsAcc.accountId, amount: Math.round(subgroupBudget * 100) / 100 })
-      summary.push(`${sg.label} ${(sg.pct * 100).toFixed(1)}% → $${Math.round(subgroupBudget).toLocaleString()}`)
     }
 
     if (targets.length === 0) throw new Error('No Food/Beverage COGS accounts found to recompute')
 
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
     await loadYear()
-    cogsRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} COGS from trailing average (${cogsTrailingLabel.value}): ${summary.join(', ')}.`
+    cogsRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} COGS from trailing average.`
     cogsRecomputeStatus.value = 'done'
   } catch (err: any) {
     cogsRecomputeStatus.value = 'error'
