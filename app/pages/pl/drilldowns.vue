@@ -75,7 +75,7 @@ function fmtSignedDollars(n: number): string {
 function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, pctChange: number | null }, periodLabel: string): DeltaRow {
   const deltaAmount = Math.round(r.amount - r.comparisonAmount)
   if (r.pctChange === null) {
-    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ new this ${periodLabel} (${fmtSignedDollars(deltaAmount)})` }
+    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ new (${fmtSignedDollars(deltaAmount)})` }
   }
   const roundedPct = Math.round(Math.abs(r.pctChange))
   if (roundedPct === 0) {

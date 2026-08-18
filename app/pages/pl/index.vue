@@ -58,7 +58,6 @@ function periodRow(period: Period) {
     netIncome: netIncome(totals)
   }
 }
-const weekRow = computed(() => periodRow('week'))
 const monthRow = computed(() => periodRow('month'))
 const yearRow = computed(() => periodRow('year'))
 </script>
@@ -78,7 +77,7 @@ const yearRow = computed(() => periodRow('year'))
     <template v-else>
       <PageHeader
         :page-name="'P&L'"
-        :description="`Week, month, and year to date · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
+        :description="`Month and year to date · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
       />
@@ -92,49 +91,42 @@ const yearRow = computed(() => periodRow('year'))
 
         <div class="pl-table-card">
           <table class="pl-table">
-            <caption>Profit and loss summary for this week, this month, and this year to date</caption>
+            <caption>Profit and loss summary for this month and this year to date</caption>
             <thead>
               <tr>
                 <th scope="col">Line item</th>
-                <th scope="col">This Week<span class="range">{{ rangeLabel('week') }}</span></th>
                 <th scope="col">This Month<span class="range">{{ rangeLabel('month') }}</span></th>
                 <th scope="col">This Year<span class="range">{{ rangeLabel('year') }}</span></th>
               </tr>
             </thead>
-            <tbody v-if="weekRow && monthRow && yearRow">
+            <tbody v-if="monthRow && yearRow">
               <tr>
                 <th scope="row">Revenue</th>
-                <td class="amount">${{ Math.round(weekRow.revenue).toLocaleString() }}</td>
                 <td class="amount">${{ Math.round(monthRow.revenue).toLocaleString() }}</td>
                 <td class="amount">${{ Math.round(yearRow.revenue).toLocaleString() }}</td>
               </tr>
               <tr>
                 <th scope="row">COGS</th>
-                <td><span :class="['amount', weekRow.cogsStatus]">${{ Math.round(weekRow.cogs).toLocaleString() }}</span><span :class="['pct', weekRow.cogsStatus]">{{ (weekRow.cogsPct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', monthRow.cogsStatus]">${{ Math.round(monthRow.cogs).toLocaleString() }}</span><span :class="['pct', monthRow.cogsStatus]">{{ (monthRow.cogsPct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', yearRow.cogsStatus]">${{ Math.round(yearRow.cogs).toLocaleString() }}</span><span :class="['pct', yearRow.cogsStatus]">{{ (yearRow.cogsPct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
               <tr>
                 <th scope="row">Labor</th>
-                <td><span :class="['amount', weekRow.laborStatus]">${{ Math.round(weekRow.labor).toLocaleString() }}</span><span :class="['pct', weekRow.laborStatus]">{{ (weekRow.laborPct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', monthRow.laborStatus]">${{ Math.round(monthRow.labor).toLocaleString() }}</span><span :class="['pct', monthRow.laborStatus]">{{ (monthRow.laborPct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', yearRow.laborStatus]">${{ Math.round(yearRow.labor).toLocaleString() }}</span><span :class="['pct', yearRow.laborStatus]">{{ (yearRow.laborPct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
               <tr class="subtotal">
                 <th scope="row">Prime cost <span class="hint">(COGS + labor)</span></th>
-                <td><span :class="['amount', weekRow.primeStatus]">${{ Math.round(weekRow.prime).toLocaleString() }}</span><span :class="['pct', weekRow.primeStatus]">{{ (weekRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', monthRow.primeStatus]">${{ Math.round(monthRow.prime).toLocaleString() }}</span><span :class="['pct', monthRow.primeStatus]">{{ (monthRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', yearRow.primeStatus]">${{ Math.round(yearRow.prime).toLocaleString() }}</span><span :class="['pct', yearRow.primeStatus]">{{ (yearRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
               <tr>
                 <th scope="row">Operating expenses <span class="hint">(see drill-down)</span></th>
-                <td class="amount">${{ Math.round(weekRow.opex).toLocaleString() }}</td>
                 <td class="amount">${{ Math.round(monthRow.opex).toLocaleString() }}</td>
                 <td class="amount">${{ Math.round(yearRow.opex).toLocaleString() }}</td>
               </tr>
               <tr class="total">
                 <th scope="row">Net income</th>
-                <td><span :class="['net-figure', weekRow.netIncome >= 0 ? 'good' : 'critical']">{{ weekRow.netIncome >= 0 ? '+' : '' }}${{ Math.round(weekRow.netIncome).toLocaleString() }}</span></td>
                 <td><span :class="['net-figure', monthRow.netIncome >= 0 ? 'good' : 'critical']">{{ monthRow.netIncome >= 0 ? '+' : '' }}${{ Math.round(monthRow.netIncome).toLocaleString() }}</span></td>
                 <td><span :class="['net-figure', yearRow.netIncome >= 0 ? 'good' : 'critical']">{{ yearRow.netIncome >= 0 ? '+' : '' }}${{ Math.round(yearRow.netIncome).toLocaleString() }}</span></td>
               </tr>

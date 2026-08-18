@@ -31,28 +31,39 @@ const asOfMonthDayLabel = computed(() => data.value ? `${MONTH_NAMES[data.value.
 const monthDayFraction = computed(() => data.value ? data.value.asOfDay / daysInMonth(data.value.asOfYear, data.value.asOfMonth) : 0)
 const yearDayFraction = computed(() => data.value ? dayOfYear(data.value.asOfYear, data.value.asOfMonth, data.value.asOfDay) / daysInYear(data.value.asOfYear) : 0)
 
-// Cumulative revenue target through today, built from each month's own
-// figure (server/api/dashboard.get.ts's monthlyRevenueBudget) rather than
+const EMPTY_CATEGORY_TOTALS = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
+type CategoryTotals = typeof EMPTY_CATEGORY_TOTALS
+
+// Cumulative per-category target through today, built from each month's own
+// figure (server/api/dashboard.get.ts's monthlyCategoryBudget) rather than
 // a flat dayOfYear/daysInYear share of the annual total — a flat line
-// assumes revenue accrues evenly across all 12 months, which misjudges
+// assumes a category accrues evenly across all 12 months, which misjudges
 // pace whenever a month (e.g. a much higher October) is budgeted
 // seasonally. Each month's figure is its budget where one was set, or its
-// own actual revenue for a fully-elapsed month that was never budgeted
-// (e.g. Jan-Jun 2026, the old location, budgeted only from Jul onward) —
-// using real actuals there instead of fabricating a target for months
-// nobody ever planned. A still-in-progress or future unbudgeted month
-// contributes 0, same as before.
-const yearExpectedRevenueToDate = computed(() => {
-  if (!data.value) return 0
-  const budgets = data.value.yearToDate.monthlyRevenueBudget ?? []
+// own actual for a fully-elapsed month that was never budgeted (e.g.
+// Jan-Jun 2026, the old location, budgeted only from Jul onward) — using
+// real actuals there instead of fabricating a target for months nobody
+// ever planned. A still-in-progress or future unbudgeted month contributes
+// 0, same as before. Originally revenue-only; generalized so the Net
+// Income cards' pace status can be built from an expected net income
+// figure instead of borrowing revenue's pace (see below).
+const yearExpectedToDate = computed<CategoryTotals>(() => {
+  if (!data.value) return { ...EMPTY_CATEGORY_TOTALS }
+  const monthlyBudgets = data.value.yearToDate.monthlyCategoryBudget
   const { asOfYear, asOfMonth, asOfDay } = data.value
-  let expected = 0
-  for (let m = 1; m < asOfMonth; m++) {
-    expected += budgets[m - 1] ?? 0
+  const result = { ...EMPTY_CATEGORY_TOTALS }
+  for (const cat of Object.keys(EMPTY_CATEGORY_TOTALS) as (keyof CategoryTotals)[]) {
+    const budgets = monthlyBudgets?.[cat] ?? []
+    let expected = 0
+    for (let m = 1; m < asOfMonth; m++) {
+      expected += budgets[m - 1] ?? 0
+    }
+    expected += (budgets[asOfMonth - 1] ?? 0) * (asOfDay / daysInMonth(asOfYear, asOfMonth))
+    result[cat] = expected
   }
-  expected += (budgets[asOfMonth - 1] ?? 0) * (asOfDay / daysInMonth(asOfYear, asOfMonth))
-  return expected
+  return result
 })
+const yearExpectedRevenueToDate = computed(() => yearExpectedToDate.value.revenue)
 
 function buildPeriod(period: 'month' | 'year') {
   if (!data.value) return null
@@ -68,8 +79,34 @@ function buildPeriod(period: 'month' | 'year') {
     ? (yearExpectedRevenueToDate.value / p.budget.revenue) * 100
     : dayFraction * 100
   const status = paceStatus(actualPct, expectedPct, CATEGORY_DIRECTION.revenue)
+
+  // Net income's own pace — deliberately its own comparison, not borrowed
+  // from revenue.status above. A month can be profitable and still behind
+  // budget on net income even while revenue itself is right on pace (or
+  // ahead), if costs are overrunning — see the Design direction section in
+  // CLAUDE.md ("a month can be profitable and still be behind budget").
+  // Expressed as a % of the period's budgeted revenue — a stable,
+  // always-positive denominator — rather than a % of budgeted net income
+  // itself, which can be near-zero or negative and make a percentage swing
+  // wildly for a small dollar difference.
+  const budget = p.budget as CategoryTotals
+  const expectedTotals: CategoryTotals = period === 'year'
+    ? yearExpectedToDate.value
+    : {
+        revenue: budget.revenue * dayFraction,
+        cogs: budget.cogs * dayFraction,
+        labor: budget.labor * dayFraction,
+        opex: budget.opex * dayFraction,
+        other_income: budget.other_income * dayFraction,
+        other_expense: budget.other_expense * dayFraction
+      }
+  const expectedNet = netIncome(expectedTotals)
+  const netActualPct = (actualNet / p.budget.revenue) * 100
+  const netExpectedPct = (expectedNet / p.budget.revenue) * 100
+  const netStatus = paceStatus(netActualPct, netExpectedPct, 'higher-is-better')
+
   return {
-    actualNet, budgetNet, hasBudget: true as const, dayFraction,
+    actualNet, budgetNet, expectedNet, netStatus, hasBudget: true as const, dayFraction,
     revenue: {
       actual: p.actuals.revenue,
       target: p.budget.revenue,
@@ -172,26 +209,26 @@ function meterStatusLabel(status: string | null) {
           <div class="hero-card anchor">
             <div class="hero-top">
               <span class="period">This Month ({{ MONTH_NAMES[data.asOfMonth - 1] }} 1–{{ data.asOfDay }})</span>
-              <span v-if="monthView?.hasBudget" :class="['chip', monthView.revenue!.status]">{{ paceLabel(monthView.revenue!.status) }}</span>
+              <span v-if="monthView?.hasBudget" :class="['chip', monthView.netStatus]">{{ paceLabel(monthView.netStatus) }}</span>
               <span v-else class="chip warning">No budget set</span>
             </div>
             <div class="figure">{{ (monthView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(monthView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
               Net income, month-to-date
-              <template v-if="monthView?.hasBudget">— vs ${{ Math.round(monthView.budgetNet!).toLocaleString() }} budgeted, {{ monthView.revenue!.status === 'good' ? 'running ahead of' : 'running behind' }} the monthly budget pace (see below)</template>
+              <template v-if="monthView?.hasBudget">— vs ${{ Math.round(monthView.budgetNet!).toLocaleString() }} budgeted, {{ monthView.netStatus === 'good' ? 'running ahead of' : 'running behind' }} where net income should be by now this month</template>
               <template v-else>— no budget entered for this month yet (Edit Budget tab)</template>
             </div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
               <span class="period">This Year (Jan 1–{{ asOfMonthDayLabel }})</span>
-              <span v-if="yearView?.hasBudget" :class="['chip', yearView.revenue!.status]">{{ paceLabel(yearView.revenue!.status) }}</span>
+              <span v-if="yearView?.hasBudget" :class="['chip', yearView.netStatus]">{{ paceLabel(yearView.netStatus) }}</span>
               <span v-else class="chip warning">No budget set</span>
             </div>
             <div class="figure">{{ (yearView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(yearView?.actualNet ?? 0).toLocaleString() }}</div>
             <div class="caption">
               Net income, year-to-date
-              <template v-if="yearView?.hasBudget">— vs ${{ Math.round(yearView.budgetNet!).toLocaleString() }} budgeted, {{ yearView.revenue!.status === 'good' ? 'running ahead of' : 'running behind' }} the annual budget pace</template>
+              <template v-if="yearView?.hasBudget">— vs ${{ Math.round(yearView.budgetNet!).toLocaleString() }} budgeted, {{ yearView.netStatus === 'good' ? 'running ahead of' : 'running behind' }} where net income should be by now this year</template>
               <template v-else>— no budget entered for this year yet (Edit Budget tab)</template>
             </div>
           </div>

@@ -118,26 +118,34 @@ export default defineEventHandler((event) => {
     return totals
   }
 
-  // Revenue target by month, for the year view's "expected pace" line —
-  // same hybrid logic as hybridAnnualTarget (budget where set, actual
+  // Per-category target by month, for the year view's "expected pace" line
+  // — same hybrid logic as hybridAnnualTarget (budget where set, actual
   // fallback for a fully-elapsed unbudgeted month, null/0 otherwise). The
   // flat calendar-day fraction used elsewhere (dayOfYear/daysInYear) is
-  // still wrong for the reason documented previously: it assumes revenue
+  // still wrong for the reason documented previously: it assumes a category
   // accrues evenly across all 12 months, which misjudges pace whenever a
-  // month's budgeted revenue is seasonally uneven — the client combines
-  // this with the elapsed-days fraction of the current month to build a
-  // true cumulative-target-through-today figure instead.
-  function monthlyRevenueTarget(
+  // month's budgeted amount is seasonally uneven — the client combines this
+  // with the elapsed-days fraction of the current month to build a true
+  // cumulative-target-through-today figure instead. Originally revenue-only
+  // (monthlyRevenueTarget); generalized to every category so the client can
+  // build an expected *net income* to date, not just expected revenue — see
+  // CLAUDE.md's "Net income pace chip was actually tracking revenue pace"
+  // section.
+  function monthlyCategoryTargets(
     budgets: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
     actuals: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
     asOfMonth: number
-  ): (number | null)[] {
-    return Array.from({ length: 12 }, (_, i) => {
-      const m = i + 1
-      if (budgets.revenue[i] != null) return budgets.revenue[i]
-      if (m < asOfMonth) return actuals.revenue[i] ?? 0
-      return null
-    })
+  ): Record<keyof typeof EMPTY_TOTALS, (number | null)[]> {
+    const result = {} as Record<keyof typeof EMPTY_TOTALS, (number | null)[]>
+    for (const cat of Object.keys(EMPTY_TOTALS) as (keyof typeof EMPTY_TOTALS)[]) {
+      result[cat] = Array.from({ length: 12 }, (_, i) => {
+        const m = i + 1
+        if (budgets[cat][i] != null) return budgets[cat][i]
+        if (m < asOfMonth) return actuals[cat][i] ?? 0
+        return null
+      })
+    }
+    return result
   }
 
   const monthlyBudgetsByCategory = monthlyCategoryFigures(asOfYear, 'budget_targets')
@@ -181,7 +189,7 @@ export default defineEventHandler((event) => {
     yearToDate: {
       actuals: categoryTotalsForRange(yearStart, asOfDate),
       budget: hybridAnnualTarget(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
-      monthlyRevenueBudget: monthlyRevenueTarget(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
+      monthlyCategoryBudget: monthlyCategoryTargets(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
       unbudgetedPastMonthCount: Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
         .filter(m => monthlyBudgetsByCategory.revenue[m - 1] == null).length
     },
