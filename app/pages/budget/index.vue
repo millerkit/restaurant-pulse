@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, monthExpectedOpex, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Budget Pace` })
 
@@ -94,11 +94,16 @@ function getMonthCategoryBudget(month: number, cat: Category) {
 const yearExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudget, monthlyActuals.value, asOfMonth, asOfDay))
 
 // Dollar amount that should have accrued by today for a category's budget
-// — seasonality-aware for the year view, the existing flat within-month
-// fraction for the month view (no finer-grained-than-monthly budget exists
-// to do better there).
+// — seasonality-aware for the year view; for the month view, Opex accounts
+// for its known lump-sum accounts (rent, loan interest — see
+// monthExpectedOpex/opexLumpSumPostingDays in useBudgetData.ts) rather than
+// assuming even daily accrual, and every other category still uses the flat
+// within-month fraction (no finer-grained-than-monthly budget exists to do
+// better there).
 function expectedAmountFor(cat: 'revenue' | 'cogs' | 'labor' | 'opex', budget: number) {
-  return selectedPeriod.value === 'year' ? yearExpectedToDate.value[cat] : budget * periodDayFraction.value
+  if (selectedPeriod.value === 'year') return yearExpectedToDate.value[cat]
+  if (cat === 'opex') return monthExpectedOpex(monthlyData.value[asOfMonth - 1], asOfDay, daysInMonth(YEAR, asOfMonth))
+  return budget * periodDayFraction.value
 }
 function actualsTotalsFor(monthNumbers: number[]) {
   const totals = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }

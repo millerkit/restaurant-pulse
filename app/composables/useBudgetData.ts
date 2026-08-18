@@ -69,6 +69,53 @@ export function monthCategoryBudget(monthData: MonthData | undefined, cat: Categ
   return any ? sum : null
 }
 
+// Opex accounts known to post as a lump sum on fixed calendar day(s) each
+// month, rather than accruing evenly across it — a flat day-fraction
+// "expected to date" overstates spend in the days before these post (they
+// haven't hit yet) and, once they have, understates it for the rest of the
+// month (nothing more from that account is coming). Per the user's own
+// knowledge of the business: 6510 Building Rent is due as one lump at the
+// start of the month; 7020 Loan Interest posts in two roughly-equal
+// installments today (SBA mid-month, investor/other loans a few days
+// later). The other private loans are expected to add a third, month-end
+// installment to 7020 once they reach their own regular monthly payment
+// schedule — the Cash Flow tab's debt schedule documents this "steady
+// state" as starting 2027 (see CLAUDE.md), so that third posting day is
+// gated to years after 2026 rather than applied to 2026's actually-observed
+// two-payment pattern. A first-pass, hand-set rule — same posture as this
+// file's other hardcoded domain constants (e.g. the owner-compensation
+// account list) — revisit if real posting dates ever drift.
+function opexLumpSumPostingDays(accountNumber: string, monthData: MonthData): number[] | null {
+  if (accountNumber === '6510') return [1]
+  if (accountNumber === '7020') {
+    return monthData.year > 2026 ? [12, 15, daysInMonth(monthData.year, monthData.month)] : [12, 15]
+  }
+  return null
+}
+
+// Expected opex-to-date for the month view, accounting for the lump-sum
+// accounts above instead of assuming every dollar of opex accrues evenly
+// across the month. Every other opex account (the large majority of the
+// category) has no known posting-date pattern, so it still uses the flat
+// day fraction — there's nothing finer-grained to go on for those.
+export function monthExpectedOpex(monthData: MonthData | undefined, asOfDay: number, totalDaysInMonth: number): number {
+  if (!monthData) return 0
+  const dayFraction = asOfDay / totalDaysInMonth
+  let lumpBudget = 0
+  let lumpExpected = 0
+  for (const acc of monthData.accounts) {
+    if (acc.category !== 'opex' || acc.amount === null || !acc.accountNumber) continue
+    const postingDays = opexLumpSumPostingDays(acc.accountNumber, monthData)
+    if (!postingDays) continue
+    lumpBudget += acc.amount
+    const postedCount = postingDays.filter(d => d <= asOfDay).length
+    lumpExpected += acc.amount * (postedCount / postingDays.length)
+  }
+  const totalOpexBudget = monthCategoryBudget(monthData, 'opex') ?? 0
+  const smoothBudget = totalOpexBudget - lumpBudget
+  return smoothBudget * dayFraction + lumpExpected
+}
+
 // Per-category, per-month hybrid target: a month's own budget where one was
 // entered (via getMonthCategoryBudget — a callback rather than a plain
 // MonthData[] read so the Edit Budget page can substitute its own
