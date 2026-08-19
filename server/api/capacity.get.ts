@@ -217,6 +217,47 @@ export default defineEventHandler(() => {
     }
   }
 
+  // Per-area breakdown for a single calendar month — backs the Capacity
+  // Pace page's "By Area" cards, which replaced the old static reference
+  // table of raw capacity/turns/per-cover assumptions (moved to a plain
+  // link to the Edit Capacity page instead). Assumed covers/night and
+  // per-cover $ are already nightly/per-cover rate figures (see
+  // capacity_area_seasonality's own comment in schema.sql), so no
+  // operating-day math is needed on that side. The actual side divides by
+  // the count of dates daily_toast_area_metrics actually has a row for
+  // that area (the sync only ever writes a row when that area saw real
+  // covers that night — see toast-metrics-sync.ts) rather than the
+  // whole-restaurant operating-day count, so a closed season (e.g.
+  // Outdoor in winter) naturally divides by however many real nights it
+  // was actually open, not every operating night in the month.
+  function actualAreaForMonth(startIso: string, endIso: string) {
+    if (startIso > asOfDate) return null
+    const cappedEnd = endIso > asOfDate ? asOfDate : endIso
+    const rows = db.prepare(`
+      SELECT area_id AS areaId, SUM(covers) AS covers, SUM(revenue) AS revenue, COUNT(*) AS nights
+      FROM daily_toast_area_metrics
+      WHERE date BETWEEN ? AND ?
+      GROUP BY area_id
+    `).all(startIso, cappedEnd) as { areaId: number, covers: number, revenue: number, nights: number }[]
+    return new Map(rows.map(r => [r.areaId, r]))
+  }
+  function areaBreakdownForMonth(month: number, startIso: string, endIso: string) {
+    const actualByArea = actualAreaForMonth(startIso, endIso)
+    return areas.map((a) => {
+      const act = actualByArea?.get(a.id)
+      const actualCovers = act?.covers ?? null
+      const actualNights = act?.nights ?? 0
+      return {
+        areaId: a.id,
+        areaName: a.name,
+        assumedCoversPerNight: areaMonth.get(`${a.id}:${month}`) ?? 0,
+        assumedPerCover: a.per_cover_revenue_food + a.per_cover_revenue_beverage,
+        actualCoversPerNight: actualByArea && actualNights > 0 ? (actualCovers ?? 0) / actualNights : null,
+        actualPerCover: actualByArea && actualCovers ? (act!.revenue ?? 0) / actualCovers : null
+      }
+    })
+  }
+
   // ---- The four quick-look periods -----------------------------------
   const thisWeekStart = mondayOf(asOfDate)
   const thisWeekEnd = addDaysIso(thisWeekStart, 6)
@@ -241,7 +282,8 @@ export default defineEventHandler(() => {
     return {
       month,
       holidayClosures: holidaysByMonth.get(month) ?? 0,
-      ...periodFor(start, end)
+      ...periodFor(start, end),
+      areaBreakdown: areaBreakdownForMonth(month, start, end)
     }
   })
 

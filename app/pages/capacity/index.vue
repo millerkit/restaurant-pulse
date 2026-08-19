@@ -7,6 +7,7 @@ useHead({ title: `${site.restaurantName} — Capacity Pace` })
 type Assumed = { operatingDays: number, expectedCovers: number, expectedRevenue: number, maxCapacityCovers: number, assumedFillPct: number | null, assumedAvgCheck: number | null }
 type Actual = { throughDate: string, covers: number | null, revenue: number | null, toastDaysSynced: number, operatingDays: number, maxCapacityCovers: number, actualFillPct: number | null, actualAvgCheck: number | null } | null
 type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolean, assumed: Assumed, actual: Actual }
+type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNight: number, assumedPerCover: number, actualCoversPerNight: number | null, actualPerCover: number | null }
 
 const { data, pending, error, refresh } = await useFetch('/api/capacity')
 
@@ -61,6 +62,19 @@ function checkDeltaLabel(p: Period): string {
   if (actual == null || assumed == null) return ''
   const delta = actual - assumed
   return delta >= 0 ? `+$${delta.toFixed(2)}` : `−$${Math.abs(delta).toFixed(2)}`
+}
+function fmtCoversPerNight(n: number | null | undefined): string {
+  return n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString()
+}
+function deltaMoneyLabel(actual: number | null | undefined, assumed: number | null | undefined): string {
+  if (actual == null || assumed == null) return ''
+  const delta = actual - assumed
+  return delta >= 0 ? `+$${delta.toFixed(2)}` : `−$${Math.abs(delta).toFixed(2)}`
+}
+function deltaCoversLabel(actual: number | null | undefined, assumed: number | null | undefined): string {
+  if (actual == null || assumed == null) return ''
+  const delta = Math.round((actual - assumed) * 10) / 10
+  return delta >= 0 ? `+${delta}` : `${delta}`
 }
 
 const periods = computed(() => data.value?.periods ?? null)
@@ -137,6 +151,7 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
       <section>
         <div class="section-head">
           <div class="section-label">By Month — {{ data.asOfYear }}</div>
+          <div class="section-note"><NuxtLink to="/capacity/edit">Edit capacity, turns, and per-cover revenue →</NuxtLink></div>
         </div>
 
         <div class="month-tabs">
@@ -188,40 +203,34 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
             No actual data yet — assumed target: {{ fmtPct(selectedMonthData.assumed.assumedFillPct) }} fill, {{ fmtMoney(selectedMonthData.assumed.assumedAvgCheck) }}/cover ({{ fmtMoneyRound(selectedMonthData.assumed.expectedRevenue) }} expected revenue).
           </div>
         </div>
-      </section>
 
-      <!-- Reference: the underlying per-area assumptions -->
-      <section>
-        <div class="section-head">
-          <div class="section-label">Assumptions</div>
-          <div class="section-note"><NuxtLink to="/capacity/edit">Edit capacity, turns, and per-cover revenue →</NuxtLink></div>
-        </div>
-        <div class="pl-table-card">
-          <table class="pl-table cap-table">
-            <caption>Per-area capacity and revenue assumptions</caption>
-            <thead>
-              <tr>
-                <th scope="col">Area</th>
-                <th scope="col">Seats</th>
-                <th scope="col">Max Turns/Night</th>
-                <th scope="col">Capacity Nov–Apr</th>
-                <th scope="col">Capacity May–Oct</th>
-                <th scope="col">Per-Cover Revenue (Food)</th>
-                <th scope="col">Per-Cover Revenue (Beverage)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="a in data.areas" :key="a.id">
-                <th scope="row" style="text-transform: capitalize;">{{ a.name }}</th>
-                <td>{{ a.seats }}</td>
-                <td>{{ a.max_turns_per_night }}</td>
-                <td>{{ a.capacity_nov_apr ?? 'closed' }}</td>
-                <td>{{ a.capacity_may_oct }}</td>
-                <td class="amount">${{ a.per_cover_revenue_food.toFixed(2) }}</td>
-                <td class="amount">${{ a.per_cover_revenue_beverage.toFixed(2) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- By area: average covers/night and per-cover spend, actual vs. projected -->
+        <div class="area-grid">
+          <div v-for="a in (selectedMonthData?.areaBreakdown ?? [])" :key="a.areaId" class="assumption-card area-card">
+            <div class="card-head">
+              <span class="period-name" style="text-transform: capitalize;">{{ a.areaName }}</span>
+            </div>
+            <div class="metric">
+              <div class="metric-top">
+                <span class="metric-label">Covers/Night</span>
+                <span v-if="ratioStatus(a.actualCoversPerNight, a.assumedCoversPerNight)" :class="['chip', ratioStatus(a.actualCoversPerNight, a.assumedCoversPerNight)]">
+                  {{ deltaCoversLabel(a.actualCoversPerNight, a.assumedCoversPerNight) }}
+                </span>
+              </div>
+              <div class="metric-figure small">{{ fmtCoversPerNight(a.actualCoversPerNight) }}</div>
+              <div class="metric-sub">vs. {{ fmtCoversPerNight(a.assumedCoversPerNight) }} assumed</div>
+            </div>
+            <div class="metric">
+              <div class="metric-top">
+                <span class="metric-label">Per-Cover</span>
+                <span v-if="ratioStatus(a.actualPerCover, a.assumedPerCover)" :class="['chip', ratioStatus(a.actualPerCover, a.assumedPerCover)]">
+                  {{ deltaMoneyLabel(a.actualPerCover, a.assumedPerCover) }}
+                </span>
+              </div>
+              <div class="metric-figure small">{{ fmtMoney(a.actualPerCover) }}</div>
+              <div class="metric-sub">vs. {{ fmtMoney(a.assumedPerCover) }} assumed</div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -288,25 +297,9 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
 }
 .month-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
 
-/* ---------- reference table (copied from pl/index.vue's .pl-table) ---------- */
-.pl-table-card {
-  background: var(--surface);
-  border: 1px solid var(--hair);
-  border-radius: 18px;
-  box-shadow: var(--card-shadow);
-  padding: 4px 4px;
-  overflow-x: auto;
-  margin-bottom: 14px;
-}
-table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
-.pl-table caption { display: none; }
-.pl-table th, .pl-table td { padding: 12px 16px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pl-table th:first-child, .pl-table td:first-child { text-align: left; white-space: normal; }
-.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink-3); border-bottom: 1px solid var(--hair); }
-.pl-table tbody th { text-align: left; font-weight: 600; font-size: 13px; color: var(--ink); }
-.pl-table tbody tr { border-bottom: 1px solid var(--hair); }
-.pl-table tbody tr:last-child { border-bottom: none; }
-.pl-table .amount { font-weight: 600; }
+/* ---------- per-area breakdown (below the month detail card) ---------- */
+.area-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 14px; }
+.area-card .metric-figure.small { font-size: 22px; }
 
 .drill-card {
   background: var(--surface);
