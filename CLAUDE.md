@@ -2947,6 +2947,21 @@ section, an existing gap), all from the same conversation:
   config). Without it, the recommended approach is still the same: a
   derived fill %, reusing "Set by History"'s own baseline-scaling
   transformation, not a directly measured one.
+- **Account 7020 Loan Interest budget for Dec 2026 ($9,733.33, set
+  2026-08-18) depends on the investor-7 loans' Dec 20 catch-up payment
+  landing exactly as currently scheduled/pre-loaded in QBO** (the seven
+  loans' Dec 20 catch-up-clearing Expense transactions plus the
+  `ACCRUED_12-20-2026` accrual true-up JE) — unlike Aug/Sep/Oct/Nov's
+  figures, which were independently confirmed directly against real QBO
+  data on 2026-08-18 (see the account 7020 investigation earlier this same
+  day: a real gap was found where the June J&M accrual JE hadn't synced
+  because the nightly sync's `MIN_QBO_LOOKBACK_DAYS` floor is only 30
+  days, fixed via a targeted `scripts/backfill-qbo-pl.mjs` re-sync), the
+  Dec figure is still a projection built from pre-loaded future
+  transactions that haven't actually happened yet. Re-verify against real
+  December actuals once Dec 20 passes, the same way Sep/Oct/Nov were
+  confirmed via a direct read-only QBO Reports API query rather than
+  waiting for the regular sync to reach that date.
 
 ## Where to look
 
