@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_DIRECTION, MONTH_NAMES, benchmarkStatus, daysInMonth, daysInYear, dayOfYear, netIncome, paceStatus } from '~/composables/useBudgetData'
+import { CATEGORY_DIRECTION, benchmarkStatus, daysInMonth, daysInYear, dayOfYear, netIncome, paceStatus } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Daily Performance` })
+useHead({ title: `${site.restaurantName} — Weekly Performance` })
 
 const { data, pending, error, refresh } = await useFetch('/api/dashboard')
 
@@ -21,8 +21,6 @@ function formatWeekdayDate(s: string, includeYear = false) {
   const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
   return `${weekday}, ${month} ${d.getUTCDate()}${includeYear ? ` ${d.getUTCFullYear()}` : ''}`
 }
-const asOfMonthDayLabel = computed(() => data.value ? `${MONTH_NAMES[data.value.asOfMonth - 1]} ${data.value.asOfDay}` : '')
-
 // ---- month / year net income + revenue pace -----------------------------
 // Pace/status math deliberately mirrors the Budget Pace page (paceStatus,
 // netIncome, CATEGORY_DIRECTION from useBudgetData.ts) rather than
@@ -121,22 +119,10 @@ const monthView = computed(() => buildPeriod('month'))
 const yearView = computed(() => buildPeriod('year'))
 const paceLabel = (status: string) => status === 'good' ? 'Ahead of pace' : 'Behind pace'
 
-// ---- last night vs. last week / last year --------------------------------
+// ---- last night: still needed for Sales / Labor Hour, moved lower on the
+// page 2026-08-19 when Net Income / Last Night vs. History / Covers / Avg
+// Check were replaced by the Weekly Performance section below. ------------
 const lastNightRevenue = computed(() => data.value?.lastNight.revenue ?? 0)
-function pctChange(current: number, previous: number | null | undefined) {
-  if (!previous) return null
-  return ((current - previous) / previous) * 100
-}
-const vsLastWeek = computed(() => ({
-  pct: pctChange(lastNightRevenue.value, data.value?.lastNight.lastWeek.revenue),
-  revenue: data.value?.lastNight.lastWeek.revenue ?? null,
-  date: data.value?.lastNight.lastWeek.date
-}))
-const vsLastYear = computed(() => ({
-  pct: pctChange(lastNightRevenue.value, data.value?.lastNight.lastYear.revenue),
-  revenue: data.value?.lastNight.lastYear.revenue ?? null,
-  date: data.value?.lastNight.lastYear.date
-}))
 
 // Toast POS metrics (covers, labor hours) — real data as of the nightly
 // sync's Toast step (server/utils/toast-metrics-sync.ts), null if last
@@ -145,10 +131,56 @@ const vsLastYear = computed(() => ({
 // this app treats Toast as a guest-count/labor-hours source only, not a
 // second revenue feed.
 const toastSynced = computed(() => data.value?.toast != null)
-const lastNightCovers = computed(() => data.value?.toast?.covers ?? null)
 const lastNightLaborHours = computed(() => data.value?.toast?.laborHours ?? null)
-const avgCheck = computed(() => lastNightCovers.value ? lastNightRevenue.value / lastNightCovers.value : null)
 const salesPerLaborHour = computed(() => lastNightLaborHours.value ? lastNightRevenue.value / lastNightLaborHours.value : null)
+
+// ---- Weekly Performance: day-specific targets scaled from a single
+// editable weekly benchmark by the real weekday revenue pattern — see
+// server/api/dashboard.get.ts's weeklyTargets computation. Added 2026-08-19,
+// replacing the old Net Income / Last Night vs. History / Covers / Avg
+// Check cards at the user's request.
+const weeklyTargets = computed(() => data.value?.weeklyTargets ?? null)
+
+function dayStatus(d: { hasHappened: boolean, dollarTarget: number | null, actualRevenue: number | null }): string | null {
+  if (!d.hasHappened || d.dollarTarget == null || !(d.dollarTarget > 0) || d.actualRevenue == null) return null
+  return paceStatus((d.actualRevenue / d.dollarTarget) * 100, 100, 'higher-is-better')
+}
+function dayStatusLabel(status: string | null): string {
+  if (status === null) return 'No data yet'
+  return status === 'good' ? 'Hit target' : 'Below target'
+}
+const weekToDateStatus = computed(() => {
+  const wt = weeklyTargets.value
+  if (!wt || !wt.benchmarkAmount || !(wt.thisWeek.toDate.targetRevenue > 0)) return null
+  return paceStatus((wt.thisWeek.toDate.actualRevenue / wt.thisWeek.toDate.targetRevenue) * 100, 100, 'higher-is-better')
+})
+
+// ---- Weekly goal edit form (weekly_revenue_benchmark) — same
+// watch-once-then-let-the-user-type pattern as Cash Flow's "Planned weekly
+// amount" form for reserve_plan (app/pages/cashflow.vue).
+const benchmarkAmount = ref<number | null>(null)
+watch(() => weeklyTargets.value?.benchmarkAmount ?? null, (v) => { if (benchmarkAmount.value === null) benchmarkAmount.value = v }, { immediate: true })
+const benchmarkSubmitting = ref(false)
+const benchmarkError = ref<string | null>(null)
+const benchmarkSaved = ref(false)
+async function submitBenchmark() {
+  benchmarkError.value = null
+  benchmarkSaved.value = false
+  if (benchmarkAmount.value === null || !Number.isFinite(benchmarkAmount.value) || benchmarkAmount.value <= 0) {
+    benchmarkError.value = 'Enter a positive weekly amount'
+    return
+  }
+  benchmarkSubmitting.value = true
+  try {
+    await $fetch('/api/dashboard/weekly-benchmark', { method: 'POST', body: { weeklyAmount: benchmarkAmount.value } })
+    benchmarkSaved.value = true
+    await refresh()
+  } catch (err: any) {
+    benchmarkError.value = err?.data?.statusMessage || err?.message || 'Failed to save goal'
+  } finally {
+    benchmarkSubmitting.value = false
+  }
+}
 
 // ---- cost pace meters (COGS / labor / prime cost, month-to-date) --------
 const benchmarkByCategory = computed(() => Object.fromEntries((data.value?.benchmarks ?? []).map((b: any) => [b.category, b])))
@@ -196,95 +228,63 @@ function meterStatusLabel(status: string | null) {
 
     <template v-else>
       <PageHeader
-        page-name="Daily Performance"
+        page-name="Weekly Performance"
         :description="`${formatLongDate(data.asOfDate)} · reporting through last night's close`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
       />
 
-      <!-- Are we in the red or black, and are we on pace? -->
-      <section>
-        <div class="section-label">Net Income</div>
-        <div class="hero-row">
+      <!-- Are we tracking toward a real weekly revenue goal, day by day? -->
+      <section v-if="weeklyTargets">
+        <div class="section-label">This Week's Targets — day-specific goals, scaled from your weekly revenue goal by the real weekday pattern</div>
+
+        <div class="hero-row single">
           <div class="hero-card anchor">
             <div class="hero-top">
-              <span class="period">This Month ({{ MONTH_NAMES[data.asOfMonth - 1] }} 1–{{ data.asOfDay }})</span>
-              <span v-if="monthView?.hasBudget" :class="['chip', monthView.netStatus]">{{ paceLabel(monthView.netStatus) }}</span>
-              <span v-else class="chip warning">No budget set</span>
+              <span class="period">{{ formatWeekdayDate(weeklyTargets.thisWeek.days[0].date) }} – {{ formatWeekdayDate(weeklyTargets.thisWeek.days[5].date) }}</span>
+              <span v-if="weekToDateStatus" :class="['chip', weekToDateStatus]">{{ paceLabel(weekToDateStatus) }}</span>
+              <span v-else class="chip warning">No goal set</span>
             </div>
-            <div class="figure">{{ (monthView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(monthView?.actualNet ?? 0).toLocaleString() }}</div>
+            <div class="figure">${{ Math.round(weeklyTargets.thisWeek.toDate.actualRevenue).toLocaleString() }}</div>
             <div class="caption">
-              Net income, month-to-date
-              <template v-if="monthView?.hasBudget">— vs ${{ Math.round(monthView.budgetNet!).toLocaleString() }} budgeted, {{ monthView.netStatus === 'good' ? 'running ahead of' : 'running behind' }} where net income should be by now this month</template>
-              <template v-else>— no budget entered for this month yet (Edit Budget tab)</template>
-            </div>
-          </div>
-          <div class="hero-card">
-            <div class="hero-top">
-              <span class="period">This Year (Jan 1–{{ asOfMonthDayLabel }})</span>
-              <span v-if="yearView?.hasBudget" :class="['chip', yearView.netStatus]">{{ paceLabel(yearView.netStatus) }}</span>
-              <span v-else class="chip warning">No budget set</span>
-            </div>
-            <div class="figure">{{ (yearView?.actualNet ?? 0) >= 0 ? '+' : '' }}${{ Math.round(yearView?.actualNet ?? 0).toLocaleString() }}</div>
-            <div class="caption">
-              Net income, year-to-date
-              <template v-if="yearView?.hasBudget">— vs ${{ Math.round(yearView.budgetNet!).toLocaleString() }} budgeted, {{ yearView.netStatus === 'good' ? 'running ahead of' : 'running behind' }} where net income should be by now this year</template>
-              <template v-else>— no budget entered for this year yet (Edit Budget tab)</template>
+              Core dine-in revenue, week-to-date
+              <template v-if="weeklyTargets.benchmarkAmount">— vs ${{ Math.round(weeklyTargets.thisWeek.toDate.targetRevenue).toLocaleString() }} expected by now this week (full week goal: ${{ Math.round(weeklyTargets.thisWeek.fullWeekTarget).toLocaleString() }})</template>
+              <template v-else>— set a weekly goal below to see a target here</template>
             </div>
           </div>
         </div>
-      </section>
 
-      <!-- How did we do last night? -->
-      <section>
-        <div class="section-label">Last Night</div>
-        <div class="compare-row">
-          <div class="compare-card anchor">
-            <div class="date-label">{{ formatWeekdayDate(data.asOfDate) }} (last night)</div>
-            <div class="amount">${{ lastNightRevenue.toLocaleString() }}</div>
-            <div class="vs-label">Total revenue</div>
-          </div>
-          <div class="compare-card">
-            <div class="date-label">vs. {{ formatWeekdayDate(vsLastWeek.date!) }}</div>
-            <template v-if="vsLastWeek.revenue === null">
-              <div class="vs-label">No data synced for this date</div>
+        <div class="week-day-row">
+          <div v-for="d in weeklyTargets.thisWeek.days" :key="d.key" :class="['day-card', !d.hasHappened && 'upcoming']">
+            <div class="day-label">{{ formatWeekdayDate(d.date) }}</div>
+            <div class="day-target">Target ${{ d.dollarTarget != null ? Math.round(d.dollarTarget).toLocaleString() : '—' }}<span v-if="d.coversTarget != null"> &middot; {{ d.coversTarget }} covers</span></div>
+            <template v-if="d.hasHappened">
+              <div class="day-actual">${{ d.actualRevenue != null ? Math.round(d.actualRevenue).toLocaleString() : '—' }}<span v-if="d.actualCovers != null"> &middot; {{ d.actualCovers }} covers</span></div>
+              <span :class="['chip', dayStatus(d) ?? 'warning']">{{ dayStatusLabel(dayStatus(d)) }}</span>
             </template>
-            <template v-else-if="vsLastWeek.pct !== null">
-              <div :class="['delta', vsLastWeek.pct >= 0 ? 'up' : 'down']">{{ vsLastWeek.pct >= 0 ? '▲' : '▼' }} {{ Math.abs(vsLastWeek.pct).toFixed(1) }}%</div>
-              <div class="vs-label">Last week &middot; ${{ vsLastWeek.revenue.toLocaleString() }}</div>
+            <template v-else>
+              <div class="day-actual quiet">Not yet happened</div>
             </template>
-            <div v-else class="vs-label">Last week &middot; ${{ vsLastWeek.revenue.toLocaleString() }} (closed that night?)</div>
-          </div>
-          <div class="compare-card">
-            <div class="date-label">vs. {{ formatWeekdayDate(vsLastYear.date!, true) }}</div>
-            <template v-if="vsLastYear.revenue === null">
-              <div class="vs-label">No data synced for this date</div>
-            </template>
-            <template v-else-if="vsLastYear.pct !== null">
-              <div :class="['delta', vsLastYear.pct >= 0 ? 'up' : 'down']">{{ vsLastYear.pct >= 0 ? '▲' : '▼' }} {{ Math.abs(vsLastYear.pct).toFixed(1) }}%</div>
-              <div class="vs-label">Last year, same position &middot; ${{ vsLastYear.revenue.toLocaleString() }}</div>
-            </template>
-            <div v-else class="vs-label">Last year, same position &middot; ${{ vsLastYear.revenue.toLocaleString() }} (closed that night?)</div>
           </div>
         </div>
-        <div class="stat-row">
-          <div class="compare-card">
-            <div class="date-label">Covers</div>
-            <div class="amount">{{ toastSynced ? lastNightCovers : '—' }}</div>
-            <div class="vs-label">Guests served, {{ formatWeekdayDate(data.asOfDate) }}</div>
+
+        <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount">Set a weekly revenue goal below to see day-specific dollar/covers targets.</div>
+        <div class="quiet-note" v-else-if="weeklyTargets.sampleOpenDays < 6">Based on only {{ weeklyTargets.sampleOpenDays }} real open day{{ weeklyTargets.sampleOpenDays === 1 ? '' : 's' }} since the location move ({{ formatWeekdayDate(weeklyTargets.sinceDate) }}) — the weekday pattern will sharpen as more data accumulates.</div>
+
+        <form class="benchmark-form" @submit.prevent="submitBenchmark">
+          <div class="benchmark-form-row">
+            <label>Weekly revenue goal<input type="number" step="1" min="1" v-model.number="benchmarkAmount" placeholder="50000" required /></label>
+            <button type="submit" :disabled="benchmarkSubmitting">{{ benchmarkSubmitting ? 'Saving…' : 'Update goal' }}</button>
+            <span v-if="benchmarkError" class="chip critical">{{ benchmarkError }}</span>
+            <span v-else-if="benchmarkSaved" class="chip good">Goal updated</span>
           </div>
-          <div class="compare-card">
-            <div class="date-label">Average Check</div>
-            <div class="amount">{{ avgCheck !== null ? `$${avgCheck.toFixed(2)}` : '—' }}</div>
-            <div class="vs-label">${{ lastNightRevenue.toLocaleString() }}<template v-if="toastSynced"> &middot; {{ lastNightCovers }} covers</template></div>
+          <div class="section-note" v-if="weeklyTargets.avgSpendPerCover">
+            Covers targets use a real avg spend/cover of ${{ weeklyTargets.avgSpendPerCover.toFixed(2) }}, computed the same way, since {{ formatWeekdayDate(weeklyTargets.sinceDate) }}.
           </div>
-          <div class="compare-card anchor">
-            <div class="date-label">Sales / Labor Hour</div>
-            <div class="amount">{{ salesPerLaborHour !== null ? `$${salesPerLaborHour.toFixed(2)}` : '—' }}</div>
-            <div class="vs-label">{{ toastSynced ? `${lastNightLaborHours!.toFixed(1)} labor hours worked` : 'No Toast data synced for this date' }}</div>
+          <div class="section-note" v-if="weeklyTargets.suggestedWeeklyGoal.amount">
+            Data-driven suggestion: to cover this month's Labor (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.laborMonthEstimate).toLocaleString() }}) + Opex (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.opexMonthEstimate).toLocaleString() }}) + loan principal due (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.principalDueThisMonth).toLocaleString() }}) at a {{ (weeklyTargets.suggestedWeeklyGoal.cogsPct * 100).toFixed(0) }}% COGS ratio ({{ weeklyTargets.suggestedWeeklyGoal.cogsPctSource === 'benchmark' ? 'from your COGS benchmark' : 'trailing actual' }}), you'd need at least <strong>${{ Math.round(weeklyTargets.suggestedWeeklyGoal.amount).toLocaleString() }}/week</strong> this month.
           </div>
-        </div>
-        <div v-if="!toastSynced" class="toast-note">Toast data hasn't synced for {{ formatWeekdayDate(data.asOfDate) }} yet — covers, average check, and sales/labor-hour will show once it does.</div>
+        </form>
       </section>
 
       <!-- COGS / labor vs revenue -->
@@ -355,6 +355,18 @@ function meterStatusLabel(status: string | null) {
         <div v-else class="drill-card quiet">
           <span class="chip warning">No budget set</span>
           <span class="quiet-note">Enter revenue targets for {{ data.asOfYear }} on the Edit Budget tab to see runway here.</span>
+        </div>
+      </section>
+
+      <!-- Sales / Labor Hour — moved down from Last Night 2026-08-19 -->
+      <section>
+        <div class="section-label">Sales / Labor Hour — Last Night</div>
+        <div class="stat-row single">
+          <div class="compare-card anchor">
+            <div class="date-label">Sales / Labor Hour</div>
+            <div class="amount">{{ salesPerLaborHour !== null ? `$${salesPerLaborHour.toFixed(2)}` : '—' }}</div>
+            <div class="vs-label">{{ toastSynced ? `${lastNightLaborHours!.toFixed(1)} labor hours worked, ${formatWeekdayDate(data.asOfDate)}` : `No Toast data synced for ${formatWeekdayDate(data.asOfDate)} yet` }}</div>
+          </div>
         </div>
       </section>
 
@@ -454,13 +466,71 @@ function meterStatusLabel(status: string | null) {
 .delta.down { color: var(--critical); }
 .compare-card .vs-label { font-size: 12px; color: var(--ink-3); }
 
-/* ---------- guest-economics row (covers / avg check / sales per labor hour) ---------- */
+/* ---------- guest-economics row (sales per labor hour) ---------- */
 .stat-row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 12px;
   margin-top: 8px;
 }
+.stat-row.single { grid-template-columns: 1fr; }
+
+/* ---------- Weekly Performance: week-to-date hero + day cards ---------- */
+.hero-row.single { grid-template-columns: 1fr; }
+.week-day-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.day-card {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+  padding: 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.day-card.upcoming { opacity: 0.7; }
+.day-card .day-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+}
+.day-card .day-target { font-size: 11px; color: var(--ink-3); }
+.day-card .day-actual {
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.day-card .day-actual.quiet { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+
+.benchmark-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--hair);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.benchmark-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.benchmark-form label {
+  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
+}
+.benchmark-form input[type="number"] {
+  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink); width: 150px;
+}
+.benchmark-form button {
+  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
+  background: var(--accent); color: white; cursor: pointer;
+}
+.benchmark-form button:disabled { opacity: 0.6; cursor: default; }
+.benchmark-form .section-note { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 
 /* ---------- pace meters (COGS / labor / prime cost) ---------- */
 .meter-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
@@ -592,5 +662,6 @@ function meterStatusLabel(status: string | null) {
 @media (max-width: 760px) {
   .hero-row, .meter-row { grid-template-columns: 1fr; }
   .compare-row, .stat-row { grid-template-columns: 1fr 1fr; }
+  .week-day-row { grid-template-columns: 1fr 1fr; }
 }
 </style>

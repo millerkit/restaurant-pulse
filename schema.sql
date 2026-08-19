@@ -367,6 +367,25 @@ CREATE TABLE reserve_plan (
   updated_at     TEXT NOT NULL
 );
 
+-- The user's currently-declared "good week" revenue benchmark — a single
+-- dollar target for one full operating week (Tue-Sun), added 2026-08-19 to
+-- back the Dashboard's Weekly Performance section (see
+-- server/api/dashboard.get.ts's weekday-target computation). Single-row
+-- (id is always 1), same shape as reserve_plan above — chosen over folding
+-- into category_benchmarks (that table is %-of-revenue cost ratios, the
+-- wrong shape for a revenue dollar target) or a hardcoded constant (this is
+-- a real number the user expects to revise over time, same as
+-- reserve_plan.weekly_amount). The day-specific dollar/covers targets
+-- themselves are never stored — they're derived at query time from this
+-- single number plus the real weekday revenue pattern
+-- (CORE_REVENUE_ACCOUNT_NUMBERS, see server/utils/core-revenue.ts), so
+-- there's nothing here to keep in sync when the weekday pattern shifts.
+CREATE TABLE weekly_revenue_benchmark (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  weekly_amount  REAL NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.

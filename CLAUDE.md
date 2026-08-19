@@ -2855,9 +2855,113 @@ section, an existing gap), all from the same conversation:
   user 2026-08-17; they chose to leave it as-is for now rather than build a
   location-move correction here.
 
+## Dashboard reframed as "Weekly Performance" — 2026-08-19
+
+Replaces the Dashboard's Net Income (This Month/This Year) hero cards, Last
+Night vs. History compare row, and Covers/Average Check stat cards with a
+new **This Week's Targets** section: real, day-specific revenue/covers
+targets for each operating night (Tue-Sun), scaled from a single editable
+weekly "good week" revenue goal by the *real* weekday revenue pattern —
+rather than one flat nightly number, which understates a slow Tuesday and
+understates what Friday/Saturday should be (Fri/Sat reliably pull the
+weekly average up). Sales/Labor Hour is the one card kept from the old
+top-of-page layout, moved lower (its own small section, just above the
+legend/footer) — the user's own explicit scope, confirmed via
+`AskUserQuestion` before touching anything, since removing Net Income pace
+and Last Night vs. History conflicts with CLAUDE.md's original "four daily
+questions" framing (see "What this is" above) and felt too consequential to
+assume. Net Income pace itself isn't gone from the app — Budget Runway
+(unchanged, further down this same page) and Budget Pace already answer
+"are we on pace to hit budget," which is what those cards were showing.
+
+Started from a one-off hand-run analysis (not this codebase) the user had
+already worked out in a prior chat: pull real core dine-in revenue by
+weekday since the location move, find each weekday's share of a typical
+week, and scale those shares to a benchmark instead of dividing evenly by
+6. This session turned that into a live, dynamically-recalculated feature:
+
+- **`weekly_revenue_benchmark`** (schema.sql) is a new single-row config
+  table — same shape as `reserve_plan`, chosen over folding into
+  `category_benchmarks` (wrong shape — that table is %-of-revenue cost
+  ratios, not a revenue dollar target) or a hardcoded constant (this is a
+  real number the user expects to revise). Edited inline on the Dashboard
+  itself via a small form (`POST /api/dashboard/weekly-benchmark`), same
+  pattern as Cash Flow's "Planned weekly amount" form for `reserve_plan` —
+  the user's own choice over a separate settings page, since one editable
+  number doesn't need its own route. Seeded locally at $50,000 (the user's
+  own "memorable" figure from the prior chat); production still needs the
+  same manual table creation + seed (see "Not yet done").
+- **`CORE_REVENUE_ACCOUNT_NUMBERS` and `MIN_COVERS_FOR_OPEN_DAY`**,
+  previously local consts in `server/api/capacity/history.get.ts`, were
+  extracted to [`server/utils/core-revenue.ts`](server/utils/core-revenue.ts)
+  so this feature reuses the exact same core-dine-in-revenue definition and
+  open-day filter instead of re-deriving them — `history.get.ts` now
+  imports both rather than defining its own copies.
+- **Window: "everything since the move" (2026-06-20), not a rolling
+  window** — still only ~9 weeks of real Cambridge St data as of this
+  writing, the same "not yet enough to safely restrict further" reasoning
+  `history.get.ts`'s own historical-years choice already documents.
+  Revisit for a rolling 10-12 week window once substantially more history
+  has accumulated.
+- **Avg spend/cover is now real and dynamic** (`weeklyTargets.avgSpendPerCover`
+  in `server/api/dashboard.get.ts`), replacing the prior chat's hand-typed
+  $89 — blended real core revenue ÷ real covers across every open day
+  since the move, the same window/filter as the weekday pattern itself.
+  Covers targets per day are `dollarTarget ÷ avgSpendPerCover`.
+- **Actual-vs-target for "this week" uses the same core-revenue definition
+  the targets themselves are built from** (not total revenue, which would
+  pull in event/catering swings the target deliberately excludes), and
+  caps at `asOfDate` so a day that hasn't happened yet just shows its
+  target with no actual — same actual/target-both-cut-off-at-the-same-point
+  fairness pattern as `capacity.get.ts`'s `actualForRange`.
+- **Suggested weekly goal, added mid-build at the user's request**: "the
+  $50K benchmark is memorable, but can we dynamically calculate how much is
+  needed each week to cover expenses and required loan principal
+  payments?" Answered with a real breakeven-revenue formula —
+  `Revenue × (1 − COGS%) = Labor + Opex + Principal`, solved for Revenue —
+  since COGS scales with revenue rather than being a flat monthly cost the
+  way Labor/Opex roughly are over a short window. Labor/Opex use this
+  month's own budget if set, else the most recent past month's real
+  actual (the same hybrid fallback `monthlyCategoryTargets` already uses,
+  extended one step further back). COGS% prefers the configured
+  `category_benchmarks` target (what the rest of the app already judges
+  COGS pace against), falling back to a trailing actual ratio only if no
+  benchmark is set. Principal comes from `loan_schedule`, summed for the
+  current month specifically — QBO's P&L has no principal line at all (see
+  the Debt Service / Cash Flow tab section above), so this is the only
+  place outside the Cash Flow tab itself that accounts for it. Shown as a
+  supplementary line under the goal-edit form ("Data-driven suggestion:
+  ...you'd need at least $X/week this month"), not wired into the editable
+  benchmark or the day-by-day targets directly — the user can compare it
+  against their own goal and decide whether to update it, rather than the
+  app silently overriding a deliberately memorable, round number.
+- **Verified against real local data** (in the browser, both light and
+  dark mode, desktop and mobile widths): day targets sum to the full weekly
+  benchmark, editing the goal live-rescales every day's target, and the
+  suggested-goal figure reconciled by hand against `budget_targets`/
+  `loan_schedule`/`category_benchmarks` for the current month.
+- **Real incident, same day: the user ran `fly deploy` directly against
+  this session's uncommitted working-tree changes** before the production
+  `weekly_revenue_benchmark` table existed — `fly deploy` builds from local
+  disk, not git history, so an uncommitted change ships exactly like a
+  committed one. `/api/dashboard` 500'd in production
+  (`SqliteError: no such table: weekly_revenue_benchmark`, confirmed via
+  `fly logs`) until the table was created and seeded at $50,000 the same
+  way every other schema addition in this file has been — a disposable
+  `.cjs` script (`/app/node_modules/better-sqlite3`, not the `.output`
+  bundle's copy — matching `pull-accounts-from-prod.mjs`'s working path)
+  uploaded via `fly ssh sftp shell`, run via `fly ssh console`, then
+  deleted. Verified fixed via `fly logs` (no further 500s) and a direct
+  `curl` against `/api/dashboard` (200, real weekday-pattern data — 50
+  real open days in production vs. local dev's 32). Reinforces this file's
+  standing rule: **a schema change and its production migration ship
+  together, never code-first-migrate-later** — this session's own
+  in-progress local dev/prod drift made that concrete rather than
+  theoretical.
+
 ## Not yet done
 
-- Running the production Toast covers backfill (`npm run db:backfill-toast`
+- Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`
   extended further back, via `fly ssh console`) so the Historical page's
   two indexes show a real multi-year comparison in production the way
   local dev now does — see the Historical tab section above. Deliberately
@@ -2968,7 +3072,10 @@ section, an existing gap), all from the same conversation:
 - [`schema.sql`](schema.sql) — data model
 - [`design/dashboard-mockup.html`](design/dashboard-mockup.html) — approved static mockup (reference only)
 - [`design/pl-mockup.html`](design/pl-mockup.html) — tentatively approved P&L tab mockup (reference only)
-- [`app/pages/index.vue`](app/pages/index.vue) — the real Dashboard page
+- [`app/pages/index.vue`](app/pages/index.vue) — the real Dashboard page ("Weekly Performance"), incl. the This Week's Targets section and its inline weekly-goal edit form
+- [`server/api/dashboard.get.ts`](server/api/dashboard.get.ts) — Dashboard data route, incl. the weekday-target/suggested-weekly-goal computation
+- [`server/api/dashboard/weekly-benchmark.post.ts`](server/api/dashboard/weekly-benchmark.post.ts) — updates the editable `weekly_revenue_benchmark` goal
+- [`server/utils/core-revenue.ts`](server/utils/core-revenue.ts) — shared core-dine-in-revenue account list + open-day covers threshold, used by the Dashboard and `capacity/history.get.ts`
 - [`app/pages/pl/index.vue`](app/pages/pl/index.vue) — the real P&L page (route `/pl`)
 - [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) — P&L Drill-Downs: Labor/Wages, Opex, and Revenue Calendar by Week/Month/Year (route `/pl/drilldowns`)
 - [`server/api/pl.get.ts`](server/api/pl.get.ts) — data route shared by both P&L pages above

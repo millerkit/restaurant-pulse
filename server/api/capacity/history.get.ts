@@ -28,7 +28,9 @@
 // Catering (4200s), Retail (4300s), and Other Service Income (4400) are
 // deliberately excluded, same reasoning as the original revenue index: a
 // private-event booking swing isn't regular dine-in demand seasonality.
-const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4026', '4028']
+// Extracted to server/utils/core-revenue.ts 2026-08-19 so the Dashboard's
+// Weekly Performance section can reuse this exact list/reasoning instead of
+// re-deriving it.
 
 // A month needs at least this many open days in a given year to produce a
 // trustworthy per-open-day average — guards against a month that's mostly
@@ -36,21 +38,9 @@ const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4
 const MIN_OPEN_DAYS_FOR_MONTH_INDEX = 3
 
 // A day needs at least this many Toast covers to count as genuinely open —
-// found by checking the real distribution rather than assuming covers > 0
-// was good enough (it wasn't). ~95 local days show covers between 1-13,
-// with a clean gap before real service nights start at 17+; 44 of those
-// low-covers days are Mondays (the standing closure) and 24 are Sundays
-// (Mass Ave's second closure day — see CLAUDE.md's location-move section),
-// with most of the rest clustering around known holidays. These are real
-// closures where a single stray online order (a gift card purchase, a
-// pre-order) slipped through Toast, not real slow nights — counting them as
-// "open" both understates real demand seasonality and, worse, corrupts the
-// spend-per-cover index: a closure day with one $150 gift-card order
-// produces a nonsensical $150/cover reading that can swamp a whole month's
-// average. Same "verify the real distribution, find the clean gap"
-// methodology as MAX_PLAUSIBLE_GUESTS_PER_ORDER in
-// server/utils/toast-metrics-sync.ts.
-const MIN_COVERS_FOR_OPEN_DAY = 15
+// see server/utils/core-revenue.ts's MIN_COVERS_FOR_OPEN_DAY (extracted
+// from here 2026-08-19) for the full "verify the real distribution, find
+// the clean gap" reasoning.
 
 type DailyRevenueRow = { date: string, revenue: number }
 type DailyCoversRow = { date: string, covers: number }
