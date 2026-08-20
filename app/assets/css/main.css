@@ -18,6 +18,22 @@
   --serious-wash:rgba(236,131,90,0.16);
   --critical:    #d03b3b;
   --critical-wash:rgba(208,59,59,0.10);
+  /* Revenue Calendar's two below-goal severity steps (added 2026-08-20) —
+     deliberately NOT --serious/--critical. Those two are already close
+     enough in hue (rust-orange vs. red) that validate_palette.js measures
+     them at just ΔE 1.4 under deuteranopia and ΔE 6.3 even for normal
+     vision (well below the 15 "hard to tell apart" floor) — confirmed by a
+     real user who has red-green color vision deficiency and could not
+     distinguish the Revenue Calendar's "Below Goal" cells from "Well Below
+     Goal." Same red hue family, stepped by lightness/saturation instead
+     (light-red vs. dark-red, not orange-vs-red) — validated ALL PASS
+     against --good and against each other (ΔE 20.7 normal / 20.3 deutan
+     light mode; ΔE 16.2 normal / 15.0 protan dark mode, both above the 15
+     floor). See app/pages/pl/drilldowns.vue's calendar-cell rules, the
+     only consumer.
+  */
+  --shortfall:      #f87171;
+  --shortfall-deep: #b91c1c;
   --card-shadow: 0 1px 2px rgba(11,11,11,0.04), 0 6px 16px rgba(11,11,11,0.06);
 }
 @media (prefers-color-scheme: dark) {
@@ -41,6 +57,8 @@
     --serious-wash:rgba(236,131,90,0.14);
     --critical:    #e35a5a;
     --critical-wash:rgba(227,90,90,0.14);
+    --shortfall:      #ef4444;
+    --shortfall-deep: #ab1a44;
     --card-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.35);
   }
 }
@@ -64,6 +82,8 @@
   --serious-wash:rgba(236,131,90,0.14);
   --critical:    #e35a5a;
   --critical-wash:rgba(227,90,90,0.14);
+  --shortfall:      #ef4444;
+  --shortfall-deep: #ab1a44;
   --card-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.35);
 }
 

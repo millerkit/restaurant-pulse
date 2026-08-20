@@ -6,7 +6,7 @@ useHead({ title: `${site.restaurantName} — P&L` })
 
 const { data, pending, error, refresh } = await useFetch('/api/pl')
 
-type Period = 'week' | 'month' | 'year'
+type Period = 'month' | 'year'
 
 // ---- date formatting (daily_line_items dates are UTC-anchored ISO
 // strings, parsed/formatted in UTC throughout — same convention as

@@ -10,114 +10,80 @@
 // the Budget pages, and cheap here since this is a single restaurant's data.
 const EMPTY_TOTALS = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
 type Totals = typeof EMPTY_TOTALS
-type Period = 'week' | 'month' | 'year'
+type Period = 'month' | 'year'
 
 function daysInMonthUTC(year: number, monthIndex0: number): number {
   return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate()
 }
 
-// Shifts an ISO date by whole months (positive or negative), clamping the
-// day into the target month (e.g. Jul 31 - 1 month -> Jun 30, not Jul 1).
-function addMonthsClamped(dateStr: string, deltaMonths: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  const totalMonths = d.getUTCFullYear() * 12 + d.getUTCMonth() + deltaMonths
-  const ny = Math.floor(totalMonths / 12)
-  const nm = ((totalMonths % 12) + 12) % 12
-  const clampedDay = Math.min(d.getUTCDate(), daysInMonthUTC(ny, nm))
-  return new Date(Date.UTC(ny, nm, clampedDay)).toISOString().slice(0, 10)
+// Revenue Calendar's comparison basis (added 2026-08-20, replacing the old
+// "same weekday last month/year" actual-vs-actual comparison): every day is
+// judged against that weekday's own dynamically-calculated revenue goal —
+// the exact same server/utils/weekly-targets.ts computation the Dashboard's
+// "This Week's Targets" section uses, so a day reads the same way on both
+// pages. Any date before NEW_LOCATION_START is left out entirely (no target
+// exists for it, and comparing an old-location actual against a target
+// built for — and scaled to — the new, larger space would be misleading,
+// the same location-move distortion this file already avoids elsewhere,
+// e.g. the Historical tab).
+const REVENUE_COMPARISON_LABEL = "that weekday's revenue goal"
+const REVENUE_COMPARISON_SHORT_LABEL = 'goal'
+
+// Labor/Opex drill-down comparison basis (also switched 2026-08-20, same
+// day as the Revenue Calendar above): a subcategory is now flagged against
+// its own budget_targets figure for the period, not the immediately
+// preceding month/year. Per the user's explicit instruction the same day:
+// this restaurant's 2026 budget_targets rows for Jan-Jun aren't real
+// forward-looking budgets (this restaurant only started genuinely
+// budgeting from Jul 2026 onward, after the location move — the numbers
+// stored for those earlier months were filled in from actuals after each
+// month closed, so comparing "actual vs. itself" there would never flag
+// anything meaningful). Hardcoded to this specific year/month range — like
+// this file's other hand-set, first-pass domain constants (e.g.
+// useBudgetData.ts's opexLumpSumPostingDays) — rather than inferred from
+// whether budget_targets rows technically exist, since they do exist for
+// these months, just not meaningfully.
+const UNBUDGETED_YEAR = 2026
+const UNBUDGETED_MONTHS = new Set([1, 2, 3, 4, 5, 6])
+function isUnbudgetedMonth(year: number, month: number): boolean {
+  return year === UNBUDGETED_YEAR && UNBUDGETED_MONTHS.has(month)
 }
 
-function addDays(dateStr: string, n: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
+// Prorates the current (still-in-progress) month/year's budget down to an
+// "expected so far" figure, instead of comparing actual-to-date against
+// each period's full/final budget — added 2026-08-20, same day as the
+// switch to budget-based flagging above, after the user asked for the
+// comparison to be pace-aware rather than end-of-period-aware. Uses Tue-Sun
+// operating days, not plain calendar days — mirrors budget/edit.vue's
+// monthExpectedFraction (Urban Hearth is closed Mondays, so a calendar-day
+// fraction overstates how far a restaurant's business has actually gotten
+// through the month) — not budget/index.vue's Overspending page, which
+// still uses a plain calendar-day fraction there, a separate and coarser
+// calculation this file deliberately doesn't reuse.
+function isOperatingDay(date: Date): boolean {
+  return date.getUTCDay() !== 1 // Date#getUTCDay(): 0=Sun...6=Sat, 1=Mon is the closed day
 }
-
-function pad2(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-function weekdayOfIso(dateStr: string): number {
-  return new Date(`${dateStr}T00:00:00Z`).getUTCDay()
-}
-
-// Which occurrence of its own weekday a date is within its calendar month
-// (1-based) — e.g. Aug 17 2026 is a Monday and the 3rd Monday of August.
-// Same-weekday dates in a month are always exactly 7 days apart, so
-// bucketing by day-of-month gives the right occurrence regardless of which
-// weekday it is.
-function weekdayOccurrenceInMonth(dateStr: string): number {
-  const day = Number(dateStr.slice(8, 10))
-  return Math.floor((day - 1) / 7) + 1
-}
-
-// Finds the date in {year}-{month1} with the same weekday and the same
-// "Nth occurrence in the month" as dateStr — e.g. "3rd Thursday of July" ->
-// "3rd Thursday of June" — the Dashboard's own "same weekday-position, not a
-// fixed day-count offset" comparison (see the Design direction section in
-// CLAUDE.md), applied here to a whole period instead of a single day.
-// Returns null if that occurrence doesn't exist in the target month (a
-// 5th-Monday day with no 5th Monday the month/year before).
-function sameWeekdayPositionInMonth(dateStr: string, year: number, month1: number): string | null {
-  const weekday = weekdayOfIso(dateStr)
-  const occurrence = weekdayOccurrenceInMonth(dateStr)
-  const firstOfMonthWeekday = weekdayOfIso(`${year}-${pad2(month1)}-01`)
-  const firstMatchDay = 1 + ((weekday - firstOfMonthWeekday + 7) % 7)
-  const targetDay = firstMatchDay + (occurrence - 1) * 7
-  if (targetDay > daysInMonthUTC(year, month1 - 1)) return null
-  return `${year}-${pad2(month1)}-${pad2(targetDay)}`
-}
-
-// Revenue Calendar's per-day comparison basis, by selected period — Week
-// keeps the plain 7-day-back shift (already same-weekday by construction);
-// Month/Year use the real Nth-weekday-of-month match above, so a Month view
-// compares "3rd Thursday of this month" to "3rd Thursday of last month," not
-// to a day some fixed number of days back.
-function revenueComparisonDate(period: Period, dateStr: string): string | null {
-  if (period === 'week') return addDays(dateStr, -7)
-  const year = Number(dateStr.slice(0, 4))
-  const month1 = Number(dateStr.slice(5, 7))
-  if (period === 'month') {
-    const prev = month1 === 1 ? { year: year - 1, month1: 12 } : { year, month1: month1 - 1 }
-    return sameWeekdayPositionInMonth(dateStr, prev.year, prev.month1)
+function countOperatingDays(start: string, end: string): number {
+  let count = 0
+  const d = new Date(`${start}T00:00:00Z`)
+  const endD = new Date(`${end}T00:00:00Z`)
+  while (d <= endD) {
+    if (isOperatingDay(d)) count++
+    d.setUTCDate(d.getUTCDate() + 1)
   }
-  return sameWeekdayPositionInMonth(dateStr, year - 1, month1)
+  return count
 }
-
-// Bulk-fetch range covering every possible comparisonDate for the period, so
-// revenueByDayForRange runs once instead of once per day.
-function revenueComparisonRangeFor(period: Period, start: string, end: string): { start: string, end: string } {
-  if (period === 'week') return { start: addDays(start, -7), end: addDays(end, -7) }
-  const startYear = Number(start.slice(0, 4))
-  const startMonth1 = Number(start.slice(5, 7))
-  if (period === 'month') {
-    // periodRange('month') always keeps start/end within the same calendar
-    // month, so one target month covers every day's comparison.
-    const prev = startMonth1 === 1 ? { year: startYear - 1, month1: 12 } : { year: startYear, month1: startMonth1 - 1 }
-    const dim = daysInMonthUTC(prev.year, prev.month1 - 1)
-    return { start: `${prev.year}-${pad2(prev.month1)}-01`, end: `${prev.year}-${pad2(prev.month1)}-${pad2(dim)}` }
-  }
-  return { start: `${startYear - 1}-01-01`, end: `${startYear - 1}-12-31` }
-}
-
-const REVENUE_COMPARISON_LABEL: Record<Period, string> = {
-  week: 'the same weekday last week',
-  month: 'the same weekday last month',
-  year: 'the same weekday last year'
-}
-const REVENUE_COMPARISON_SHORT_LABEL: Record<Period, string> = {
-  week: 'last week',
-  month: 'last month',
-  year: 'last year'
-}
-
-// Monday of the week containing dateStr (ISO week start), so "This Week"
-// matches the mockup's Mon-based range rather than a rolling 7-day window.
-function mondayOfWeek(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  const dow = d.getUTCDay() // 0=Sun..6=Sat
-  const daysSinceMonday = dow === 0 ? 6 : dow - 1
-  return addDays(dateStr, -daysSinceMonday)
+// Fraction of a given month's operating days that have elapsed through
+// throughDay (inclusive) — 0 if the month has no operating days at all
+// (shouldn't happen in practice, guarded rather than dividing by zero).
+function monthOperatingDayFraction(year: number, month: number, throughDay: number): number {
+  const dim = daysInMonthUTC(year, month - 1)
+  const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
+  const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(dim).padStart(2, '0')}`
+  const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
+  if (totalOperatingDays === 0) return 0
+  const throughDate = `${year}-${String(month).padStart(2, '0')}-${String(Math.min(throughDay, dim)).padStart(2, '0')}`
+  return countOperatingDays(monthStart, throughDate) / totalOperatingDays
 }
 
 export default defineEventHandler((event) => {
@@ -170,33 +136,85 @@ export default defineEventHandler((event) => {
     return rows
   }
 
+  // Core dine-in revenue only (not total revenue) — matches the definition
+  // the weekday targets themselves are built from (server/utils/weekly-
+  // targets.ts), so the Revenue Calendar's "actual" side is apples-to-apples
+  // with its "target" side rather than letting an event/catering swing (which
+  // the target deliberately excludes) masquerade as beating or missing goal.
   function revenueByDayForRange(start: string, end: string) {
+    const placeholders = CORE_REVENUE_ACCOUNT_NUMBERS.map(() => '?').join(',')
     const rows = db.prepare(`
       SELECT dli.date AS date, SUM(dli.amount) AS total
       FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
-      WHERE a.category = 'revenue' AND dli.date BETWEEN ? AND ?
+      WHERE a.account_number IN (${placeholders}) AND a.is_active = 1 AND dli.date BETWEEN ? AND ?
       GROUP BY dli.date
-    `).all(start, end) as { date: string, total: number }[]
+    `).all(...CORE_REVENUE_ACCOUNT_NUMBERS, start, end) as { date: string, total: number }[]
     return new Map(rows.map(r => [r.date, r.total]))
   }
 
   function periodRange(period: Period): { start: string, end: string } {
-    if (period === 'week') return { start: mondayOfWeek(asOfDate), end: asOfDate }
     if (period === 'month') return { start: `${asOfYear}-${String(asOfMonth).padStart(2, '0')}-01`, end: asOfDate }
     return { start: `${asOfYear}-01-01`, end: asOfDate }
   }
 
-  // The immediately-preceding period of the same length, used as the
-  // comparison for "is this subcategory up sharply" flags — same weekday
-  // range 7 days back for week, same day-count range last month for month,
-  // same month/day range last year for year.
-  function comparisonRange(period: Period, start: string, end: string): { start: string, end: string } {
-    if (period === 'week') return { start: addDays(start, -7), end: addDays(end, -7) }
-    if (period === 'month') return { start: addMonthsClamped(start, -1), end: addMonthsClamped(end, -1) }
-    return { start: addMonthsClamped(start, -12), end: addMonthsClamped(end, -12) }
+  // Budget comparison for the Labor/Opex anomaly drill-downs (switched
+  // 2026-08-20 from "vs. the prior month/year" to "vs. this month's/year's
+  // budget target" — see the UNBUDGETED_YEAR/UNBUDGETED_MONTHS comment
+  // above). budget_targets is keyed by (year, month, account_id), not a
+  // date range, so this aggregates one calendar month at a time rather than
+  // reusing subcategoryTotalsForRange's date-range query directly.
+  function budgetSubcategoryTotalsForMonth(category: 'labor' | 'opex', year: number, month: number, costBehavior?: 'fixed' | 'variable') {
+    const rows = db.prepare(`
+      SELECT ${LABEL_CASE} AS label, SUM(bt.amount) AS total
+      FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+      WHERE a.category = ? AND bt.year = ? AND bt.month = ?
+        ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
+      GROUP BY ${LABEL_CASE}
+    `).all(...(costBehavior ? [category, year, month, costBehavior] : [category, year, month])) as { label: string, total: number }[]
+    return rows
   }
 
-  const PERIODS: Period[] = ['week', 'month', 'year']
+  function mergeAdd(map: Map<string, number>, rows: { label: string, total: number }[]) {
+    for (const r of rows) map.set(r.label, (map.get(r.label) ?? 0) + r.total)
+  }
+
+  // The budget-comparison total for a period: for Month, just that one
+  // month; for Year, every elapsed month Jan-through-asOfMonth summed
+  // together. Every month here is always fully elapsed *except* the last
+  // one (throughMonth is always asOfMonth — see call sites below), which is
+  // the current, still-in-progress month — that one alone gets prorated
+  // down to "expected so far" via monthOperatingDayFraction, while every
+  // earlier month counts at its full/final value (same as a closed month's
+  // 100%-reference treatment on the Edit Budget page). An unbudgeted month
+  // (see isUnbudgetedMonth above) contributes that month's real actuals
+  // instead of its (not meaningfully budgeted) budget_targets row — for a
+  // *past* unbudgeted month that's simply its whole month's actual; for the
+  // current month it's actual-to-date, which needs no further proration
+  // since it's already partial by construction (there's no data beyond
+  // asOfDate to sum in the first place).
+  function budgetSubcategoryTotalsForPeriod(category: 'labor' | 'opex', year: number, fromMonth: number, throughMonth: number, costBehavior?: 'fixed' | 'variable') {
+    const map = new Map<string, number>()
+    for (let m = fromMonth; m <= throughMonth; m++) {
+      const isCurrentMonth = m === throughMonth
+      if (isUnbudgetedMonth(year, m)) {
+        const dim = daysInMonthUTC(year, m - 1)
+        const start = `${year}-${String(m).padStart(2, '0')}-01`
+        const end = isCurrentMonth ? asOfDate : `${year}-${String(m).padStart(2, '0')}-${String(dim).padStart(2, '0')}`
+        mergeAdd(map, subcategoryTotalsForRange(category, start, end, costBehavior))
+      } else {
+        const rows = budgetSubcategoryTotalsForMonth(category, year, m, costBehavior)
+        if (isCurrentMonth) {
+          const fraction = monthOperatingDayFraction(year, m, asOfDay)
+          mergeAdd(map, rows.map(r => ({ label: r.label, total: r.total * fraction })))
+        } else {
+          mergeAdd(map, rows)
+        }
+      }
+    }
+    return Array.from(map, ([label, total]) => ({ label, total }))
+  }
+
+  const PERIODS: Period[] = ['month', 'year']
 
   const periods: Record<Period, { start: string, end: string, days: number, totals: Totals }> = {} as any
   for (const p of PERIODS) {
@@ -205,94 +223,105 @@ export default defineEventHandler((event) => {
     periods[p] = { start, end, days, totals: categoryTotalsForRange(start, end) }
   }
 
-  // A subcategory is flagged when it varied significantly vs. the prior
-  // equivalent period — >=50% change (either direction) and at least the
-  // period's own materiality threshold of real dollar movement — AND its
-  // current-period amount is itself at least that threshold. That second
-  // condition is what actually keeps a tile like "Repairs & maintenance:
-  // $18 (-99%)" out of the grid: a steep drop off a much larger
-  // prior-period base can clear the delta threshold easily even though the
-  // resulting dollar figure is trivial and not worth a reader's attention.
-  // A subcategory with nothing in the prior period is flagged as "new" once
-  // its own amount clears the same bar — there's no prior amount to compute
-  // a meaningful percentage against. Symmetric (not increase-only) since a
-  // cost dropping sharply — e.g. an expense that stopped posting — is just
-  // as worth surfacing as one rising, as long as both amounts involved are
-  // themselves material. The Year threshold is higher than Week/Month's —
-  // a year's dollar totals run much larger, so $250 would flag almost every
-  // subcategory as noise.
-  const MATERIALITY_THRESHOLD_BY_PERIOD: Record<Period, number> = { week: 250, month: 250, year: 1000 }
-  function flagRows(rows: { label: string, total: number }[], comparison: Map<string, number>, threshold: number) {
+  // A subcategory is flagged when its actual spend varies significantly
+  // from its *expected-to-date* budget pace for the period (switched
+  // 2026-08-20 from "vs. the prior month/year," then same day switched
+  // again from "vs. the full period's budget" to this prorated version —
+  // see the UNBUDGETED_YEAR and monthOperatingDayFraction comments above)
+  // — >=50% variance (either direction) and at least the period's own
+  // materiality threshold of real dollar movement — AND its current-period
+  // amount is itself at least that threshold. That second condition is what
+  // actually keeps a tile like "Repairs & maintenance: $18 (-99%)" out of
+  // the grid: a steep drop off a much larger expected figure can clear the
+  // delta threshold easily even though the resulting dollar figure is
+  // trivial and not worth a reader's attention. A subcategory with no
+  // budget for the period is flagged as "not budgeted" once its own amount
+  // clears the same bar — there's no expected figure to compute a
+  // meaningful percentage against. Symmetric (not over-budget-only) since a
+  // cost coming in well under pace is just as worth surfacing as one
+  // running over, as long as
+  // both amounts involved are themselves material. The Year threshold is
+  // higher than Month's — a year's dollar totals run much larger, so a
+  // month-sized threshold would flag almost every subcategory as noise.
+  // Both thresholds are user-editable (drilldown_thresholds table, via the
+  // page's inline form) — these are just the fallback defaults shown until
+  // the user first saves a value of their own.
+  const DEFAULT_MATERIALITY_THRESHOLD: Record<Period, number> = { month: 250, year: 1000 }
+  const thresholdsRow = db.prepare('SELECT month_threshold AS monthThreshold, year_threshold AS yearThreshold FROM drilldown_thresholds WHERE id = 1')
+    .get() as { monthThreshold: number, yearThreshold: number } | undefined
+  const MATERIALITY_THRESHOLD_BY_PERIOD: Record<Period, number> = {
+    month: thresholdsRow?.monthThreshold ?? DEFAULT_MATERIALITY_THRESHOLD.month,
+    year: thresholdsRow?.yearThreshold ?? DEFAULT_MATERIALITY_THRESHOLD.year
+  }
+  function flagRows(rows: { label: string, total: number }[], expected: Map<string, number>, threshold: number) {
     return rows.map(r => {
-      const prev = comparison.get(r.label) ?? 0
-      const delta = r.total - prev
-      if (prev <= 0) {
-        return { label: r.label, amount: r.total, comparisonAmount: prev, flagged: Math.abs(r.total) >= threshold, pctChange: null }
+      const expectedAmount = expected.get(r.label) ?? 0
+      const delta = r.total - expectedAmount
+      if (expectedAmount <= 0) {
+        return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, flagged: Math.abs(r.total) >= threshold, pctChange: null }
       }
-      const pctChange = (delta / prev) * 100
-      const flagged = Math.abs(r.total) >= threshold && Math.abs(delta) >= threshold && Math.abs(delta) >= prev * 0.5
-      return { label: r.label, amount: r.total, comparisonAmount: prev, flagged, pctChange }
+      const pctChange = (delta / expectedAmount) * 100
+      const flagged = Math.abs(r.total) >= threshold && Math.abs(delta) >= threshold && Math.abs(delta) >= expectedAmount * 0.5
+      return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, flagged, pctChange }
     })
   }
 
-  // Week's Labor drill-down is narrowed to just these three wage
-  // subcategories (per the user's request — wages are the only labor
-  // figures worth a week-over-week look, unlike Employee Benefits/Payroll
-  // Taxes, which don't move week to week in a meaningful way). Always
-  // returned as exactly these three, in this order, even when one has no
-  // activity that week — the client renders a fixed Total + 3-tile grid
-  // rather than an anomaly list, so a missing row would leave a silent gap
-  // instead of a $0 tile.
-  const WEEKLY_WAGE_SUBCATEGORIES = ['BOH Wages', 'FOH Wages', 'Management Salaries']
+  // Shared with the Dashboard's "This Week's Targets" — see
+  // server/utils/weekly-targets.ts. targetByDow gives each weekday's own
+  // dollar goal; a null benchmarkAmount (no weekly_revenue_benchmark set
+  // yet) means every day simply has no target, same as a day before the
+  // location move below.
+  const weeklyTargets = computeWeeklyRevenueTargets()
 
   const drilldowns: Record<Period, {
     labor: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
     opexFixed: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
     opexVariable: { label: string, amount: number, comparisonAmount: number, flagged: boolean, pctChange: number | null }[]
-    revenueDays: { date: string, comparisonDate: string, actual: number, comparison: number }[]
+    revenueDays: { date: string, actual: number, comparison: number }[]
     revenueComparisonLabel: string
     revenueComparisonShortLabel: string
   }> = {} as any
 
   for (const p of PERIODS) {
     const { start, end } = periods[p]
-    const cmp = comparisonRange(p, start, end)
+    // Month: just asOfMonth's own budget, prorated to today. Year: every
+    // elapsed month Jan-through-asOfMonth summed (only the last one,
+    // asOfMonth, prorated — see budgetSubcategoryTotalsForPeriod) — matches
+    // periodRange's own year-to-date actual range above.
+    const fromMonth = p === 'month' ? asOfMonth : 1
 
-    let laborRows = subcategoryTotalsForRange('labor', start, end)
-    const laborCmp = new Map(subcategoryTotalsForRange('labor', cmp.start, cmp.end).map(r => [r.label, r.total]))
-    if (p === 'week') {
-      laborRows = WEEKLY_WAGE_SUBCATEGORIES.map(label => laborRows.find(r => r.label === label) ?? { label, total: 0 })
-    }
+    const laborRows = subcategoryTotalsForRange('labor', start, end)
+    const laborExpected = new Map(budgetSubcategoryTotalsForPeriod('labor', asOfYear, fromMonth, asOfMonth).map(r => [r.label, r.total]))
 
     const opexFixedRows = subcategoryTotalsForRange('opex', start, end, 'fixed')
-    const opexFixedCmp = new Map(subcategoryTotalsForRange('opex', cmp.start, cmp.end, 'fixed').map(r => [r.label, r.total]))
+    const opexFixedExpected = new Map(budgetSubcategoryTotalsForPeriod('opex', asOfYear, fromMonth, asOfMonth, 'fixed').map(r => [r.label, r.total]))
     const opexVariableRows = subcategoryTotalsForRange('opex', start, end, 'variable')
-    const opexVariableCmp = new Map(subcategoryTotalsForRange('opex', cmp.start, cmp.end, 'variable').map(r => [r.label, r.total]))
+    const opexVariableExpected = new Map(budgetSubcategoryTotalsForPeriod('opex', asOfYear, fromMonth, asOfMonth, 'variable').map(r => [r.label, r.total]))
 
-    // Comparison basis matches the selected period — same weekday last week
-    // for Week, same weekday-position last month/year for Month/Year (see
-    // revenueComparisonDate above) — applied to every day in the period, not
-    // just last night.
+    // Every day in the period vs. that weekday's own revenue goal — a day
+    // before NEW_LOCATION_START (only possible in the Year view) has no
+    // target and is skipped entirely, per the user's explicit instruction
+    // to leave those blank rather than judge the old, smaller location
+    // against a goal scaled for the new space.
     const actualByDay = revenueByDayForRange(start, end)
-    const cmpRevRange = revenueComparisonRangeFor(p, start, end)
-    const comparisonByDay = revenueByDayForRange(cmpRevRange.start, cmpRevRange.end)
-    const revenueDays: { date: string, comparisonDate: string, actual: number, comparison: number }[] = []
+    const revenueDays: { date: string, actual: number, comparison: number }[] = []
     for (const [date, actual] of actualByDay) {
-      const comparisonDate = revenueComparisonDate(p, date)
-      if (comparisonDate === null) continue
-      const comparison = comparisonByDay.get(comparisonDate)
-      if (comparison !== undefined) revenueDays.push({ date, comparisonDate, actual, comparison })
+      if (date < NEW_LOCATION_START) continue
+      const dow = new Date(`${date}T00:00:00Z`).getUTCDay()
+      const target = weeklyTargets.targetByDow.get(dow)?.dollarTarget
+      if (target == null) continue
+      revenueDays.push({ date, actual, comparison: target })
     }
     revenueDays.sort((a, b) => a.date.localeCompare(b.date))
 
     const threshold = MATERIALITY_THRESHOLD_BY_PERIOD[p]
     drilldowns[p] = {
-      labor: flagRows(laborRows, laborCmp, threshold),
-      opexFixed: flagRows(opexFixedRows, opexFixedCmp, threshold),
-      opexVariable: flagRows(opexVariableRows, opexVariableCmp, threshold),
+      labor: flagRows(laborRows, laborExpected, threshold),
+      opexFixed: flagRows(opexFixedRows, opexFixedExpected, threshold),
+      opexVariable: flagRows(opexVariableRows, opexVariableExpected, threshold),
       revenueDays,
-      revenueComparisonLabel: REVENUE_COMPARISON_LABEL[p],
-      revenueComparisonShortLabel: REVENUE_COMPARISON_SHORT_LABEL[p]
+      revenueComparisonLabel: REVENUE_COMPARISON_LABEL,
+      revenueComparisonShortLabel: REVENUE_COMPARISON_SHORT_LABEL
     }
   }
 
@@ -311,6 +340,7 @@ export default defineEventHandler((event) => {
     lastSync: lastSyncRow ?? null,
     periods,
     drilldowns,
-    benchmarks
+    benchmarks,
+    thresholds: MATERIALITY_THRESHOLD_BY_PERIOD
   }
 })

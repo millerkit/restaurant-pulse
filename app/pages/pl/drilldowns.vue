@@ -6,8 +6,8 @@ useHead({ title: `${site.restaurantName} — P&L Drill-Downs` })
 
 const { data, pending, error, refresh } = await useFetch('/api/pl')
 
-type Period = 'week' | 'month' | 'year'
-const PERIOD_LABEL: Record<Period, string> = { week: 'week', month: 'month', year: 'year' }
+type Period = 'month' | 'year'
+const PERIOD_LABEL: Record<Period, string> = { month: 'month', year: 'year' }
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 // ---- date formatting (daily_line_items dates are UTC-anchored ISO
@@ -21,11 +21,6 @@ function formatWeekdayDate(s: string, includeYear = false) {
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
   const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
   return `${weekday}, ${month} ${d.getUTCDate()}${includeYear ? ` ${d.getUTCFullYear()}` : ''}`
-}
-function addDaysIso(dateStr: string, n: number): string {
-  const d = parseIsoDate(dateStr)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
 }
 function daysInMonthUTC(year: number, month1: number): number {
   return new Date(Date.UTC(year, month1, 0)).getUTCDate()
@@ -43,21 +38,20 @@ const benchmarkByCategory = computed(() => {
   return map
 })
 
-// Delta chip shown next to a subcategory row — "vs. prior period" is the
+// Delta chip shown next to a subcategory row — "vs. expected pace" is the
 // whole point of these drill-downs (spotting anomalies), so the chip states
 // that comparison directly rather than a bar encoding an unrelated
 // dimension (share-of-group). null comparisonAmount/pctChange means the
-// subcategory had nothing in the prior period — shown as "new" since a
-// percentage against zero isn't meaningful. The chip states both the
-// percentage AND the dollar swing (not just the percentage) — the tile's
-// own bold number below is the period's full total, not the change amount,
-// and a reader glancing at a colored chip next to a big dollar figure could
-// otherwise easily read that figure as the size of the change rather than
-// the total it actually is. Deliberately doesn't spell out "vs. prior
-// week/month/year" on every chip — that's real width a narrow tile doesn't
-// have to spare, and the comparison basis is already established once, by
-// the section's own callout sentence or header (e.g. "Wages Drill-Down —
-// This Week vs. Last Week").
+// subcategory has no budget_targets figure for the period — shown as "not
+// budgeted" since a percentage against zero isn't meaningful. The chip
+// states both the percentage AND the dollar swing (not just the
+// percentage) — the tile's own bold number below is the period's full
+// total, not the change amount, and a reader glancing at a colored chip
+// next to a big dollar figure could otherwise easily read that figure as
+// the size of the change rather than the total it actually is. Deliberately
+// doesn't spell out "vs. expected pace" on every chip — that's real width a
+// narrow tile doesn't have to spare, and the comparison basis is already
+// established once, by the section's own callout sentence or header.
 type Direction = 'up' | 'down' | 'flat'
 type DeltaRow = { label: string, amount: number, direction: Direction, deltaText: string }
 function fmtSignedDollars(n: number): string {
@@ -67,15 +61,17 @@ function fmtSignedDollars(n: number): string {
 // (anything inside ±0.5%) reads as "flat," not colored up/down — tinting a
 // tile red or green over a swing the chip itself displays as "0%" is
 // misleading (a real case: a salaried subcategory paying the exact same
-// amount two weeks running still computes a tiny nonzero float somewhere
-// upstream). This mainly matters for the Week Wages view, which shows every
-// subcategory regardless of size, unlike Month/Year's flagged-only list —
-// that list requires a >=50% swing to appear at all, so it can never land
-// in this rounds-to-zero band.
+// amount two months running still computes a tiny nonzero float somewhere
+// upstream).
+//
+// comparisonAmount is now that subcategory's budget_targets figure for the
+// period (switched 2026-08-20 from "the same subcategory last month/year"
+// — see pl.get.ts's UNBUDGETED_YEAR comment), so a null pctChange means "no
+// budget exists for this subcategory," not "this subcategory is new."
 function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, pctChange: number | null }, periodLabel: string): DeltaRow {
   const deltaAmount = Math.round(r.amount - r.comparisonAmount)
   if (r.pctChange === null) {
-    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ new (${fmtSignedDollars(deltaAmount)})` }
+    return { label: r.label, amount: r.amount, direction: 'up', deltaText: `▲ not budgeted (${fmtSignedDollars(deltaAmount)})` }
   }
   const roundedPct = Math.round(Math.abs(r.pctChange))
   if (roundedPct === 0) {
@@ -98,31 +94,32 @@ function sortByDirection(rows: DeltaRow[]): DeltaRow[] {
   return [...rows].sort((a, b) => rank[a.direction] - rank[b.direction])
 }
 
-// Single shared period toggle for all three drill-down sections (Labor,
-// Opex, Revenue) — see the shared control bar in the template.
+// Single shared period toggle for both drill-down sections (Labor, Opex)
+// plus the Revenue Calendar — see the shared control bar in the template.
+// Week was removed 2026-08-20: its Wages Drill-Down was the only thing that
+// justified a separate weekly view here, and the Revenue Calendar tiles
+// (its other useful part) moved to the Dashboard's own This Week's Targets
+// section — see CLAUDE.md.
 const drilldownPeriod = ref<Period>('month')
 
-// The page's own on-page heading states the actual comparison being shown
-// ("This Month vs. Last Month") rather than a static "Drill-Downs" that
-// never changes as the toggle above it does — the nav tab already says
-// "Drill-Downs", so the heading is free to be the more useful, specific
-// thing instead of repeating that.
-const PAGE_TITLE: Record<Period, string> = { week: 'This Week vs. Last Week', month: 'This Month vs. Last Month', year: 'This Year vs. Last Year' }
+// The page's own on-page heading states the period being shown rather than
+// a static "Drill-Downs" that never changes as the toggle above it does —
+// the nav tab already says "Drill-Downs", so the heading is free to be the
+// more useful, specific thing instead of repeating that. Used to read "This
+// Month vs. Last Month" / "This Year vs. Last Year," but neither Labor/Opex
+// (now vs. expected-to-date budget pace, see pl.get.ts) nor the Revenue
+// Calendar (vs. the weekday revenue goal) compare against the prior
+// period anymore, so the title no
+// longer claims a single shared comparison basis — each section states its
+// own instead (see the section labels/notes below).
+const PAGE_TITLE: Record<Period, string> = { month: "This Month's Drill-Downs", year: "This Year's Drill-Downs" }
 const pageTitle = computed(() => PAGE_TITLE[drilldownPeriod.value])
-
-// Week gets a purpose-built Wages-vs-last-week view instead of the
-// anomaly-flagged Labor Drill-Down, and drops the Opex section entirely —
-// per the user's request, wages and income are the only things worth a
-// week-over-week look; benefits/payroll taxes and opex don't move
-// meaningfully at weekly grain. Revenue Calendar (below) already is the
-// income comparison, unchanged for every period including week.
-const isWeeklyWagesView = computed(() => drilldownPeriod.value === 'week')
 
 // ---- Labor drill-down -----------------------------------------------------
 const laborRowsAll = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.labor ?? [])
-// Only subcategories that varied significantly vs. the prior period are
-// shown — an exhaustive list of every subcategory (most of them unchanged)
-// buries the anomalies this section exists to surface.
+// Only subcategories that varied significantly vs. expected pace are shown
+// — an exhaustive list of every subcategory (most of them on target) buries
+// the anomalies this section exists to surface.
 const laborRows = computed(() => sortByDirection(laborRowsAll.value.filter(r => r.flagged).map(r => buildDeltaRow(r, PERIOD_LABEL[drilldownPeriod.value]))))
 const laborFlagged = computed(() => laborRows.value.length > 0)
 const laborPeriodStatus = computed(() => {
@@ -134,9 +131,9 @@ const laborPeriodStatus = computed(() => {
 // Off-target and "nothing flagged" are independent signals — a labor % that's
 // over benchmark broadly, with no single subcategory spiking, still needs to
 // expand the card (and say so honestly), not collapse to "Nothing unusual"
-// just because no individual subcategory happened to jump vs. the prior
-// period. laborOffTarget is null-safe: no benchmark configured never forces
-// an expand on its own.
+// just because no individual subcategory happened to vary from its budget
+// enough to clear the threshold. laborOffTarget is null-safe: no benchmark
+// configured never forces an expand on its own.
 const laborOffTarget = computed(() => laborPeriodStatus.value.status != null && laborPeriodStatus.value.status !== 'good')
 const laborCardExpanded = computed(() => laborFlagged.value || laborOffTarget.value)
 const laborCallout = computed(() => {
@@ -149,26 +146,7 @@ const laborCallout = computed(() => {
   const names = flagged.map(r => r.label).join(', ')
   const isAre = flagged.length > 1 ? 'are' : 'is'
   const tail = onTarget ? ' — worth a look even though the top-line number is on target.' : '.'
-  return `Labor is ${onTarget ? 'on target' : 'off target'} overall this ${PERIOD_LABEL[drilldownPeriod.value]} (${(laborPeriodStatus.value.pct * 100).toFixed(1)}%), but ${names} ${isAre} up sharply vs. the prior ${PERIOD_LABEL[drilldownPeriod.value]}${tail}`
-})
-
-// ---- Weekly wages view (replaces the Labor Drill-Down for period='week')
-// laborRowsAll is already narrowed server-side to exactly BOH/FOH/Management
-// Wages, in that fixed order, always all three (see WEEKLY_WAGE_SUBCATEGORIES
-// in pl.get.ts) — a direct comparison, not an anomaly list, so every row
-// shows regardless of how much it moved, in a stable order week to week.
-function sumForTotal(rows: { amount: number, comparisonAmount: number }[], label: string) {
-  const amount = rows.reduce((sum, r) => sum + r.amount, 0)
-  const comparisonAmount = rows.reduce((sum, r) => sum + r.comparisonAmount, 0)
-  const pctChange = comparisonAmount > 0 ? ((amount - comparisonAmount) / comparisonAmount) * 100 : null
-  return { label, amount, comparisonAmount, pctChange }
-}
-const weeklyWagesTotalRow = computed(() => buildDeltaRow(sumForTotal(laborRowsAll.value, 'Total Wages'), 'week'))
-const weeklyWageRows = computed(() => laborRowsAll.value.map(r => buildDeltaRow(r, 'week')))
-const weeklyWageTiles = computed(() => [weeklyWagesTotalRow.value, ...weeklyWageRows.value])
-const weeklyWagesCallout = computed(() => {
-  const t = weeklyWagesTotalRow.value
-  return `Total wages this week: $${Math.round(t.amount).toLocaleString()} — ${t.deltaText} vs. last week.`
+  return `Labor is ${onTarget ? 'on target' : 'off target'} overall this ${PERIOD_LABEL[drilldownPeriod.value]} (${(laborPeriodStatus.value.pct * 100).toFixed(1)}%), but ${names} ${isAre} off expected pace by a material amount${tail}`
 })
 
 // ---- Opex drill-down --------------------------------------------------
@@ -209,34 +187,28 @@ const opexCallout = computed(() => {
 })
 
 // ---- Revenue calendar -----------------------------------------------------
-// Every day in the period compared against the selected period's own
-// comparison basis (same weekday last week / same weekday-position last
-// month / same weekday-position last year — see revenueComparisonDate in
-// pl.get.ts, matching the Dashboard's "not a fixed day-count offset" design)
-// — applies the Dashboard's single-day comparison to every day in the
-// selected period, laid out as a real calendar instead of a ranked list, so
-// a reader can see spatially whether a shortfall is concentrated (e.g.
-// every Monday) or spread evenly across the period — the exact question the
-// old ranked-list-of-shortfalls view could only answer by reading dates one
-// at a time.
+// Every day in the period compared against that weekday's own dynamically-
+// calculated revenue goal (see server/utils/weekly-targets.ts, shared with
+// the Dashboard's This Week's Targets section) — laid out as a real
+// calendar rather than a ranked list, so a reader can see spatially whether
+// a shortfall is concentrated (e.g. every Monday) or spread evenly across
+// the period.
 const revenueDaysMap = computed(() => new Map((data.value?.drilldowns[drilldownPeriod.value]?.revenueDays ?? []).map(d => [d.date, d])))
 type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
 type DayCell = { date: string, day: number, status: DayStatus, deltaPct: number | null, actual: number | null, comparison: number | null }
-// A day within ±5% of its comparison day reads as "normal fluctuation," not
-// a signal — below that, red; above, green. -18.75% mirrors the same
+// A day within ±5% of its weekday goal reads as "normal fluctuation," not a
+// signal — below that, red; above, green. -18.75% mirrors the same
 // "critical" cutoff the old ranked list used, so a truly bad day still
 // stands out from a merely-soft one.
 function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
   if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null }
   const entry = revenueDaysMap.value.get(dateStr)
-  // A $0 comparison day (e.g. a Monday closure where both this week's and
-  // last week's revenue summed to exactly $0) can't support a percentage —
-  // dividing by zero produced a literal "NaN%" in the UI before this check.
-  // Treated the same as no data at all, matching how most closed days
-  // already render (no daily_line_items rows posted, so there's no entry
-  // here in the first place) — either way there's nothing meaningful to
-  // compare.
+  // No entry means either no target exists for this day (before the
+  // location move, or no weekly_revenue_benchmark configured — see
+  // pl.get.ts) or a $0 goal, which can't support a percentage either way.
+  // Rendered the same as "no data" — either way there's nothing meaningful
+  // to compare.
   if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null }
   const deltaPct = ((entry.actual - entry.comparison) / entry.comparison) * 100
   const status: DayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
@@ -251,7 +223,6 @@ function buildMonthGrid(year: number, month1: number) {
   return { year, month: month1, label: MONTH_NAMES[month1 - 1], cells }
 }
 type CalendarView =
-  | { kind: 'week', cells: DayCell[] }
   | { kind: 'month', grid: ReturnType<typeof buildMonthGrid> }
   | { kind: 'year', months: ReturnType<typeof buildMonthGrid>[] }
 const calendarView = computed<CalendarView | null>(() => {
@@ -259,11 +230,6 @@ const calendarView = computed<CalendarView | null>(() => {
   const period = drilldownPeriod.value
   const p = data.value.periods[period]
   if (!p) return null
-  if (period === 'week') {
-    const cells: DayCell[] = []
-    for (let cur = p.start; cur <= p.end; cur = addDaysIso(cur, 1)) cells.push(dayStatus(cur))
-    return { kind: 'week', cells }
-  }
   if (period === 'month') {
     return { kind: 'month', grid: buildMonthGrid(data.value.asOfYear, data.value.asOfMonth) }
   }
@@ -274,19 +240,59 @@ const revenueDays = computed(() => data.value?.drilldowns[drilldownPeriod.value]
 const shortfallDays = computed(() => revenueDays.value.filter(d => d.actual < d.comparison))
 const revenueFlagged = computed(() => shortfallDays.value.length > 0)
 const revenueGapTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (d.comparison - d.actual), 0))
-// Comparison basis matches the selected period (Week -> same weekday last
-// week, Month/Year -> same weekday-position last month/year) — see
-// revenueComparisonDate/REVENUE_COMPARISON_LABEL in pl.get.ts, the single
-// source of truth for both the calculation and this wording so they can't
-// drift apart.
-const revenueComparisonLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonLabel ?? 'the same weekday last week')
-const revenueComparisonShortLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonShortLabel ?? 'last week')
+// Every day is judged against that weekday's own dynamically-calculated
+// revenue goal — see pl.get.ts's REVENUE_COMPARISON_LABEL, the single
+// source of truth for this wording (server/utils/weekly-targets.ts is the
+// single source of truth for the underlying number, shared with the
+// Dashboard's This Week's Targets section) so neither can drift from the
+// other.
+const revenueComparisonLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonLabel ?? "that weekday's revenue goal")
+const revenueComparisonShortLabel = computed(() => data.value?.drilldowns[drilldownPeriod.value]?.revenueComparisonShortLabel ?? 'goal')
 const revenueCallout = computed(() => {
   const total = revenueDays.value.length
   const met = total - shortfallDays.value.length
   if (!total || !revenueFlagged.value) return ''
-  return `${met} of ${total} days this ${PERIOD_LABEL[drilldownPeriod.value]} met or beat their comparison to ${revenueComparisonLabel.value}. The shortfall is concentrated in ${shortfallDays.value.length} day${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for $${Math.round(revenueGapTotal.value).toLocaleString()} of the gap.`
+  return `${met} of ${total} days this ${PERIOD_LABEL[drilldownPeriod.value]} met or beat ${revenueComparisonLabel.value}. The shortfall is concentrated in ${shortfallDays.value.length} day${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for $${Math.round(revenueGapTotal.value).toLocaleString()} of the gap.`
 })
+
+// ---- Materiality threshold form -------------------------------------------
+// Editable via drilldown_thresholds (server/api/pl/drilldown-thresholds.post.ts)
+// — Month and Year are edited together in one small form, since both are
+// always in play (flipping the period toggle above shouldn't require a
+// second trip here to see/edit the other one's value). Seeded from the
+// server's own current thresholds (which themselves fall back to the
+// previous hardcoded $250/$1,000 defaults until the user saves their own —
+// see pl.get.ts's DEFAULT_MATERIALITY_THRESHOLD) rather than a second
+// hardcoded default living in this file too.
+const monthThresholdInput = ref<number | null>(null)
+const yearThresholdInput = ref<number | null>(null)
+watch(() => data.value?.thresholds, (t) => {
+  if (!t) return
+  if (monthThresholdInput.value === null) monthThresholdInput.value = t.month
+  if (yearThresholdInput.value === null) yearThresholdInput.value = t.year
+}, { immediate: true })
+
+const thresholdSubmitting = ref(false)
+const thresholdError = ref('')
+const thresholdSaved = ref(false)
+async function submitThresholds() {
+  if (monthThresholdInput.value == null || yearThresholdInput.value == null) return
+  thresholdSubmitting.value = true
+  thresholdError.value = ''
+  thresholdSaved.value = false
+  try {
+    await $fetch('/api/pl/drilldown-thresholds', {
+      method: 'POST',
+      body: { monthThreshold: monthThresholdInput.value, yearThreshold: yearThresholdInput.value }
+    })
+    thresholdSaved.value = true
+    await refresh()
+  } catch (err: any) {
+    thresholdError.value = err?.data?.statusMessage || err?.message || 'Failed to save thresholds'
+  } finally {
+    thresholdSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -319,61 +325,61 @@ const revenueCallout = computed(() => {
           <span class="drilldown-toggle-hint">Applies to Labor, Operating Cost, and Revenue below</span>
         </div>
         <div class="period-tabs">
-          <span :class="['period-tab', drilldownPeriod === 'week' && 'active']" @click="drilldownPeriod = 'week'">Week</span>
           <span :class="['period-tab', drilldownPeriod === 'month' && 'active']" @click="drilldownPeriod = 'month'">Month</span>
           <span :class="['period-tab', drilldownPeriod === 'year' && 'active']" @click="drilldownPeriod = 'year'">Year</span>
         </div>
       </div>
 
+      <!-- Materiality threshold: how big a $ variance from expected pace a
+           Labor/Opex subcategory needs before it's worth a tile below.
+           Month and Year are edited together — both are always live
+           regardless of which period tab is selected above. -->
+      <form class="threshold-form" @submit.prevent="submitThresholds">
+        <div class="threshold-form-row">
+          <span class="threshold-form-label">
+            Materiality Threshold
+            <span class="drilldown-toggle-hint">Hides Labor/Opex tiles below this $ variance from expected pace</span>
+          </span>
+          <label>Month<input type="number" step="1" min="0" v-model.number="monthThresholdInput" required /></label>
+          <label>Year<input type="number" step="1" min="0" v-model.number="yearThresholdInput" required /></label>
+          <button type="submit" :disabled="thresholdSubmitting">{{ thresholdSubmitting ? 'Saving…' : 'Save' }}</button>
+          <span v-if="thresholdError" class="chip critical">{{ thresholdError }}</span>
+          <span v-else-if="thresholdSaved" class="chip good">Saved</span>
+        </div>
+      </form>
+
       <div class="drilldown-group">
-        <!-- Drill-down: what's driving labor cost (month/year), or a direct
-             wages-vs-last-week comparison (week) -->
+        <!-- Drill-down: what's driving labor cost -->
         <section>
           <div class="section-head">
-            <div class="section-label">{{ isWeeklyWagesView ? 'Wages Drill-Down — This Week vs. Last Week' : "Labor Drill-Down — What's Driving the Cost" }}</div>
+            <div class="section-label">Labor Drill-Down — What's Driving the Cost vs. Expected Pace</div>
           </div>
 
-          <template v-if="isWeeklyWagesView">
-            <div class="drill-card">
-              <div class="callout">{{ weeklyWagesCallout }}</div>
-              <div class="anomaly-grid">
-                <div v-for="row in weeklyWageTiles" :key="row.label" :class="['anomaly-tile', row.direction]">
-                  <div class="label">{{ row.label }}</div>
-                  <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
-                  <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
-                  <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
-                </div>
+          <div v-if="laborCardExpanded" class="drill-card">
+            <div class="callout">{{ laborCallout }}</div>
+            <div class="anomaly-grid">
+              <div v-for="row in laborRows" :key="row.label" :class="['anomaly-tile', row.direction]">
+                <div class="label">{{ row.label }}</div>
+                <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
+                <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
+                <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
               </div>
             </div>
-          </template>
-          <template v-else>
-            <div v-if="laborCardExpanded" class="drill-card">
-              <div class="callout">{{ laborCallout }}</div>
-              <div class="anomaly-grid">
-                <div v-for="row in laborRows" :key="row.label" :class="['anomaly-tile', row.direction]">
-                  <div class="label">{{ row.label }}</div>
-                  <span :class="['delta-chip', row.direction]">{{ row.deltaText }}</span>
-                  <div class="amount-caption">Total this {{ drilldownPeriod }}</div>
-                  <div class="amount">${{ Math.round(row.amount).toLocaleString() }}</div>
-                </div>
-              </div>
-            </div>
-            <div v-else-if="laborRowsAll.length" class="drill-card quiet">
-              <span class="chip good">Nothing unusual</span>
-              <span class="quiet-note">Labor is within target this {{ drilldownPeriod }}, and no single cost driver stands out.</span>
-            </div>
-            <div v-else class="drill-card quiet">
-              <span class="chip warning">No data</span>
-              <span class="quiet-note">No labor data synced for this {{ drilldownPeriod }} yet.</span>
-            </div>
-          </template>
+          </div>
+          <div v-else-if="laborRowsAll.length" class="drill-card quiet">
+            <span class="chip good">Nothing unusual</span>
+            <span class="quiet-note">Labor is within target this {{ drilldownPeriod }}, and no single cost driver stands out.</span>
+          </div>
+          <div v-else class="drill-card quiet">
+            <span class="chip warning">No data</span>
+            <span class="quiet-note">No labor data synced for this {{ drilldownPeriod }} yet.</span>
+          </div>
         </section>
 
-        <!-- Drill-down: what's driving opex (hidden for week — see
-             isWeeklyWagesView above) -->
-        <section v-if="!isWeeklyWagesView">
+        <!-- Drill-down: what's driving opex -->
+        <section>
           <div class="section-head">
-            <div class="section-label">Operating Cost Drill-Down — What's Driving the Cost</div>
+            <div class="section-label">Operating Cost Drill-Down — What's Driving the Cost vs. Expected Pace</div>
           </div>
 
           <div v-if="opexCardExpanded && (fixedOpexRowsAll.length || variableOpexRowsAll.length)" class="drill-card">
@@ -426,28 +432,15 @@ const revenueCallout = computed(() => {
         <!-- Drill-down: revenue calendar -->
         <section>
           <div class="section-head">
-            <div class="section-label">Revenue Calendar — Where It Fell Short</div>
-            <div class="section-note">Percentage is the change vs. {{ revenueComparisonLabel }}; the dollar figure below it is that day's actual revenue, not the size of the change.</div>
+            <div class="section-label">Revenue Calendar — vs. Weekday Revenue Goal</div>
+            <div class="section-note">Percentage is the change vs. {{ revenueComparisonLabel }} (see the Dashboard's Weekly Performance section); the dollar figure below it is that day's actual revenue, not the size of the change. Days before the location move (Jun 20, 2026) have no goal to compare against and are left blank.</div>
           </div>
 
           <div v-if="calendarView" class="drill-card">
             <div v-if="revenueFlagged" class="callout">{{ revenueCallout }}</div>
-            <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All days this {{ drilldownPeriod }} met or beat their comparison to {{ revenueComparisonLabel }}.</span></div>
+            <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All days this {{ drilldownPeriod }} met or beat {{ revenueComparisonLabel }}.</span></div>
 
-            <template v-if="calendarView.kind === 'week'">
-              <div class="calendar-grid week">
-                <div v-for="cell in calendarView.cells" :key="cell.date" :class="['calendar-cell', cell.status]">
-                  <div class="day-num">{{ formatWeekdayDate(cell.date) }}</div>
-                  <template v-if="cell.actual !== null">
-                    <span class="cell-delta">{{ (cell.deltaPct ?? 0) >= 0 ? '▲' : '▼' }} {{ Math.abs(cell.deltaPct ?? 0).toFixed(0) }}%</span>
-                    <div class="cell-amount">${{ Math.round(cell.actual).toLocaleString() }}</div>
-                  </template>
-                  <div v-else class="cell-empty-note">{{ cell.status === 'future' ? 'Upcoming' : 'No data' }}</div>
-                </div>
-              </div>
-            </template>
-
-            <template v-else-if="calendarView.kind === 'month'">
+            <template v-if="calendarView.kind === 'month'">
               <div class="calendar-weekday-header-row">
                 <span v-for="wd in WEEKDAY_LABELS" :key="wd">{{ wd }}</span>
               </div>
@@ -547,6 +540,36 @@ const revenueCallout = computed(() => {
   margin-top: 2px;
 }
 .drilldown-group section:first-child { margin-top: 0.75rem; }
+
+/* ---------- materiality threshold form ---------- */
+.threshold-form {
+  background: var(--surface-alt);
+  border: 1px solid var(--ink-3);
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-top: 10px;
+}
+.threshold-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.threshold-form-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.threshold-form label {
+  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
+}
+.threshold-form input[type="number"] {
+  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink); width: 110px;
+}
+.threshold-form button {
+  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
+  background: var(--accent); color: white; cursor: pointer;
+}
+.threshold-form button:disabled { opacity: 0.6; cursor: default; }
 
 /* ---------- ranked drill-down list ---------- */
 .drill-card {
@@ -691,7 +714,6 @@ const revenueCallout = computed(() => {
   grid-template-columns: repeat(7, 1fr);
   gap: 6px;
 }
-.calendar-grid.week { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
 .calendar-cell {
   background: var(--surface-alt);
   border-radius: 10px;
@@ -702,7 +724,19 @@ const revenueCallout = computed(() => {
   gap: 3px;
 }
 .calendar-cell.blank { background: transparent; }
-.calendar-cell.no-data { opacity: 0.45; }
+/* No-data used to be "plain neutral background at 45% opacity" — nearly
+   identical to a real neutral (within-±5%) day, which was itself plain
+   neutral background at full opacity. A user with red-green color vision
+   deficiency reported genuinely not being able to tell a no-data day from
+   a neutral one, and asked why "Sunday looked blank" — Sunday days were
+   real, computed, colored cells, just landing in the neutral band often
+   enough that the two nearly-identical grays read as one thing. Fixed by
+   giving no-data the same transparent + dashed-border treatment as
+   .future below (shape/pattern, not a color shade, so it can't collide
+   with any real status color) — a real day with a genuine "neutral"
+   result now keeps the only plain solid-gray fill, unambiguous.
+   See CLAUDE.md 2026-08-20. */
+.calendar-cell.no-data { background: transparent; border: 1px dashed var(--hair); }
 .calendar-cell.future { opacity: 0.3; background: transparent; border: 1px dashed var(--hair); }
 .calendar-cell .day-num { font-size: 11px; font-weight: 700; color: var(--ink-3); }
 .calendar-cell .cell-delta { font-size: 10.5px; font-weight: 800; }
@@ -710,17 +744,21 @@ const revenueCallout = computed(() => {
 .calendar-cell .cell-empty-note { font-size: 10px; color: var(--ink-3); margin-top: auto; }
 /* Same full-tile-tint language as the anomaly tiles above — good/bad/critical
    colors reinforce the ▲/▼ + % already in the cell, neutral days (within
-   ±5% of last week) stay the plain surface color rather than getting a
-   third arbitrary hue, since "normal fluctuation" isn't a signal to chase. */
-.calendar-cell.good { background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
-.calendar-cell.bad { background: color-mix(in srgb, var(--serious) 32%, var(--surface-alt)); }
-.calendar-cell.critical { background: color-mix(in srgb, var(--critical) 38%, var(--surface-alt)); }
+   ±5% of goal) stay the plain surface color rather than getting a third
+   arbitrary hue, since "normal fluctuation" isn't a signal to chase.
+   Bad/critical use --shortfall/--shortfall-deep (see main.css), NOT
+   --serious/--critical — those two are validated too close together (real
+   user report + validate_palette.js confirmation, see main.css's comment)
+   to use side by side in a scale that needs both. */
+.calendar-cell.good { background: color-mix(in srgb, var(--good) 45%, var(--surface-alt)); }
+.calendar-cell.bad { background: color-mix(in srgb, var(--shortfall) 45%, var(--surface-alt)); }
+.calendar-cell.critical { background: color-mix(in srgb, var(--shortfall-deep) 45%, var(--surface-alt)); }
 .calendar-cell.good .cell-delta,
 .calendar-cell.good .day-num { color: var(--good); }
 .calendar-cell.bad .cell-delta,
-.calendar-cell.bad .day-num { color: var(--serious); }
+.calendar-cell.bad .day-num { color: var(--shortfall); }
 .calendar-cell.critical .cell-delta,
-.calendar-cell.critical .day-num { color: var(--critical); }
+.calendar-cell.critical .day-num { color: var(--shortfall-deep); }
 
 .year-calendar-grid {
   display: grid;
@@ -730,6 +768,19 @@ const revenueCallout = computed(() => {
 .mini-month-label { font-size: 11px; font-weight: 700; color: var(--ink-3); margin-bottom: 6px; }
 .calendar-grid.mini { gap: 3px; }
 .calendar-cell.mini { min-height: 0; padding: 0; aspect-ratio: 1; border-radius: 4px; }
+/* Mini (year-view) cells carry no text at all — unlike the month view's
+   cells, there's no ▲/▼ + % to fall back on, so color has to carry the
+   whole signal on its own. Diluting against --surface-alt (the month
+   view's softer "tinted card" look) measurably collapses the palette —
+   validate_palette.js on the actually-rendered 32-45%-mixed colors failed
+   every check (chroma floor, CVD separation, normal-vision floor all
+   dropped well below their targets once blended toward a shared gray).
+   Full-strength color has none of that problem — validated ALL PASS (or
+   the pre-existing --good token's own known dark-mode band deviation,
+   unrelated to this fix) — so mini cells skip the dilution entirely. */
+.calendar-cell.mini.good { background: var(--good); }
+.calendar-cell.mini.bad { background: var(--shortfall); }
+.calendar-cell.mini.critical { background: var(--shortfall-deep); }
 
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; border-top: 1px solid var(--hair); }
 .legend-chip {
@@ -741,6 +792,7 @@ const revenueCallout = computed(() => {
   color: var(--ink-3);
 }
 .legend-chip.good { color: var(--good); background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
-.legend-chip.bad { color: var(--serious); background: color-mix(in srgb, var(--serious) 32%, var(--surface-alt)); }
-.legend-chip.critical { color: var(--critical); background: color-mix(in srgb, var(--critical) 38%, var(--surface-alt)); }
+.legend-chip.bad { color: var(--shortfall); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
+.legend-chip.critical { color: var(--shortfall-deep); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
+.legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
 </style>

@@ -2959,6 +2959,157 @@ week, and scale those shares to a benchmark instead of dividing evenly by
   in-progress local dev/prod drift made that concrete rather than
   theoretical.
 
+## Revenue Calendar now compares against the weekday revenue goal, Week drill-down removed — 2026-08-20
+
+The P&L Drill-Downs page's Revenue Calendar previously compared each day to
+"the same weekday last week/month/year" (actual vs. actual). At the user's
+request, it now compares each day against *that weekday's own
+dynamically-calculated revenue goal* instead — the exact same day-specific
+target the Dashboard's This Week's Targets section shows, so a day reads
+the same way on both pages rather than two independently-derived numbers
+that could disagree.
+
+- **`server/utils/weekly-targets.ts`** is a new shared util —
+  `computeWeeklyRevenueTargets()` extracts the weekday-share/benchmark math
+  that used to live only in `server/api/dashboard.get.ts` (open-day
+  filtering, per-weekday averaging, scaling to `weekly_revenue_benchmark`,
+  avg spend/cover). `dashboard.get.ts` now calls this for its own
+  `weeklyTargets.days`/`avgSpendPerCover`, keeping only what's genuinely
+  Dashboard-specific (the "this week" actual-vs-target roll-up, the
+  suggested-weekly-goal breakeven calc) — verified byte-identical output
+  against the pre-refactor numbers before moving on. `server/api/pl.get.ts`
+  calls the same function for the Revenue Calendar.
+- **The Revenue Calendar's "actual" side switched from total revenue to
+  core dine-in revenue** (`CORE_REVENUE_ACCOUNT_NUMBERS`, matching the
+  target's own definition) — comparing a total-revenue actual (which
+  includes event/catering swings) against a core-revenue-based target would
+  let an event booking masquerade as beating or missing the weekday goal.
+- **Days before the location move (2026-06-20) are left blank in the Year
+  view**, per the user's explicit instruction — a day before that date has
+  no weekday target to compare against (the target itself is only built
+  from Cambridge St data), and comparing the old, smaller location's
+  actuals against a goal scaled for the new space would be the same
+  location-move distortion this file already avoids elsewhere (Historical
+  tab, Capacity tab). Implemented as a plain `date < NEW_LOCATION_START`
+  skip in `pl.get.ts`'s revenue-day loop — the Month view never actually
+  hits this branch today (the current month is always after the move), but
+  the guard is general rather than year-specific.
+- **A nice side effect, not extra logic**: Mondays (the standing closure)
+  are automatically excluded from the calendar too — `WEEKDAYS` in
+  `weekly-targets.ts` only ever defines Tue-Sun, so `targetByDow.get(1)`
+  (Monday) is always `undefined` and those days fall out of `revenueDays`
+  the same way a pre-move day does, with no separate Monday check needed.
+- **Week removed entirely from the Drill-Downs page** — the user's own
+  call: the Wages Drill-Down (Week's version of the Labor section) wasn't
+  worth keeping on its own, and the Revenue Calendar tiles (the genuinely
+  useful part of the old Week view) had just moved to the Dashboard's own
+  This Week's Targets section, making a third, redundant copy here pointless.
+  `Period` narrowed from `'week' | 'month' | 'year'` to `'month' | 'year'`
+  in both `pl.get.ts` and `app/pages/pl/drilldowns.vue` (also tightened in
+  `app/pages/pl/index.vue`, which never actually used `'week'` but declared
+  the wider type). Removed alongside it: `WEEKLY_WAGE_SUBCATEGORIES`,
+  `isWeeklyWagesView` and its dedicated template branch/computeds
+  (`weeklyWagesCallout`, `weeklyWageTiles`, etc.), the old
+  `sameWeekdayPositionInMonth`/`revenueComparisonDate`/
+  `revenueComparisonRangeFor` machinery (fully superseded by the weekday-goal
+  comparison above), and the calendar view's `week` rendering branch.
+- **Verified in the browser**: Month view's calendar shows real ▲/▼
+  percentages against the weekday goal (Mondays correctly blank); Year
+  view's mini-month grid was inspected directly via a JS snippet counting
+  each month's cell statuses — Jan-May came back 100% `no-data` (pre-move),
+  June showed a mix of pre-move/Monday `no-data` plus real `critical`
+  ramp-up-week days (the location's first ~10 days open), July showed real
+  `good` days with exactly its 4 Mondays as `no-data` and its 3
+  not-yet-happened days as `future` — every count reconciled by hand
+  against the calendar (e.g. July's 4 `no-data` days = its 4 real Mondays,
+  exactly). Also re-verified the Dashboard's own `/api/dashboard` response
+  was byte-identical to its pre-refactor values after extracting the shared
+  util, confirming the refactor didn't change its behavior.
+
+## Revenue Calendar colorblind/legibility fix — 2026-08-20
+
+Same day, right after the change above: the user (who has red-green color
+vision deficiency) reported two problems with the new calendar's colors,
+both real and both fixed:
+
+- **"Some Sundays don't seem filled in"** — turned out to be a false alarm
+  about the *data* (every real Sunday had a genuine, correctly-computed
+  status) but a real bug in the *color*: a "neutral" day (within ±5% of
+  goal, plain `--surface-alt` at full opacity) and a "no-data" day (the
+  same plain `--surface-alt`, just at 45% opacity) were nearly
+  indistinguishable, especially at the year view's tiny mini-cell size —
+  Sunday days happened to land in the neutral band often enough that the
+  user read them as empty. **Fixed** by giving `.calendar-cell.no-data` the
+  same transparent + dashed-border treatment `.future` already used
+  (shape/pattern, not a color shade, so it can never collide with a real
+  status color) — the only remaining plain-gray fill is a genuine neutral
+  day.
+- **"Below Goal" vs. "Well Below Goal" hard to tell apart** — confirmed
+  with `validate_palette.js` (from the `dataviz` skill, the same tool this
+  app's other charts were already validated with) before touching any
+  code, rather than guessing: the two colors those statuses used,
+  `--serious` (`#c1592f`, a rust-orange) and `--critical` (`#d03b3b`, a
+  red), measured at just ΔE 1.4 under simulated deuteranopia and ΔE 6.3
+  even for *normal* color vision — both well under the 15-ΔE floor the
+  skill calls "hard to tell apart even with full color vision." The two
+  hues sit close together in the exact red-orange band that collapses
+  under red-green CVD, and diluting both to a 32-38% tint against the same
+  background (the existing "tinted card" style) compressed them even
+  further — confirmed by validating the *actual rendered* diluted colors,
+  not just the source hues, which failed even harder (chroma floor and
+  normal-vision floor both failed outright once blended toward a shared
+  gray). The user's own instinct — widen the gap by stepping the *same*
+  hue lighter/darker rather than mixing two different named colors — was
+  exactly right and is what the validator confirmed works: two new tokens,
+  `--shortfall` (`#f87171` light / `#ef4444` dark) and `--shortfall-deep`
+  (`#b91c1c` light / `#ab1a44` dark), added to `app/assets/css/main.css`
+  alongside the existing status tokens. Both pass every check against each
+  other and against `--good` (ΔE 20.7/20.3 light, 16.2/15.0 dark — all
+  above the 15 floor) — see the tokens' own comment in main.css for the
+  exact validator commands.
+- **Deliberately NOT a change to `--serious`/`--critical` themselves** —
+  those are the app-wide status tokens used broadly elsewhere (chips,
+  Cost Pace meters, Budget Pace) where they never appear side by side in a
+  4-step severity scale the way this calendar's Below/Well-Below-Goal
+  pair does, so redesigning them globally would be unrelated scope creep
+  with real ripple risk. `--shortfall`/`--shortfall-deep` are scoped to
+  the Revenue Calendar (`app/pages/pl/drilldowns.vue`), currently their
+  only consumer.
+- **Year-view mini-cells use the new colors at full strength, not
+  diluted** — a deliberate split from the month view's softer tinted-card
+  look. Month-view cells always carry redundant text (▲/▼, %, $) inside
+  them, so a color that's merely legible-with-effort is acceptable there
+  (and is what the skill calls the "legal only with secondary encoding"
+  WARN band); the year view's mini-cells carry **no text at all** — a
+  bare colored square — so color has to carry the entire signal on its
+  own, which only the full-strength (undiluted) colors were validated to
+  do reliably. `.calendar-cell.mini.good/.bad/.critical` override the
+  month view's `color-mix(...)` rules with plain `var(--good)` /
+  `var(--shortfall)` / `var(--shortfall-deep)` accordingly. The month
+  view's own dilution was also bumped from 32-38% to a flat 45% for a
+  modest legibility improvement there too, though it wasn't re-validated
+  to a hard PASS given the existing text-based mitigation.
+- **Verified in the browser**: computed `background-color` read directly
+  off real `.calendar-cell.mini.good/.critical` elements matched the new
+  tokens exactly in both light (`#0ca30c` / `#b91c1c`) and dark
+  (`#1fc21f` / `#ab1a44`) mode; `.calendar-cell.no-data` confirmed
+  transparent with a dashed border in both modes, distinct from the plain
+  solid `.legend-chip.neutral` swatch.
+- **Found mid-verification: a second Claude Code session was concurrently
+  editing this exact page** (`app/pages/pl/drilldowns.vue`,
+  `server/api/pl.get.ts`) in the same working directory, building a
+  separate, unrelated feature (Labor/Opex drill-downs compared against
+  prorated `budget_targets` instead of the prior period, plus a new
+  editable `drilldown_thresholds` table for the materiality thresholds —
+  neither built by this session). Confirmed the two sessions' changes are
+  additive, not colliding (this session's Revenue Calendar/weekday-goal
+  logic and color fix are both fully intact after the other session's
+  edits) — but this was discovered by accident (an unexpectedly different
+  page loaded in the browser mid-verification), not by any coordination
+  between sessions. Flagged to the user directly rather than silently
+  proceeding, since both sessions' changes are still uncommitted and
+  sitting in the same working tree together.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`
@@ -3076,8 +3227,9 @@ week, and scale those shares to a benchmark instead of dividing evenly by
 - [`server/api/dashboard.get.ts`](server/api/dashboard.get.ts) — Dashboard data route, incl. the weekday-target/suggested-weekly-goal computation
 - [`server/api/dashboard/weekly-benchmark.post.ts`](server/api/dashboard/weekly-benchmark.post.ts) — updates the editable `weekly_revenue_benchmark` goal
 - [`server/utils/core-revenue.ts`](server/utils/core-revenue.ts) — shared core-dine-in-revenue account list + open-day covers threshold, used by the Dashboard and `capacity/history.get.ts`
+- [`server/utils/weekly-targets.ts`](server/utils/weekly-targets.ts) — shared day-specific revenue/covers goal computation (weekday share × `weekly_revenue_benchmark`), used by the Dashboard's This Week's Targets and the Drill-Downs page's Revenue Calendar
 - [`app/pages/pl/index.vue`](app/pages/pl/index.vue) — the real P&L page (route `/pl`)
-- [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) — P&L Drill-Downs: Labor/Wages, Opex, and Revenue Calendar by Week/Month/Year (route `/pl/drilldowns`)
+- [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) — P&L Drill-Downs: Labor, Opex, and Revenue Calendar (vs. weekday revenue goal) by Month/Year (route `/pl/drilldowns`)
 - [`server/api/pl.get.ts`](server/api/pl.get.ts) — data route shared by both P&L pages above
 - [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending (route `/budget`)
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)

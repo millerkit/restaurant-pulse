@@ -386,6 +386,28 @@ CREATE TABLE weekly_revenue_benchmark (
   updated_at     TEXT NOT NULL
 );
 
+-- Editable materiality thresholds for the P&L Drill-Downs page's Labor/Opex
+-- anomaly flagging (added 2026-08-20, the same day that flagging switched
+-- from "vs. the prior month/year" to "vs. this month's/year's
+-- expected-to-date budget pace" — see server/api/pl.get.ts). A
+-- subcategory's actual-vs-expected-pace dollar variance must clear this
+-- amount before it's surfaced as a tile; below it is noise. Two columns,
+-- not one — Month and Year drill-downs need
+-- very different scales (a year's dollar totals run much larger than a
+-- month's, same reasoning category_benchmarks-adjacent thresholds don't
+-- share a single number elsewhere in this app). Single-row (id is always
+-- 1), same shape as reserve_plan/weekly_revenue_benchmark above. Seeded
+-- from the values previously hardcoded as
+-- MATERIALITY_THRESHOLD_BY_PERIOD in pl.get.ts ($250 month / $1,000 year);
+-- pl.get.ts still falls back to those same numbers when no row has been
+-- saved yet, so this table starts empty rather than needing a seed insert.
+CREATE TABLE drilldown_thresholds (
+  id              INTEGER PRIMARY KEY CHECK (id = 1),
+  month_threshold REAL NOT NULL,
+  year_threshold  REAL NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.
