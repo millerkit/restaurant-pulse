@@ -3110,6 +3110,39 @@ both real and both fixed:
   proceeding, since both sessions' changes are still uncommitted and
   sitting in the same working tree together.
 
+## Year-view calendar cells get a day number — 2026-08-20
+
+Same day, small follow-up: the year view's mini-month cells were bare
+colored squares with no indication of which date they were — fine for
+scanning overall shape, but you couldn't tell "which day was that" without
+switching to Month view. Added a day-of-month number (`showMiniDayNum` in
+`app/pages/pl/drilldowns.vue`) directly to each mini cell.
+
+- **Only shown for a real result** — good/neutral/bad/critical — not for
+  no-data or future cells (a dashed/empty square already reads as "nothing
+  here"). This has a free side effect the user explicitly wanted: Mondays
+  never carry a number, since Monday never has a weekday revenue target
+  (see `weekly-targets.ts`) and is therefore always `no-data` — no separate
+  Monday check was needed.
+- **White numbers on the three saturated status fills (good/bad/critical),
+  ink-colored on the plain neutral gray** — per the user's own request,
+  implemented with `var(--ink)` rather than a hardcoded black so it still
+  reads correctly in dark mode (where neutral's `--surface-alt` fill is
+  dark, not light — literal "black" text would have vanished there).
+  White-on-saturated falls short of full WCAG text contrast at 9px for a
+  couple of the fills (as low as ~2.4:1 for dark-mode good) — accepted
+  rather than reopening the just-validated status colors again, and helped
+  with `font-weight: 700` plus a soft dark `text-shadow` that adds real
+  effective contrast without touching the fill colors themselves.
+- **Verified in the browser**: computed styles read directly off real
+  cells — no-data/future cells confirmed to render zero `.mini-day-num`
+  elements (176 and 156 respectively, in the current dataset), good/
+  critical cells confirmed white text, dark mode confirmed white text
+  stays white (not flipped to ink), and the number's own bounding box
+  (6×9px) confirmed to fit comfortably inside a 31×31px cell with room to
+  spare. The month view (unrelated, untouched) was spot-checked to still
+  render its full day-num/delta%/amount stack unchanged.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`

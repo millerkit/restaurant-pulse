@@ -214,6 +214,15 @@ function dayStatus(dateStr: string): DayCell {
   const status: DayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
   return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison }
 }
+// Year-view mini-cells get a day number only when there's a real result to
+// label — good/neutral/bad/critical. no-data and future stay bare (a
+// dashed/empty square already says "nothing here" on its own), which as a
+// side effect skips every Monday for free: Monday never has a weekday
+// target (see weekly-targets.ts), so it's always 'no-data' and never hits
+// this list — no separate Monday check needed.
+function showMiniDayNum(status: DayStatus): boolean {
+  return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical'
+}
 function buildMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
   const firstDateStr = `${year}-${pad2(month1)}-01`
@@ -462,7 +471,9 @@ async function submitThresholds() {
                 <div v-for="m in calendarView.months" :key="m.month" class="mini-month">
                   <div class="mini-month-label">{{ m.label }}</div>
                   <div class="calendar-grid mini">
-                    <div v-for="(cell, idx) in m.cells" :key="idx" :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']"></div>
+                    <div v-for="(cell, idx) in m.cells" :key="idx" :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']">
+                      <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.day }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -767,20 +778,35 @@ async function submitThresholds() {
 }
 .mini-month-label { font-size: 11px; font-weight: 700; color: var(--ink-3); margin-bottom: 6px; }
 .calendar-grid.mini { gap: 3px; }
-.calendar-cell.mini { min-height: 0; padding: 0; aspect-ratio: 1; border-radius: 4px; }
-/* Mini (year-view) cells carry no text at all — unlike the month view's
-   cells, there's no ▲/▼ + % to fall back on, so color has to carry the
-   whole signal on its own. Diluting against --surface-alt (the month
-   view's softer "tinted card" look) measurably collapses the palette —
-   validate_palette.js on the actually-rendered 32-45%-mixed colors failed
-   every check (chroma floor, CVD separation, normal-vision floor all
-   dropped well below their targets once blended toward a shared gray).
-   Full-strength color has none of that problem — validated ALL PASS (or
-   the pre-existing --good token's own known dark-mode band deviation,
-   unrelated to this fix) — so mini cells skip the dilution entirely. */
+.calendar-cell.mini { min-height: 0; padding: 0; aspect-ratio: 1; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+/* Mini (year-view) cells only carry a bare day number (added 2026-08-20,
+   at the user's request — see below) — unlike the month view's cells,
+   there's no ▲/▼ + % to say *how* good or bad a day was, so the fill color
+   still has to carry that severity signal on its own; the number is
+   purely "which date," not a secondary encoding of status. Diluting
+   against --surface-alt (the month view's softer "tinted card" look)
+   measurably collapses the palette — validate_palette.js on the
+   actually-rendered 32-45%-mixed colors failed every check (chroma floor,
+   CVD separation, normal-vision floor all dropped well below their
+   targets once blended toward a shared gray). Full-strength color has
+   none of that problem — validated ALL PASS (or the pre-existing --good
+   token's own known dark-mode band deviation, unrelated to this fix) —
+   so mini cells skip the dilution entirely. */
 .calendar-cell.mini.good { background: var(--good); }
 .calendar-cell.mini.bad { background: var(--shortfall); }
 .calendar-cell.mini.critical { background: var(--shortfall-deep); }
+/* Day number, shown only for a real result (good/neutral/bad/critical —
+   see showMiniDayNum) — white on the three saturated status fills, ink on
+   the plain neutral gray, per the user's own request. White-on-saturated
+   is short of full WCAG text contrast at this font size for a couple of
+   the fills (as low as ~2.4:1 for dark-mode good) — accepted rather than
+   darkening the just-validated status colors again, and helped with
+   font-weight 700 plus a soft dark text-shadow that adds real effective
+   contrast without touching the fill colors themselves. */
+.mini-day-num { font-size: 9px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); }
+.calendar-cell.mini.good .mini-day-num,
+.calendar-cell.mini.bad .mini-day-num,
+.calendar-cell.mini.critical .mini-day-num { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); }
 
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; border-top: 1px solid var(--hair); }
 .legend-chip {
