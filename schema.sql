@@ -386,10 +386,13 @@ CREATE TABLE weekly_revenue_benchmark (
   updated_at     TEXT NOT NULL
 );
 
--- Editable materiality thresholds for the P&L Drill-Downs page's Labor/Opex
--- anomaly flagging (added 2026-08-20, the same day that flagging switched
--- from "vs. the prior month/year" to "vs. this month's/year's
--- expected-to-date budget pace" — see server/api/pl.get.ts). A
+-- Editable materiality thresholds for the Budget Pace page's Overspending
+-- section's Labor/Opex subcategory "why" breakdown (originally built into
+-- a standalone P&L Drill-Downs page, added 2026-08-20 the same day that
+-- flagging switched from "vs. the prior month/year" to "vs. this
+-- month's/year's expected-to-date budget pace"; that page was retired the
+-- same day and this logic moved to server/api/budget/overspending-detail.get.ts
+-- — see CLAUDE.md's "Budget Pace / Drill-Downs consolidation" section). A
 -- subcategory's actual-vs-expected-pace dollar variance must clear this
 -- amount before it's surfaced as a tile; below it is noise. Two columns,
 -- not one — Month and Year drill-downs need

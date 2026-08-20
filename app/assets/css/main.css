@@ -29,8 +29,9 @@
      (light-red vs. dark-red, not orange-vs-red) — validated ALL PASS
      against --good and against each other (ΔE 20.7 normal / 20.3 deutan
      light mode; ΔE 16.2 normal / 15.0 protan dark mode, both above the 15
-     floor). See app/pages/pl/drilldowns.vue's calendar-cell rules, the
-     only consumer.
+     floor). See app/pages/pl/revenue-calendar.vue's calendar-cell rules
+     (moved here 2026-08-20 from the old drilldowns.vue when the Revenue
+     Calendar was split out onto its own page), the only consumer.
   */
   --shortfall:      #f87171;
   --shortfall-deep: #b91c1c;

@@ -1,8 +1,8 @@
 // Real, dynamically-recalculated weekday revenue targets — the single
 // source of truth behind the Dashboard's "This Week's Targets" section
-// (server/api/dashboard.get.ts) and the P&L Drill-Downs page's Revenue
-// Calendar (server/api/pl.get.ts), so both pages judge a day against the
-// exact same number rather than two independently-derived ones.
+// (server/api/dashboard.get.ts) and the Revenue Calendar page
+// (server/api/pl.get.ts), so both pages judge a day against the exact same
+// number rather than two independently-derived ones.
 //
 // A day-specific revenue target, scaled from a single editable weekly
 // "good week" benchmark (weekly_revenue_benchmark) by the real weekday

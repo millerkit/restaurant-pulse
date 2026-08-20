@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Shared page header — title, description, and the sync-status chip/"Sync
-// now" button — used by every top-level page (Dashboard, P&L, Drill-Downs,
-// Budget Pace, Edit Budget). Previously each page duplicated this markup,
+// now" button — used by every top-level page (Dashboard, P&L, Revenue
+// Calendar, Budget Pace, Edit Budget). Previously each page duplicated this markup,
 // and two of them (Budget Pace, Edit Budget) showed a hardcoded sample sync
 // time via useSyncStatus() in useBudgetData.ts instead of the real thing.
 // This component owns its own fetch of the real status (server/api/

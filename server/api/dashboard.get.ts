@@ -193,8 +193,8 @@ export default defineEventHandler((event) => {
 
   // ---- Weekly Performance: real weekday pattern + spend/cover -----------
   // The weekday-share/benchmark math itself lives in
-  // server/utils/weekly-targets.ts, shared with the P&L Drill-Downs page's
-  // Revenue Calendar (server/api/pl.get.ts) — both pages judge a day
+  // server/utils/weekly-targets.ts, shared with the Revenue Calendar page
+  // (server/api/pl.get.ts) — both pages judge a day
   // against the exact same target rather than two independently-derived
   // ones. Only the "this week" actual-vs-target roll-up and the suggested-
   // weekly-goal breakeven calc below are Dashboard-specific.

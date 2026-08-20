@@ -207,28 +207,160 @@ const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const)
 // is worse than just not showing it yet. Revenue is excluded — a revenue
 // shortfall isn't "overspending," and that drill-down already exists on
 // the P&L tab.
-const overspendingCategories = computed(() => (['cogs', 'labor', 'opex'] as const)
-  .map(cat => {
-    const actual = periodActuals.value[cat]
-    const budget = periodBudget.value.totals[cat]
-    if (!budget) return null
-    const expectedAmount = expectedAmountFor(cat, budget)
-    const expectedPct = (expectedAmount / budget) * 100
-    const actualPct = (actual / budget) * 100
-    const overPct = actualPct - expectedPct
-    if (overPct <= 0) return null
-    // Labor's budget denominator includes owner compensation (real cash
-    // cost, but not what a hired-staff benchmark assumes) — surface that
-    // so "Labor is over pace" isn't read as "the team is overstaffed" when
-    // some of it is owner salary.
-    const ownerCompNote = cat === 'labor' && laborExOwnerComp.value
-      ? `Includes $${Math.round(laborExOwnerComp.value.ownerComp).toLocaleString()} owner compensation (${ownerCompAccountNames.value.join(', ')})`
-      : null
-    return { category: cat, label: CATEGORY_LABEL[cat], overPct, overAmount: actual - expectedAmount, actual, budget, ownerCompNote }
-  })
-  .filter((x): x is NonNullable<typeof x> => x !== null)
-  .sort((a, b) => b.overAmount - a.overAmount))
-const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
+const COST_CATEGORIES = ['cogs', 'labor', 'opex'] as const
+// Spelled out in the callout below, per the user's own request 2026-08-20
+// after "1 of 3 cost categories" left them unsure which 3 — built from
+// CATEGORY_LABEL rather than hardcoded so it can't drift if a label ever
+// changes. Always exactly 3 categories, so a plain "A, B, and C" join is
+// safe here without a general list-formatter.
+const costCategoryLabelList = computed(() => {
+  const labels = COST_CATEGORIES.map(c => CATEGORY_LABEL[c])
+  return `${labels[0]}, ${labels[1]}, and ${labels[2]}`
+})
+
+// All 3 cost categories always get a row now, not just the ones running
+// over pace — per the user's own request 2026-08-20, after pointing out
+// that collapsing to a single "Nothing unusual" line the moment nothing
+// was flagged hid which categories were even being checked. Fixed category
+// order (matching the pace cards' own Revenue/COGS/Labor/Opex order above,
+// minus Revenue) rather than sorted by how over/under pace each one is —
+// keeps the three rows in the same place every time you look, instead of
+// reshuffling as pace changes.
+const costCategoryRows = computed(() => COST_CATEGORIES.map(cat => {
+  const actual = periodActuals.value[cat]
+  const budget = periodBudget.value.totals[cat]
+  if (!budget) return { category: cat, label: CATEGORY_LABEL[cat], noBudget: true as const }
+  const expectedAmount = expectedAmountFor(cat, budget)
+  const expectedPct = (expectedAmount / budget) * 100
+  const actualPct = (actual / budget) * 100
+  const overPct = actualPct - expectedPct
+  // Labor's budget denominator includes owner compensation (real cash
+  // cost, but not what a hired-staff benchmark assumes) — surface that
+  // so "Labor is over pace" isn't read as "the team is overstaffed" when
+  // some of it is owner salary.
+  const ownerCompNote = cat === 'labor' && laborExOwnerComp.value
+    ? `Includes $${Math.round(laborExOwnerComp.value.ownerComp).toLocaleString()} owner compensation (${ownerCompAccountNames.value.join(', ')})`
+    : null
+  return {
+    category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const,
+    overPace: overPct > 0, overPct, overAmount: actual - expectedAmount, actual, budget, ownerCompNote
+  }
+}))
+// Just for the callout's "led by X" — the visual row order above stays
+// fixed regardless of this.
+const overCategories = computed(() => costCategoryRows.value
+  .filter(r => !r.noBudget && r.overPace)
+  .sort((a, b) => (b as any).overAmount - (a as any).overAmount))
+
+// ---- Overspending "why" detail (Labor/Opex subcategory breakdown) -------
+// Moved here 2026-08-20 from the old standalone P&L Drill-Downs page, which
+// was retired — see CLAUDE.md's "Budget Pace / Drill-Downs consolidation"
+// section. That page's Month-grain subcategory pacing was structurally
+// unreliable for lumpy fixed costs (a lump-sum rent/utility payment reads
+// as wildly "ahead" or "behind" pace depending on whether it happened to
+// post yet), so Fixed opex here shows plain dollar totals only — never a
+// pace comparison, at either grain. Labor and Variable opex keep the full
+// pace-comparison detail at both Month and Year, per the user's own
+// judgment that they don't share Fixed's single-lump-payment problem badly
+// enough to lose Month-grain detail. Only shown as an expandable "why"
+// under a category already flagged in overspendingCategories above — COGS
+// has no subcategory breakdown (same as before this move; per-account
+// actuals don't exist yet, see "Not yet done" in CLAUDE.md).
+const { data: detailData, refresh: refreshDetail } = await useFetch('/api/budget/overspending-detail')
+
+type Direction = 'up' | 'down' | 'flat'
+type DeltaRow = { label: string, amount: number, direction: Direction, deltaText: string }
+function fmtSignedDollars(n: number): string {
+  return `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString()}`
+}
+function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, pctChange: number | null }): DeltaRow {
+  const deltaAmount = Math.round(r.amount - r.comparisonAmount)
+  if (r.pctChange === null) {
+    // No meaningful percentage to show either way (dividing by a
+    // zero/negative comparison figure can flip sign confusingly — e.g. a
+    // real -$590 budget against a -$955 actual computes as "+62%", which
+    // reads backwards next to a negative dollar delta). Direction follows
+    // the delta's own sign instead of always being red/"up" — a negative
+    // delta here (actual came in under the comparison) is a good/green
+    // signal, not serious.
+    //
+    // hasBudget means a real budget_targets row exists and just sums to $0
+    // or less (e.g. Marketing & Advertising's real, deliberate OpenTable
+    // incentive credit — see CLAUDE.md 2026-08-20), vs. no budget row at
+    // all. The two need different wording — a real, if non-positive,
+    // budget should say so with the actual number, not a vague "no
+    // positive budget" dismissal: caught directly by the user, who pointed
+    // out a genuinely complete per-account budget existed on Edit Budget
+    // even though this subcategory's group total was negative.
+    const direction: Direction = deltaAmount > 0 ? 'up' : deltaAmount < 0 ? 'down' : 'flat'
+    const arrow = direction === 'up' ? '▲' : direction === 'down' ? '▼' : '●'
+    const reason = r.hasBudget ? `vs. $${Math.round(r.comparisonAmount).toLocaleString()} budgeted` : 'not budgeted'
+    return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${reason} (${fmtSignedDollars(deltaAmount)})` }
+  }
+  const roundedPct = Math.round(Math.abs(r.pctChange))
+  if (roundedPct === 0) {
+    const deltaText = deltaAmount === 0 ? 'No change' : `${fmtSignedDollars(deltaAmount)} (<1% change)`
+    return { label: r.label, amount: r.amount, direction: 'flat', deltaText: `● ${deltaText}` }
+  }
+  const direction: Direction = r.pctChange > 0 ? 'up' : 'down'
+  const arrow = direction === 'up' ? '▲' : '▼'
+  const pctSign = r.pctChange > 0 ? '+' : '−'
+  return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${pctSign}${roundedPct}% (${fmtSignedDollars(deltaAmount)})` }
+}
+function sortByDirection(rows: DeltaRow[]): DeltaRow[] {
+  const rank: Record<Direction, number> = { up: 0, flat: 1, down: 2 }
+  return [...rows].sort((a, b) => rank[a.direction] - rank[b.direction])
+}
+
+const cogsDetailRows = computed(() => sortByDirection((detailData.value?.detail?.[selectedPeriod.value]?.cogs ?? []).filter(r => r.flagged).map(r => buildDeltaRow(r))))
+const laborDetailRows = computed(() => sortByDirection((detailData.value?.detail?.[selectedPeriod.value]?.labor ?? []).filter(r => r.flagged).map(r => buildDeltaRow(r))))
+const opexVariableDetailRows = computed(() => sortByDirection((detailData.value?.detail?.[selectedPeriod.value]?.opexVariable ?? []).filter(r => r.flagged).map(r => buildDeltaRow(r))))
+const opexFixedDetailRows = computed(() => [...(detailData.value?.detail?.[selectedPeriod.value]?.opexFixed ?? [])].sort((a, b) => b.amount - a.amount))
+const opexFixedDetailTotal = computed(() => opexFixedDetailRows.value.reduce((sum, r) => sum + r.amount, 0))
+const opexFixedDetailPct = computed(() => periodActuals.value.revenue ? (opexFixedDetailTotal.value / periodActuals.value.revenue) * 100 : 0)
+
+const expandedCategory = ref<Category | null>(null)
+function toggleDetail(cat: Category) {
+  expandedCategory.value = expandedCategory.value === cat ? null : cat
+}
+function hasDetail(cat: Category) {
+  return cat === 'cogs' || cat === 'labor' || cat === 'opex'
+}
+
+// ---- Materiality threshold form -------------------------------------------
+// Editable via drilldown_thresholds (server/api/budget/drilldown-thresholds.post.ts)
+// — Month and Year are edited together in one small form, since both are
+// always in play (flipping the Month/Year toggle above shouldn't require a
+// second trip here to see/edit the other one's value).
+const monthThresholdInput = ref<number | null>(null)
+const yearThresholdInput = ref<number | null>(null)
+watch(() => detailData.value?.thresholds, (t) => {
+  if (!t) return
+  if (monthThresholdInput.value === null) monthThresholdInput.value = t.month
+  if (yearThresholdInput.value === null) yearThresholdInput.value = t.year
+}, { immediate: true })
+
+const thresholdSubmitting = ref(false)
+const thresholdError = ref('')
+const thresholdSaved = ref(false)
+async function submitThresholds() {
+  if (monthThresholdInput.value == null || yearThresholdInput.value == null) return
+  thresholdSubmitting.value = true
+  thresholdError.value = ''
+  thresholdSaved.value = false
+  try {
+    await $fetch('/api/budget/drilldown-thresholds', {
+      method: 'POST',
+      body: { monthThreshold: monthThresholdInput.value, yearThreshold: yearThresholdInput.value }
+    })
+    thresholdSaved.value = true
+    await refreshDetail()
+  } catch (err: any) {
+    thresholdError.value = err?.data?.statusMessage || err?.message || 'Failed to save thresholds'
+  } finally {
+    thresholdSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -237,7 +369,7 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
       page-name="Budget Pace"
       :description="`Are we going to earn enough to hit budget? · ${YEAR}`"
       :as-of-label="asOfLabel"
-      @synced="loadYear(); loadActualsYear()"
+      @synced="loadYear(); loadActualsYear(); refreshDetail()"
     />
 
     <div v-if="loadError || actualsLoadError" class="drill-card">
@@ -319,28 +451,107 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
       <section>
         <div class="section-head">
           <div class="section-label">Overspending</div>
-          <div class="section-note">Category-level only — per-account drill-down isn't built yet (see "Not yet done" in CLAUDE.md)</div>
+          <div class="section-note">Category-level, with an expandable subcategory breakdown for COGS/Labor/Opex — per-account detail isn't built yet (see "Not yet done" in CLAUDE.md)</div>
         </div>
 
-        <div v-if="budgetFlagged" class="drill-card">
+        <form class="threshold-form" @submit.prevent="submitThresholds">
+          <div class="threshold-form-row">
+            <span class="threshold-form-label">
+              Materiality Threshold
+              <span class="threshold-form-hint">Hides subcategory detail below this $ variance from expected pace</span>
+            </span>
+            <label>Month<input type="number" step="1" min="0" v-model.number="monthThresholdInput" required /></label>
+            <label>Year<input type="number" step="1" min="0" v-model.number="yearThresholdInput" required /></label>
+            <button type="submit" :disabled="thresholdSubmitting">{{ thresholdSubmitting ? 'Saving…' : 'Save' }}</button>
+            <span v-if="thresholdError" class="chip critical">{{ thresholdError }}</span>
+            <span v-else-if="thresholdSaved" class="chip good">Saved</span>
+          </div>
+        </form>
+
+        <div class="drill-card">
           <div class="callout">
-            {{ overspendingCategories.length }} of 3 cost categories are running ahead of budget pace this {{ selectedPeriod }},
-            led by <strong>{{ overspendingCategories[0].label }}</strong> (${{ Math.round(overspendingCategories[0].overAmount).toLocaleString() }} over expected pace).
+            <template v-if="overCategories.length">
+              {{ overCategories.length }} of 3 cost categories ({{ costCategoryLabelList }}) {{ overCategories.length === 1 ? 'is' : 'are' }} running ahead of budget pace this {{ selectedPeriod }},
+              led by <strong>{{ overCategories[0].label }}</strong> (${{ Math.round(overCategories[0].overAmount).toLocaleString() }} over expected pace).
+            </template>
+            <template v-else>
+              All 3 cost categories ({{ costCategoryLabelList }}) are on pace or under budget this {{ selectedPeriod }}.
+            </template>
           </div>
           <div class="rank-list">
-            <div v-for="row in overspendingCategories" :key="row.category" class="rank-row">
-              <div class="label">
-                {{ row.label }}<span class="flag serious">▲ {{ row.overPct.toFixed(1) }}pts ahead of pace</span>
-                <span v-if="row.ownerCompNote" class="flag neutral">{{ row.ownerCompNote }}</span>
+            <div v-for="row in costCategoryRows" :key="row.category" class="rank-item">
+              <div v-if="row.noBudget" class="rank-row">
+                <div class="label">{{ row.label }}</div>
+                <span class="chip warning">No budget set for this {{ selectedPeriod }}</span>
               </div>
-              <div class="rank-track"><div class="rank-fill serious" :style="{ width: Math.min(100, (row.actual / row.budget) * 100) + '%' }"></div></div>
-              <div class="rank-value">${{ Math.round(row.overAmount).toLocaleString() }}<span class="sub">over expected pace</span></div>
+              <template v-else>
+                <div class="rank-row">
+                  <div class="label">
+                    {{ row.label }}<span :class="['flag', row.overPace ? 'serious' : 'good']">{{ row.overPace ? `▲ ${row.overPct.toFixed(1)}pts ahead of pace` : `✓ ${Math.abs(row.overPct).toFixed(1)}pts under pace` }}</span>
+                    <span v-if="row.ownerCompNote" class="flag neutral">{{ row.ownerCompNote }}</span>
+                  </div>
+                  <div class="rank-track"><div :class="['rank-fill', row.overPace ? 'serious' : 'good']" :style="{ width: Math.min(100, (row.actual / row.budget) * 100) + '%' }"></div></div>
+                  <div class="rank-value">${{ Math.round(Math.abs(row.overAmount)).toLocaleString() }}<span class="sub">{{ row.overPace ? 'over' : 'under' }} expected pace</span></div>
+                </div>
+
+                <button v-if="hasDetail(row.category)" type="button" class="detail-toggle" @click="toggleDetail(row.category)">
+                  {{ expandedCategory === row.category ? '▾ Hide breakdown' : '▸ What’s driving it?' }}
+                </button>
+
+                <div v-if="expandedCategory === row.category && row.category === 'cogs'" class="detail-panel">
+                  <div class="anomaly-grid" v-if="cogsDetailRows.length">
+                    <div v-for="dr in cogsDetailRows" :key="dr.label" :class="['anomaly-tile', dr.direction]">
+                      <div class="label">{{ dr.label }}</div>
+                      <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
+                      <div class="amount-caption">Total this {{ selectedPeriod }}</div>
+                      <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                    </div>
+                  </div>
+                  <div v-else class="quiet-note">No single COGS subcategory stands out as the driver — costs are elevated broadly.</div>
+                </div>
+
+                <div v-if="expandedCategory === row.category && row.category === 'labor'" class="detail-panel">
+                  <div class="anomaly-grid" v-if="laborDetailRows.length">
+                    <div v-for="dr in laborDetailRows" :key="dr.label" :class="['anomaly-tile', dr.direction]">
+                      <div class="label">{{ dr.label }}</div>
+                      <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
+                      <div class="amount-caption">Total this {{ selectedPeriod }}</div>
+                      <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                    </div>
+                  </div>
+                  <div v-else class="quiet-note">No single labor subcategory stands out as the driver — costs are elevated broadly.</div>
+                </div>
+
+                <div v-if="expandedCategory === row.category && row.category === 'opex'" class="detail-panel">
+                  <div v-if="opexFixedDetailRows.length" class="rank-group-head">
+                    <span class="rank-group-label">Fixed<span class="rank-group-note">not controllable month to month — shown as totals only, never vs. pace</span></span>
+                    <span class="rank-group-total">${{ Math.round(opexFixedDetailTotal).toLocaleString() }} &middot; {{ opexFixedDetailPct.toFixed(1) }}% of rev.</span>
+                  </div>
+                  <div class="anomaly-grid" v-if="opexFixedDetailRows.length">
+                    <div v-for="fr in opexFixedDetailRows" :key="fr.label" class="anomaly-tile">
+                      <div class="label">{{ fr.label }}</div>
+                      <div class="amount-caption">Total this {{ selectedPeriod }}</div>
+                      <div class="amount">${{ Math.round(fr.amount).toLocaleString() }}</div>
+                    </div>
+                  </div>
+
+                  <div v-if="opexVariableDetailRows.length" class="rank-group-head">
+                    <span class="rank-group-label">Variable / discretionary</span>
+                  </div>
+                  <div class="anomaly-grid" v-if="opexVariableDetailRows.length">
+                    <div v-for="dr in opexVariableDetailRows" :key="dr.label" :class="['anomaly-tile', dr.direction]">
+                      <div class="label">{{ dr.label }}</div>
+                      <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
+                      <div class="amount-caption">Total this {{ selectedPeriod }}</div>
+                      <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                    </div>
+                  </div>
+                  <div v-if="!opexFixedDetailRows.length && !opexVariableDetailRows.length" class="quiet-note">No opex data synced for this {{ selectedPeriod }} yet.</div>
+                  <div v-else-if="!opexVariableDetailRows.length" class="quiet-note">No single variable/discretionary subcategory stands out as the driver — costs are elevated broadly.</div>
+                </div>
+              </template>
             </div>
           </div>
-        </div>
-        <div v-else class="drill-card quiet">
-          <span class="chip good">Nothing unusual</span>
-          <span class="quiet-note">No cost category is running ahead of budget pace this {{ selectedPeriod }}.</span>
         </div>
       </section>
     </template>
@@ -442,7 +653,6 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
   flex-direction: column;
   gap: 14px;
 }
-.drill-card.quiet { flex-direction: row; align-items: center; gap: 10px; padding: 12px 16px; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 .drill-card .callout { font-size: 12.5px; color: var(--ink-2); background: var(--surface-alt); border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
 .rank-list { display: flex; flex-direction: column; gap: 12px; }
@@ -450,12 +660,124 @@ const budgetFlagged = computed(() => overspendingCategories.value.length > 0)
 .rank-row .label { font-size: 13px; font-weight: 600; }
 .rank-row .label .flag { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
 .rank-row .label .flag.serious { color: var(--serious); }
+.rank-row .label .flag.good { color: var(--good); }
 .rank-row .label .flag.neutral { color: var(--ink-3); font-weight: 500; }
 .rank-track { position: relative; height: 9px; border-radius: 5px; background: var(--surface-alt); }
 .rank-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; }
 .rank-fill.serious { background: var(--serious); }
+.rank-fill.good { background: var(--good); }
 .rank-value { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .rank-value .sub { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); }
+
+/* ---------- materiality threshold form (moved from the old Drill-Downs page) ---------- */
+.threshold-form {
+  background: var(--surface-alt);
+  border: 1px solid var(--ink-3);
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.threshold-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.threshold-form-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.threshold-form-hint { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); margin-top: 2px; }
+.threshold-form label {
+  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
+}
+.threshold-form input[type="number"] {
+  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
+  background: var(--surface); color: var(--ink); width: 110px;
+}
+.threshold-form button {
+  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
+  background: var(--accent); color: white; cursor: pointer;
+}
+.threshold-form button:disabled { opacity: 0.6; cursor: default; }
+
+/* ---------- expandable "why" detail under a flagged Overspending row (moved from the old Drill-Downs page) ---------- */
+.rank-item { display: flex; flex-direction: column; gap: 8px; }
+.detail-toggle {
+  align-self: flex-start;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.detail-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--surface-alt); border-radius: 12px; }
+.rank-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.rank-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.rank-group-label .rank-group-note {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-top: 2px;
+}
+.rank-group-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.anomaly-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.anomaly-tile {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+}
+.anomaly-tile.up, .anomaly-tile.serious { background: color-mix(in srgb, var(--serious) 32%, var(--surface)); }
+.anomaly-tile.down, .anomaly-tile.good { background: color-mix(in srgb, var(--good) 32%, var(--surface)); }
+.anomaly-tile.critical { background: color-mix(in srgb, var(--critical) 38%, var(--surface)); }
+.anomaly-tile .label { font-size: 11.5px; font-weight: 600; line-height: 1.3; color: var(--ink-2); }
+.delta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+  background: var(--surface);
+}
+.anomaly-tile .amount-caption { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-3); margin-top: 2px; margin-bottom: -3px; }
+.anomaly-tile .amount { font-size: 12px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.delta-chip.up, .delta-chip.serious { color: var(--serious); background: var(--serious-wash); }
+.delta-chip.down, .delta-chip.good { color: var(--good); background: var(--good-wash); }
+.delta-chip.critical { color: var(--critical); background: var(--critical-wash); }
 
 @media (max-width: 760px) {
   .meter-row { grid-template-columns: 1fr; }

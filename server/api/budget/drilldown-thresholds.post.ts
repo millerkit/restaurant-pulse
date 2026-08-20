@@ -1,7 +1,10 @@
-// Declares the user's editable materiality thresholds for the P&L
-// Drill-Downs page's Labor/Opex anomaly flagging — see schema.sql's
-// drilldown_thresholds comment. Single row, upserted, same shape as
-// server/api/cashflow/reserve-plan.post.ts /
+// Declares the user's editable materiality thresholds for the Budget Pace
+// page's Overspending drill-down (Labor/Opex anomaly flagging) — see
+// schema.sql's drilldown_thresholds comment. Moved here 2026-08-20 from
+// server/api/pl/drilldown-thresholds.post.ts when the standalone P&L
+// Drill-Downs page was retired and its Labor/Opex breakdown became an
+// inline expand on Budget Pace's Overspending section — see CLAUDE.md.
+// Single row, upserted, same shape as server/api/cashflow/reserve-plan.post.ts /
 // server/api/dashboard/weekly-benchmark.post.ts. Two fields, not one — the
 // page's inline form edits Month and Year together, since both are always
 // visible on the page at once (only one is "active" via the period toggle,

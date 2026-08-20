@@ -3143,6 +3143,312 @@ switching to Month view. Added a day-of-month number (`showMiniDayNum` in
   spare. The month view (unrelated, untouched) was spot-checked to still
   render its full day-num/delta%/amount stack unchanged.
 
+## Budget Pace / Drill-Downs consolidation — Revenue Calendar split out, Labor/Opex breakdown merged into Overspending — 2026-08-20
+
+Prompted by the user pointing out real convergence between the P&L
+Drill-Downs page and the Budget Pace page's Overspending section — both had
+grown their own version of "what's driving the cost overrun" — and sharing
+three screenshots: the Opex Drill-Down's Fixed section showing Occupancy
+Costs "▲ +63% (+$4,423)" and Utilities "▼ −77% (−$2,105)" even though the
+section header itself says "not benchmarked"; the Edit Budget page showing
+the same month's real Building Rent ($17,588 actual vs. $11,500 budget,
+posted as one lump in the first week) and Electricity ($0 actual vs. $4,000
+budget, a $4,600 bill about to hit); and Budget Pace's Overspending section,
+already flagging COGS "$7,701 over expected pace" with its own note
+admitting "per-account drill-down isn't built yet." Investigated the actual
+code (not just the screenshots) before proposing anything, which surfaced a
+real, structural explanation rather than a taste problem:
+
+- **Month-grain subcategory pacing used flat day-fraction proration with no
+  awareness of lump-sum posting timing.** `pl.get.ts`'s
+  `budgetSubcategoryTotalsForPeriod` prorated every Month-grain Labor/Opex
+  subcategory row by `asOfDay / daysInMonth`, so a fully-posted rent
+  payment read as far "ahead of pace" and an unposted utility bill read as
+  far "behind pace" — right up until it landed, at which point it would
+  snap to wildly ahead. **Year-grain doesn't share this flaw, for a precise
+  reason, not just "more data to average over"**: at Year grain, every
+  fully-elapsed month contributes its whole budgeted amount *unprorated* —
+  only the current stub month gets prorated at all. For a cost that recurs
+  monthly as a lump (rent, most utilities), month-counting is the
+  structurally correct unit; day-counting is the wrong unit for a
+  once-a-month event, which is why Month-grain couldn't be fixed by tuning
+  the formula. `useBudgetData.ts`'s own `monthExpectedOpex` had already
+  tried to patch this at the category level via `opexLumpSumPostingDays`
+  (hand-registering rent's day-1 and loan interest's day-12/15 posting
+  pattern) — but Electricity/Gas were never added to it, confirming that
+  hand-maintaining a posting-date calendar per account doesn't scale.
+- **Decision, confirmed with the user via two clarifying questions**: Fixed
+  opex drops the "ahead/behind pace" delta-chip framing entirely, at both
+  Month and Year grain — it's already excluded from the `opex_variable`
+  benchmark because it isn't controllable month to month, so a pace
+  judgment on it was never honest at either grain; it now shows plain
+  dollar totals only. Labor and Variable Opex **keep** the full
+  pace-comparison detail at both grains — the user's own read that they
+  don't share Fixed's single-lump-payment problem badly enough to lose
+  Month-grain detail (payroll and discretionary spend don't post as one
+  contractual lump the way rent does).
+- **The standalone Drill-Downs page is gone.** Its two useful pieces split
+  differently:
+  - **Revenue Calendar** (the day-vs-weekday-goal comparison — never had
+    the proration problem, since it compares real days to real per-day
+    targets, not a within-period smoothing) got its own top-level page,
+    [`app/pages/pl/revenue-calendar.vue`](app/pages/pl/revenue-calendar.vue)
+    (route `/pl/revenue-calendar`), replacing "Drill-Downs" in
+    [`app/layouts/default.vue`](app/layouts/default.vue)'s nav. Unchanged
+    behavior/markup, just its own page with just the period toggle +
+    calendar section (Materiality Threshold form and Labor/Opex sections
+    removed — moved below).
+  - **Labor/Opex subcategory breakdown** became an inline expand
+    ("▸ What's driving it?") under a flagged category row in Budget Pace's
+    existing Overspending section
+    ([`app/pages/budget/index.vue`](app/pages/budget/index.vue)) — closing
+    the exact gap that section's own code comment had flagged since
+    2026-07-22 ("that drill-down already exists on the P&L tab"). Only
+    shown for Labor/Opex (COGS still has no subcategory breakdown — same as
+    before, per-account actuals don't exist yet). Reuses Budget Pace's
+    *existing* Month/Year toggle and its *existing* dollar-pace-based
+    Overspending gate — a category only gets an expand button if it's
+    already flagged as overspending by that section's own established
+    logic, rather than inventing a second gate.
+- **New server route**:
+  [`server/api/budget/overspending-detail.get.ts`](server/api/budget/overspending-detail.get.ts)
+  holds the moved subcategory logic (`subcategoryTotalsForRange`,
+  `budgetSubcategoryTotalsForPeriod`, `flagRows`, the materiality
+  threshold table read) — `opexFixed` now returns plain `{label, amount}`
+  rows with no expected/flagged/pctChange fields, matching the framing
+  decision above. The materiality-threshold POST route moved with it, from
+  `server/api/pl/drilldown-thresholds.post.ts` to
+  [`server/api/budget/drilldown-thresholds.post.ts`](server/api/budget/drilldown-thresholds.post.ts)
+  (the now-empty `server/api/pl/` directory was removed).
+  [`server/api/pl.get.ts`](server/api/pl.get.ts) was trimmed to just what
+  the P&L summary page and Revenue Calendar need (`periods`, `benchmarks`,
+  `revenue` day-by-day data) — the Labor/Opex drilldown fields are gone
+  from its response entirely, not left dormant.
+- **Real bug caught while moving this, not present on the old page**: the
+  old Drill-Downs page computed its own "as of" date as
+  `MAX(daily_line_items.date)` (the last actually-synced day) — a
+  reasonable choice for a page about analyzing synced data on its own. But
+  this logic now sits *underneath* Budget Pace's Overspending section,
+  which paces against `currentAsOfMonth()`/`currentAsOfDay()` — the real
+  wall-clock date (see `useBudgetData.ts`). Those two "as of" concepts can
+  genuinely disagree (confirmed locally: last sync Jul 31, real today Aug
+  20) — left as `MAX(date)`, the new endpoint would have expanded a
+  same-named "Month" detail panel showing July's numbers underneath an
+  August-labeled Overspending row. Fixed by computing `asOfDate` from a
+  real IANA-zone-aware "today" instead
+  (`RESTAURANT_TIME_ZONE = 'America/New_York'`, a small local `localToday`
+  duplicate — same pattern `qbo-sync-runner.ts`'s own copy already
+  documents, kept separate rather than shared/imported), matching what
+  `currentAsOfMonth()` represents. A separate `MAX(date)` check is kept
+  only as the "no data synced at all yet" empty-state guard.
+- **Cross-links updated**: [`app/pages/pl/index.vue`](app/pages/pl/index.vue)'s
+  P&L table now points "what's driving these costs" at Budget Pace's
+  Overspending section and the day-by-day picture at Revenue Calendar,
+  replacing the old single "see Drill-Downs" link.
+- **Verified in the browser** against real local data: confirmed the new
+  Revenue Calendar page renders identically to the old page's calendar
+  section (Month and Year, including the location-move gap and day
+  numbers); confirmed `/api/budget/overspending-detail` returns
+  `asOfDate: "2026-08-20"` (real today) with Month empty (no August data
+  synced locally yet) and Year populated with real, correctly-unflagged
+  subcategory rows; confirmed the Materiality Threshold form's save
+  round-trip against the new route. The expand/collapse mechanism itself
+  couldn't be exercised against real *flagged* local data (nothing is
+  currently over pace locally), so it was verified by temporarily loosening
+  the flagging thresholds in both files, confirming Labor's panel rendered
+  5 real ranked tiles with correct delta chips and Opex's panel rendered a
+  chip-free Fixed group (Interest & Financing, Occupancy Costs, Utilities,
+  Insurance) alongside a chip-bearing Variable group, and only one category
+  panel open at a time — then reverting both temporary changes and
+  re-confirming the page returned to its real "Nothing unusual" state.
+
+## Overspending section always shows all 3 cost categories, spelled out — 2026-08-20
+
+Same day, immediate follow-up: the user asked what "1 of 3 cost categories"
+in the Overspending callout actually referred to — nothing on the page
+named the three (COGS, Labor, Operating Expenses; Revenue is deliberately
+excluded, see the comment above `COST_CATEGORIES` in
+[`app/pages/budget/index.vue`](app/pages/budget/index.vue)), so a reader
+had to infer the set rather than being told. Asked to also show all 3
+categories, even the ones on target, not just the ones running over pace.
+
+- **`costCategoryRows`** replaces the old `overspendingCategories` — always
+  maps all 3 `COST_CATEGORIES`, not a filtered subset, so a category
+  running on/under pace gets its own row instead of silently dropping out
+  of the list. Fixed category order (COGS, Labor, Opex — matching the pace
+  cards' own Revenue/COGS/Labor/Opex order directly above, minus Revenue),
+  not sorted by how over/under pace each one is, so the three rows stay in
+  the same place every time rather than reshuffling as pace changes. A
+  separate `overCategories` computed (filtered + sorted by `overAmount`)
+  exists solely to drive the callout's "led by X" — it doesn't affect the
+  visual row order.
+- **Each row now has a real on-pace state, not just an over-pace one** —
+  `row.overPace` picks between a red "▲ X.Xpts ahead of pace" / `serious`
+  fill (unchanged from before) and a new green "✓ X.Xpts under pace" /
+  `good` fill, mirroring the exact icon+color convention (✓ for good, ▲ for
+  serious) already used elsewhere on this page (e.g. the projection chips).
+  New `.flag.good`/`.rank-fill.good` CSS rules were added alongside the
+  existing `.serious` ones. The dollar figure is now unsigned with the
+  direction carried entirely by the "over"/"under expected pace" label
+  text, rather than a `+`/`−` prefix that would have doubled up
+  confusingly with "under" (e.g. "−$X under pace" reads like a double
+  negative).
+- **The callout now names the three categories directly** —
+  `costCategoryLabelList`, built from `CATEGORY_LABEL` rather than a
+  hardcoded string (so it can't drift if a label ever changes), joins them
+  as "COGS, Labor, and Operating Expenses." Two forms: "N of 3 cost
+  categories (...) is/are running ahead of budget pace..., led by X" when
+  at least one is over, or "All 3 cost categories (...) are on pace or
+  under budget this month/year" when none are — replacing the old binary
+  toggle between a full breakdown card and a one-line "Nothing unusual"
+  card, since the list itself is now always visible either way.
+- **The Labor/Opex "What's driving it?" expand is now available on every
+  row, not just over-pace ones** — a natural consequence of always
+  rendering all 3 rows, and arguably more useful than before: a
+  subcategory can be genuinely flagged (see the materiality-threshold
+  logic in `overspending-detail.get.ts`) even when the parent category
+  nets out on pace overall, because other subcategories under the same
+  category are running correspondingly under.
+- **Verified in the browser** against real local data (Month and Year):
+  confirmed the callout reads "All 3 cost categories (COGS, Labor, and
+  Operating Expenses) are on pace or under budget this year," all three
+  rows render with the real `--good` green (`rgb(12, 163, 12)`, confirmed
+  via computed styles) fill/flag, and the Labor expand toggle still opens
+  correctly (showing the real "no single subcategory stands out" fallback
+  message, since nothing is flagged in the current real dataset).
+
+## COGS gets the same subcategory breakdown as Labor/Opex — 2026-08-20
+
+Same day, immediate follow-up: the user asked to see what's driving the
+COGS row too. The old P&L Drill-Downs page never had a COGS section (see
+the "Budget Pace / Drill-Downs consolidation" section above), but nothing
+about COGS structurally prevents one — it has real per-account
+`daily_line_items` actuals and real `budget_targets` the same way
+Labor/Opex do, split into Food/Beverage/Other via `accounts.subcategory`
+(see the Budget tab's "COGS budgeted as % of revenue" section). COGS also
+doesn't share Fixed opex's single-lump-monthly-payment proration problem —
+food/beverage costs accrue continuously as vendor invoices/inventory move,
+not as one contractual lump the way rent does — so it gets the full
+pace-comparison treatment (flagged delta-chip tiles) at both Month and
+Year, same as Labor and Variable Opex, not the Fixed-style plain-totals
+treatment.
+
+- [`server/api/budget/overspending-detail.get.ts`](server/api/budget/overspending-detail.get.ts):
+  `subcategoryTotalsForRange`/`budgetSubcategoryTotalsForMonth`/
+  `budgetSubcategoryTotalsForPeriod`'s `category` param widened from
+  `'labor' | 'opex'` to `'cogs' | 'labor' | 'opex'`; `detail` gained a
+  `cogs` field computed the same way as `labor` (full `flagRows` pace
+  comparison, no Fixed/Variable split — COGS has no `cost_behavior`
+  column, that's opex-only).
+- [`app/pages/budget/index.vue`](app/pages/budget/index.vue): `hasDetail()`
+  now includes `'cogs'`; a new `cogsDetailRows` computed and detail-panel
+  template branch mirror Labor's exactly (single `anomaly-grid` of flagged
+  subcategory tiles, or a "no single COGS subcategory stands out" fallback
+  note). Section-note copy updated from "for Labor/Opex" to "for
+  COGS/Labor/Opex."
+- **Verified in the browser** against real local data: `/api/budget/
+  overspending-detail`'s Year response now includes real `cogs` rows (Food
+  −23.5%, Beverage −32.8%, Other −32.8% vs. expected pace, all correctly
+  unflagged); the COGS row's new "What's driving it?" toggle opens and
+  shows the real "no single subcategory stands out" fallback. Same
+  temporary-threshold-loosening technique as before confirmed real tiles
+  render correctly (Food/Beverage with correct delta chips) before
+  reverting the temporary change and re-confirming the page's real
+  unflagged state.
+
+## "not budgeted" mislabel + wrong direction/color on a real negative-actual subcategory — 2026-08-20
+
+Found from a real production screenshot: a Marketing & Advertising tile
+read "▲ not budgeted (−$569)" over a red/serious card with a "Total this
+month" of **−$955**. The user explained the real cause directly, with a
+screenshot of the underlying QBO journal entry: Urban Hearth received a
+**$60K incentive from OpenTable** for signing a 2-year agreement, booked to
+`2355 Other Current Liabilities: Deferred Vendor Incentive - OpenTable` and
+recognized as a **$5,000/month credit to `6305 Marketing & Advertising:
+Reservation Platform Fees`** for the next year — so a negative Marketing &
+Advertising actual is real, intentional, and will keep recurring monthly
+for roughly a year, not a data error.
+
+That made the display bug worth fixing for real, not just explaining away.
+Two separate, stacked bugs in the "no meaningful expected %" fallback path
+(`flagRows`'s `expectedAmount <= 0` branch and `buildDeltaRow`'s matching
+`pctChange === null` branch):
+
+- **The "not budgeted" label was wrong.** `flagRows`
+  (`server/api/budget/overspending-detail.get.ts`) used
+  `expected.get(r.label) ?? 0` then checked `<= 0` to decide "no budget
+  exists" — which conflates two real, different states: a subcategory with
+  genuinely no `budget_targets` row (defaults to $0 via `?? 0`), and a
+  subcategory with a real budget row that just sums to $0 or negative
+  (exactly this case — a real, if unusual, budgeted net credit). **Fixed**
+  with a new `hasBudget: boolean` field (`expected.has(r.label)`,
+  independent of what the value defaults to), threaded through `detail`'s
+  type for `cogs`/`labor`/`opexVariable` — a percentage-vs-expected still
+  isn't shown either way (dividing by a non-positive comparison figure can
+  flip sign confusingly — verified directly: a large negative comparison
+  produced a nonsensical positive %), but the client-facing label now
+  distinguishes "not budgeted" (no row at all) from "no positive budget to
+  compare" (a real row, non-positive).
+- **The direction/color was hardcoded wrong.** `buildDeltaRow`
+  (`app/pages/budget/index.vue`) always set `direction: 'up'` (the red
+  "overspending" tile) for this fallback path, regardless of the actual
+  delta's sign — so a subcategory that came in *below* its (near-zero)
+  comparison, like this one, was shown as if it were a red overspending
+  flag. **Fixed**: direction now follows `deltaAmount`'s own sign (up/down/
+  flat), matching how the normal (non-null `pctChange`) branch already
+  worked. Confirmed this specific case (a negative delta) now renders
+  green/`down`.
+- **Verified both directions**, since local dev's real August data has no
+  activity for this account yet (production is ahead of local dev here —
+  this OpenTable credit isn't in local dev's synced data at all): temporarily
+  edited `budget_targets`/`daily_line_items` directly in local dev's sqlite
+  file for a real Marketing & Advertising account (id 117, "Advertising")
+  to reproduce both a non-positive-comparison-with-negative-delta case
+  (rendered "▼ no positive budget to compare (−$X)" in green, correctly)
+  and a non-positive-comparison-with-positive-delta case (rendered "▲ no
+  positive budget to compare (+$X)" in red, correctly) — then reverted
+  every edited row back to its exact original value (`budget_targets` for
+  accounts 117/118 back to 0/1500, `daily_line_items` test row deleted) and
+  re-confirmed the page shows no leftover trace of the test.
+- **Not fixed here, and not this app's call to make**: whether the Edit
+  Budget page's Marketing & Advertising budget for the next ~year should be
+  updated to actually reflect the expected $5,000/month OpenTable credit
+  (netted against real platform-fee spend), so the comparison figure itself
+  is accurate rather than just correctly *labeled* when it happens to be
+  non-positive. That's a real budgeting decision for the user, not a bug —
+  flagged here as a natural next step, not queued as "Not yet done" since
+  it isn't something to build, just something to enter.
+
+## "no positive budget to compare" was itself still misleading — 2026-08-20
+
+Same day, immediate follow-up: the user updated Edit Budget's real
+per-account Marketing & Advertising figures to reflect the OpenTable
+credit (per the section above), then flagged that the Overspending tile
+still read "▼ no positive budget to compare (−$569)" — even though a real,
+complete budget existed for every one of the subcategory's 5 accounts
+(Advertising $110, Creative & Branding $200, Marketing – PR $4,000,
+Marketing – Website $100, Reservation Platform Fees −$5,000 — visible
+directly on Edit Budget's own account tree). The prior section's fix had
+correctly distinguished "no budget row" from "a real non-positive budget,"
+but the wording for the latter case still implied absence rather than
+stating the real number — a real, if not fully-resolved, follow-on gap
+from the same fix, not a new bug.
+
+- [`app/pages/budget/index.vue`](app/pages/budget/index.vue)'s
+  `buildDeltaRow`: the `hasBudget` branch now reads
+  `vs. $${comparisonAmount} budgeted` — the real (prorated, for the
+  in-progress month) group total — instead of the vague "no positive
+  budget to compare." Percentage still isn't shown for this branch (same
+  reasoning as before: dividing by a non-positive comparison figure can
+  flip sign confusingly), but the real dollar comparison now is, which is
+  what the user was actually asking to see.
+- **Verified with the same local-dev synthetic-edit technique** as the
+  section above (accounts 117/118's `budget_targets` temporarily set
+  non-positive, a synthetic `daily_line_items` row added): the tile now
+  renders `▲ vs. $-1,304 budgeted (+$349)` — the real prorated group total
+  — instead of the old dismissive phrase. Reverted every edited row back to
+  its exact original value afterward and re-confirmed no trace remained.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`
@@ -3260,11 +3566,13 @@ switching to Month view. Added a day-of-month number (`showMiniDayNum` in
 - [`server/api/dashboard.get.ts`](server/api/dashboard.get.ts) — Dashboard data route, incl. the weekday-target/suggested-weekly-goal computation
 - [`server/api/dashboard/weekly-benchmark.post.ts`](server/api/dashboard/weekly-benchmark.post.ts) — updates the editable `weekly_revenue_benchmark` goal
 - [`server/utils/core-revenue.ts`](server/utils/core-revenue.ts) — shared core-dine-in-revenue account list + open-day covers threshold, used by the Dashboard and `capacity/history.get.ts`
-- [`server/utils/weekly-targets.ts`](server/utils/weekly-targets.ts) — shared day-specific revenue/covers goal computation (weekday share × `weekly_revenue_benchmark`), used by the Dashboard's This Week's Targets and the Drill-Downs page's Revenue Calendar
+- [`server/utils/weekly-targets.ts`](server/utils/weekly-targets.ts) — shared day-specific revenue/covers goal computation (weekday share × `weekly_revenue_benchmark`), used by the Dashboard's This Week's Targets and the Revenue Calendar page
 - [`app/pages/pl/index.vue`](app/pages/pl/index.vue) — the real P&L page (route `/pl`)
-- [`app/pages/pl/drilldowns.vue`](app/pages/pl/drilldowns.vue) — P&L Drill-Downs: Labor, Opex, and Revenue Calendar (vs. weekday revenue goal) by Month/Year (route `/pl/drilldowns`)
-- [`server/api/pl.get.ts`](server/api/pl.get.ts) — data route shared by both P&L pages above
-- [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending (route `/budget`)
+- [`app/pages/pl/revenue-calendar.vue`](app/pages/pl/revenue-calendar.vue) — Revenue Calendar: each operating day vs. that weekday's own revenue goal, by Month/Year (route `/pl/revenue-calendar`; split off the old P&L Drill-Downs page 2026-08-20 — see "Budget Pace / Drill-Downs consolidation" above)
+- [`server/api/pl.get.ts`](server/api/pl.get.ts) — data route shared by both P&L pages above and the Revenue Calendar page
+- [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending, incl. the expandable Labor/Opex subcategory "why" breakdown and its Materiality Threshold form (route `/budget`)
+- [`server/api/budget/overspending-detail.get.ts`](server/api/budget/overspending-detail.get.ts) — Labor/Opex subcategory breakdown behind Budget Pace's Overspending expand (moved from the old P&L Drill-Downs page 2026-08-20)
+- [`server/api/budget/drilldown-thresholds.post.ts`](server/api/budget/drilldown-thresholds.post.ts) — saves the Materiality Threshold form above
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
 - [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
