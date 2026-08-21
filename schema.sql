@@ -133,7 +133,12 @@ CREATE TABLE qbo_tokens (
 -- the reliable field). labor_hours is the sum of regularHours +
 -- overtimeHours across that day's labor/v1/timeEntries — fields Toast
 -- already computes per entry (accounting for breaks/rounding), rather than
--- this app re-deriving hours from raw clock-in/out timestamps.
+-- this app re-deriving hours from raw clock-in/out timestamps — excluding
+-- any time entry whose job is wageFrequency='SALARY' in Toast's own Labor
+-- config (fixed 2026-08-21: the General Manager, a genuinely salaried
+-- role, was clocking in/out like hourly staff on ~70% of real nights
+-- checked, inflating this figure by ~8-10%/night — see
+-- fetchSalariedJobGuids in server/utils/toast-metrics-sync.ts).
 CREATE TABLE daily_toast_metrics (
   date         TEXT PRIMARY KEY,   -- ISO 8601, e.g. '2026-07-29' (matches daily_line_items.date)
   covers       INTEGER NOT NULL,

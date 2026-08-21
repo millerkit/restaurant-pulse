@@ -231,6 +231,25 @@ try {
   console.warn(`Could not fetch /config/v2/tables (${err.message}) — per-area metrics will be skipped for this run, whole-restaurant covers/labor still backfilled.`)
 }
 
+// See fetchSalariedJobGuids's comment in server/utils/toast-metrics-sync.ts
+// — duplicated here for the same Node-22 reason as the rest of this file.
+// Fetched once up front, not per day: a restaurant's job list doesn't
+// change day to day, same reasoning as the table map above.
+let salariedJobGuids = new Set()
+{
+  const token = cachedToken ?? await login()
+  const res = await fetch(`${HOST}/labor/v1/jobs`, {
+    headers: { Authorization: `Bearer ${token}`, 'Toast-Restaurant-External-ID': TOAST_RESTAURANT_GUID }
+  })
+  if (!res.ok) {
+    console.error(`Could not fetch /labor/v1/jobs (${res.status} ${await res.text()}) — cannot safely exclude salaried staff from labor hours, aborting.`)
+    process.exit(1)
+  }
+  const jobs = await res.json()
+  salariedJobGuids = new Set(jobs.filter(j => j.wageFrequency === 'SALARY').map(j => j.guid))
+  console.log(`Loaded ${jobs.length} Toast job(s), ${salariedJobGuids.size} salaried (excluded from labor hours).`)
+}
+
 const days = isoDaysInRange(since, until)
 console.log(`Backfilling ${days.length} day(s) from ${since} to ${until}...`)
 
@@ -263,7 +282,9 @@ for (const isoDay of days) {
     }
     return sum + guests
   }, 0)
-  const laborHours = timeEntries.reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
+  const laborHours = timeEntries
+    .filter(te => !salariedJobGuids.has(te.jobReference?.guid ?? ''))
+    .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
 
   const perArea = new Map()
   if (tableAreaMap.size > 0) {

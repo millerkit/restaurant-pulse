@@ -96,6 +96,31 @@ const MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50
 interface ToastTimeEntry {
   regularHours: number | null
   overtimeHours: number | null
+  jobReference: { guid: string } | null
+}
+
+interface ToastJob {
+  guid: string
+  wageFrequency: 'HOURLY' | 'SALARY'
+}
+
+// Salaried staff (confirmed live: General Manager, Executive Chef, Events
+// and Retail Manager, all wageFrequency='SALARY' in Toast's own Labor
+// config) clock in/out in Toast like everyone else — the GM alone did so
+// on 32 of 45 real nights checked, 11-16h each — but their cost is a fixed
+// monthly salary already counted in Labor budget, not an hourly wage that
+// scales with the night, so their hours don't belong in a $/labor-hour
+// productivity metric. Toast's own Employees API is off-limits for this
+// integration (see the Toast POS integration section in CLAUDE.md), but
+// wageFrequency lives on the Labor API's own /labor/v1/jobs, so no
+// employee-level lookup is needed to exclude them.
+async function fetchSalariedJobGuids(creds: ToastCredentials): Promise<Set<string>> {
+  const res = await toastFetch(creds, '/labor/v1/jobs')
+  if (!res.ok) {
+    throw new Error(`Toast API request failed [/labor/v1/jobs]: ${res.status} ${await res.text()}`)
+  }
+  const jobs = await res.json() as ToastJob[]
+  return new Set(jobs.filter(j => j.wageFrequency === 'SALARY').map(j => j.guid))
 }
 
 // Both ordersBulk and timeEntries are paginated (max pageSize 100); this
@@ -136,8 +161,12 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
       return sum + guests
     }, 0)
 
-  const timeEntries = await fetchAllPages<ToastTimeEntry>(creds, '/labor/v1/timeEntries', businessDate)
+  const [timeEntries, salariedJobGuids] = await Promise.all([
+    fetchAllPages<ToastTimeEntry>(creds, '/labor/v1/timeEntries', businessDate),
+    fetchSalariedJobGuids(creds)
+  ])
   const laborHours = timeEntries
+    .filter(te => !salariedJobGuids.has(te.jobReference?.guid ?? ''))
     .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
 
   const db = useDb()

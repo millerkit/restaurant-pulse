@@ -9,6 +9,7 @@ import site from '~/config/site.json'
       <NuxtLink to="/" exact-active-class="active">Dashboard</NuxtLink>
       <NuxtLink to="/pl" exact-active-class="active">P&amp;L</NuxtLink>
       <NuxtLink to="/pl/revenue-calendar" exact-active-class="active">Revenue Calendar</NuxtLink>
+      <NuxtLink to="/nightly-margin" exact-active-class="active">Nightly Margin</NuxtLink>
       <NuxtLink to="/budget" exact-active-class="active">Budget Pace</NuxtLink>
       <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
