@@ -33,27 +33,50 @@ function pad2(n: number): string {
 function fmtMoney0(n: number): string {
   return `$${Math.round(n).toLocaleString()}`
 }
+function fmtMoneySigned(n: number): string {
+  return `${n >= 0 ? '+' : '−'}${fmtMoney0(Math.abs(n))}`
+}
 
 const period = ref<Period>('month')
 const pageTitle = computed(() => period.value === 'month' ? "This Month's Nightly Margin" : "This Year's Nightly Margin")
 
-type MarginDay = { date: string, actual: number, comparison: number, laborHours: number, estVariableLabor: number, estFixedLabor: number, estCogs: number }
-const marginDaysMap = computed(() => new Map((data.value?.margin[period.value]?.days ?? []).map((d: MarginDay) => [d.date, d])))
+// Marginal: judged against variable (hourly) labor + COGS only — "was
+// tonight worth being open." Full: also includes this night's flat share
+// of fixed labor & benefits — "is this night pulling its weight toward
+// overhead." Raised by the user 2026-08-21 after seeing every night read
+// green under Marginal alone (expected — a restaurant only opens on nights
+// it expects to clear that low a bar — but not useful for telling a strong
+// night from a merely-adequate one, which needs the fuller view).
+type ViewMode = 'marginal' | 'full'
+const viewMode = ref<ViewMode>('marginal')
+function costFor(d: MarginDayLocal, mode: ViewMode): number {
+  return mode === 'marginal' ? d.comparison : d.comparison + d.estFixedLabor
+}
+
+type MarginDayLocal = { date: string, actual: number, comparison: number, laborHours: number, estVariableLabor: number, estFixedLabor: number, estCogs: number }
+const marginDaysMap = computed(() => new Map((data.value?.margin[period.value]?.days ?? []).map((d: MarginDayLocal) => [d.date, d])))
 
 type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
-type DayCell = { date: string, day: number, status: DayStatus, deltaPct: number | null, revenue: number | null, estCost: number | null, detail: MarginDay | null }
-// Same ±5%/±18.75% banding as the Revenue Calendar, applied to
-// revenue-vs-estimated-cost instead of revenue-vs-goal: comfortably over
-// estimated cost reads good, comfortably under reads bad/critical, close
-// to break-even reads neutral.
+type DayCell = { date: string, day: number, status: DayStatus, profit: number | null, marginPct: number | null, detail: MarginDayLocal | null }
+// Bands are real profit-margin % of revenue (profit / revenue), not the
+// old profit / cost "markup" framing — checked against this restaurant's
+// real distribution before picking these (2026-08-21): Marginal mode's
+// real nights run roughly -10% to +86% (median ~59%), Full mode's run
+// roughly -46% to +74% (median ~46%, ~25% of nights actually negative) —
+// so a single set of absolute breakpoints spreads meaningfully across both
+// modes' real data rather than needing a different scale per mode.
+function marginStatus(marginPct: number): DayStatus {
+  return marginPct < -10 ? 'critical' : marginPct < 0 ? 'bad' : marginPct < 20 ? 'neutral' : 'good'
+}
 function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
-  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, revenue: null, estCost: null, detail: null }
-  const entry = marginDaysMap.value.get(dateStr) as MarginDay | undefined
-  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, revenue: null, estCost: null, detail: null }
-  const deltaPct = ((entry.actual - entry.comparison) / entry.comparison) * 100
-  const status: DayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
-  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, revenue: entry.actual, estCost: entry.comparison, detail: entry }
+  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', profit: null, marginPct: null, detail: null }
+  const entry = marginDaysMap.value.get(dateStr) as MarginDayLocal | undefined
+  if (!entry || entry.actual === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', profit: null, marginPct: null, detail: null }
+  const cost = costFor(entry, viewMode.value)
+  const profit = entry.actual - cost
+  const marginPct = (profit / entry.actual) * 100
+  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: marginStatus(marginPct), profit, marginPct, detail: entry }
 }
 function showMiniDayNum(status: DayStatus): boolean {
   return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical'
@@ -61,8 +84,11 @@ function showMiniDayNum(status: DayStatus): boolean {
 function cellTitle(cell: DayCell): string | undefined {
   if (!cell.detail) return undefined
   const d = cell.detail
-  const marginAfterFixed = d.actual - d.comparison - d.estFixedLabor
-  return `Revenue: ${fmtMoney0(d.actual)}\nEst. variable (hourly) labor: ${fmtMoney0(d.estVariableLabor)} (${d.laborHours.toFixed(1)}h)\nEst. food + beverage COGS: ${fmtMoney0(d.estCogs)}\nEst. marginal cost (judged below): ${fmtMoney0(d.comparison)}\n———\nFor context only, not counted above — paid whether open or not:\nFixed labor & benefits share: ${fmtMoney0(d.estFixedLabor)}\nMargin after fixed labor & benefits: ${marginAfterFixed >= 0 ? '+' : '−'}${fmtMoney0(Math.abs(marginAfterFixed))}`
+  const marginalProfit = d.actual - d.comparison
+  const fullProfit = marginalProfit - d.estFixedLabor
+  const marginalNote = viewMode.value === 'marginal' ? ' (judged below)' : ''
+  const fullNote = viewMode.value === 'full' ? ' (judged below)' : ' — for context, not counted above'
+  return `Revenue: ${fmtMoney0(d.actual)}\nEst. variable (hourly) labor: ${fmtMoney0(d.estVariableLabor)} (${d.laborHours.toFixed(1)}h)\nEst. food + beverage COGS: ${fmtMoney0(d.estCogs)}\n———\nMarginal profit${marginalNote}: ${fmtMoneySigned(marginalProfit)}\nFixed labor & benefits share (paid whether open or not): ${fmtMoney0(d.estFixedLabor)}\nFull profit after fixed labor & benefits${fullNote}: ${fmtMoneySigned(fullProfit)}`
 }
 function buildMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
@@ -83,15 +109,17 @@ const calendarView = computed<CalendarView | null>(() => {
   return { kind: 'year', months: Array.from({ length: 12 }, (_, i) => buildMonthGrid(data.value!.asOfYear, i + 1)) }
 })
 
-const marginDays = computed(() => (data.value?.margin[period.value]?.days ?? []) as MarginDay[])
-const shortfallDays = computed(() => marginDays.value.filter(d => d.actual < d.comparison))
+const VIEW_COST_LABEL: Record<ViewMode, string> = { marginal: 'their own variable (hourly) labor + COGS', full: 'their own variable labor + COGS + fixed labor & benefits share' }
+
+const marginDays = computed(() => (data.value?.margin[period.value]?.days ?? []) as MarginDayLocal[])
+const shortfallDays = computed(() => marginDays.value.filter(d => d.actual < costFor(d, viewMode.value)))
 const marginFlagged = computed(() => shortfallDays.value.length > 0)
-const shortfallTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (d.comparison - d.actual), 0))
+const shortfallTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (costFor(d, viewMode.value) - d.actual), 0))
 const marginCallout = computed(() => {
   const total = marginDays.value.length
   const covered = total - shortfallDays.value.length
   if (!total || !marginFlagged.value) return ''
-  return `${covered} of ${total} night${total === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} covered their own variable (hourly) labor + COGS. The shortfall is concentrated in ${shortfallDays.value.length} night${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for ${fmtMoney0(shortfallTotal.value)} of the gap.`
+  return `${covered} of ${total} night${total === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} covered ${VIEW_COST_LABEL[viewMode.value]}. The shortfall is concentrated in ${shortfallDays.value.length} night${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for ${fmtMoney0(shortfallTotal.value)} of the gap.`
 })
 
 const rates = computed(() => data.value?.rates ?? null)
@@ -112,7 +140,7 @@ const rates = computed(() => data.value?.rates ?? null)
     <template v-else>
       <PageHeader
         :page-name="pageTitle"
-        description="Each operating night's revenue vs. an estimate of that night's own variable cost — was it worth being open?"
+        :description="viewMode === 'marginal' ? `Each operating night's estimated profit above its own variable cost — was it worth being open?` : `Each operating night's estimated profit after also covering its share of fixed labor & benefits`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
       />
@@ -122,6 +150,14 @@ const rates = computed(() => data.value?.rates ?? null)
         <div class="period-tabs">
           <span :class="['period-tab', period === 'month' && 'active']" @click="period = 'month'">Month</span>
           <span :class="['period-tab', period === 'year' && 'active']" @click="period = 'year'">Year</span>
+        </div>
+      </div>
+
+      <div class="drilldown-toggle-bar">
+        <div class="drilldown-toggle-label">View</div>
+        <div class="period-tabs">
+          <span :class="['period-tab', viewMode === 'marginal' && 'active']" @click="viewMode = 'marginal'">Marginal (worth opening?)</span>
+          <span :class="['period-tab', viewMode === 'full' && 'active']" @click="viewMode = 'full'">Fully-loaded (pulling its weight?)</span>
         </div>
       </div>
 
@@ -135,13 +171,16 @@ const rates = computed(() => data.value?.rates ?? null)
       <section v-else>
         <div class="section-head">
           <div class="section-note">
-            Estimated, not measured — neither labor nor COGS actually posts at nightly grain. Each night is judged against its <strong>marginal</strong> cost only — variable (hourly) labor (that night's real Toast hours, salaried staff excluded, times a blended hourly rate) plus COGS (that night's revenue times a blended Food+Beverage COGS%) — since that's what answers "was tonight worth being open," not the fully-loaded cost. Management salaries, benefits, and payroll taxes are paid whether the restaurant opens that night or not, so they're shown in each day's hover detail for context but not counted against it. Rates are trailing averages since the location move ({{ formatWeekdayDate(rates!.sinceDate) }}) through {{ formatWeekdayDate(data.asOfDate) }}: ${{ rates!.hourlyLaborRate!.toFixed(2) }}/hour, {{ (rates!.cogsPct! * 100).toFixed(1) }}% COGS, {{ fmtMoney0(rates!.fixedLaborPerNight!) }}/night fixed labor &amp; benefits across {{ rates!.operatingNights }} operating nights. Hover a day for the full breakdown. Days before the location move have no rate basis and are left blank.
+            Estimated from trailing rates, not exact nightly costs.
+            <template v-if="viewMode === 'marginal'">Judged against hourly labor + COGS only — fixed labor &amp; benefits are paid either way, so they're excluded here (see hover).</template>
+            <template v-else>Also counts each night's share of fixed labor &amp; benefits — a stricter bar than Marginal.</template>
+            Big number = profit; percent = margin. Current rates: ${{ rates!.hourlyLaborRate!.toFixed(2) }}/hr, {{ (rates!.cogsPct! * 100).toFixed(1) }}% COGS, {{ fmtMoney0(rates!.fixedLaborPerNight!) }}/night fixed labor, {{ rates!.operatingNights }} nights.
           </div>
         </div>
 
         <div v-if="calendarView" class="drill-card">
           <div v-if="marginFlagged" class="callout">{{ marginCallout }}</div>
-          <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All nights this {{ period }} comfortably covered their own variable (hourly) labor + COGS.</span></div>
+          <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All nights this {{ period }} comfortably covered {{ VIEW_COST_LABEL[viewMode] }}.</span></div>
 
           <template v-if="calendarView.kind === 'month'">
             <div class="calendar-weekday-header-row">
@@ -151,9 +190,9 @@ const rates = computed(() => data.value?.rates ?? null)
               <div v-for="(cell, idx) in calendarView.grid.cells" :key="idx" :class="['calendar-cell', cell ? cell.status : 'blank']" :title="cell ? cellTitle(cell) : undefined">
                 <template v-if="cell">
                   <div class="day-num">{{ cell.day }}</div>
-                  <template v-if="cell.revenue !== null">
-                    <span class="cell-delta">{{ (cell.deltaPct ?? 0) >= 0 ? '▲' : '▼' }} {{ Math.abs(cell.deltaPct ?? 0).toFixed(0) }}%</span>
-                    <div class="cell-amount">{{ fmtMoney0(cell.revenue) }}</div>
+                  <template v-if="cell.profit !== null">
+                    <span class="cell-delta">{{ fmtMoneySigned(cell.profit) }}</span>
+                    <div class="cell-amount">{{ (cell.marginPct ?? 0).toFixed(0) }}% margin</div>
                   </template>
                 </template>
               </div>
@@ -174,10 +213,10 @@ const rates = computed(() => data.value?.rates ?? null)
           </template>
 
           <div class="calendar-legend">
-            <span class="legend-chip good">▲ Worth opening, comfortably</span>
-            <span class="legend-chip bad">▼ Fell short of variable cost</span>
-            <span class="legend-chip critical">▼ Well short</span>
-            <span class="legend-chip neutral">Roughly break-even</span>
+            <span class="legend-chip good">20%+ margin</span>
+            <span class="legend-chip neutral">0–20% margin</span>
+            <span class="legend-chip bad">Loss, under 10% of revenue</span>
+            <span class="legend-chip critical">Loss, 10%+ of revenue</span>
             <span class="legend-chip no-data">No data / closed</span>
           </div>
         </div>
