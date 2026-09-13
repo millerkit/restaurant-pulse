@@ -12,6 +12,14 @@
 // opex_variable has no mockup precedent (the Dashboard never showed an
 // opex meter) — seeded with an industry-typical 6% variable-opex-of-revenue
 // target as a starting point, not a number the user confirmed.
+//
+// prime_cost's target_pct raised 62% -> 65% on 2026-08-26 at the user's
+// explicit request (a real revision of the target, not a mockup-derived
+// number anymore). warning_pct/serious_pct/critical_pct shifted up by the
+// same +0.03 the target moved, preserving the original gaps between
+// escalation levels rather than leaving them stale below the new target
+// (which would have made the warning band unreachable — benchmarkStatus in
+// useBudgetData.ts checks target_pct first).
 // Run: node scripts/seed-category-benchmarks.mjs (locally, or via
 // `fly ssh console` against the production Fly volume, same as the other
 // one-off scripts in this directory).
@@ -31,7 +39,7 @@ if (!existsSync(dbPath)) {
 const BENCHMARKS = [
   { category: 'cogs', target_pct: 0.32, warning_pct: 0.325, serious_pct: 0.33, critical_pct: 0.34 },
   { category: 'labor', target_pct: 0.33, warning_pct: 0.345, serious_pct: 0.36, critical_pct: 0.38 },
-  { category: 'prime_cost', target_pct: 0.62, warning_pct: 0.635, serious_pct: 0.66, critical_pct: 0.70 },
+  { category: 'prime_cost', target_pct: 0.65, warning_pct: 0.665, serious_pct: 0.69, critical_pct: 0.73 },
   { category: 'opex_variable', target_pct: 0.06, warning_pct: 0.07, serious_pct: 0.08, critical_pct: 0.10 }
 ]
 
