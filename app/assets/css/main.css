@@ -97,7 +97,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 .wrap {
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 20px 20px 60px;
   display: flex;
@@ -105,9 +105,29 @@ body {
   gap: 22px;
 }
 
+/* ---------- brand header ---------- */
+/* Restaurant name/brand mark, its own centered row above the tab nav (moved
+   2026-09-13 out of the tabnav's own flex row, which was crowding out the
+   tabs and forcing them to wrap even when the tabs alone would fit). Also
+   moved here from every page's own <h1> (each page's own heading now just
+   states the page/view — e.g. "Budget Pace" — without repeating "Urban
+   Hearth" in front of it every time). */
+.app-header {
+  text-align: center;
+}
+.app-header .brand {
+  display: inline-block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  text-decoration: none;
+}
+
 /* ---------- top-level tab nav ---------- */
 .tabnav {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 4px;
   border-bottom: 1px solid var(--hair);
 }
@@ -120,21 +140,10 @@ body {
   text-decoration: none;
   color: var(--ink-3);
   border-bottom: 2px solid transparent;
+  white-space: nowrap;
 }
 .tabnav a + a { margin-left: 18px; }
 .tabnav a.active { color: var(--ink); border-bottom-color: var(--accent); }
-/* Restaurant name/brand mark, moved here from every page's own <h1> (each
-   page's own heading now just states the page/view — e.g. "Budget Pace" —
-   without repeating "Urban Hearth" in front of it every time) — set off
-   from the tab links themselves with a divider so it doesn't read as one
-   more tab to click through. */
-.tabnav .brand {
-  font-weight: 800;
-  color: var(--ink);
-  padding-right: 16px;
-  border-right: 1px solid var(--hair);
-  border-bottom: none;
-}
 
 /* ---------- footer ---------- */
 .app-footer {

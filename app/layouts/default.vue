@@ -4,8 +4,10 @@ import site from '~/config/site.json'
 
 <template>
   <div class="wrap">
-    <nav class="tabnav">
+    <div class="app-header">
       <NuxtLink to="/" class="brand">{{ site.restaurantName }}</NuxtLink>
+    </div>
+    <nav class="tabnav">
       <NuxtLink to="/" exact-active-class="active">Dashboard</NuxtLink>
       <NuxtLink to="/pl" exact-active-class="active">P&amp;L</NuxtLink>
       <NuxtLink to="/pl/revenue-calendar" exact-active-class="active">Revenue Calendar</NuxtLink>
