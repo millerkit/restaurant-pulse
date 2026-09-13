@@ -22,6 +22,8 @@
 //
 // "As of" mirrors dashboard.get.ts: the latest date actually present in
 // daily_line_items, not wall-clock "today."
+import { CORE_REVENUE_ACCOUNT_NUMBERS } from '../utils/core-revenue'
+
 type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
   capacity_nov_apr: number | null, capacity_may_oct: number | null,
@@ -173,14 +175,22 @@ export default defineEventHandler(() => {
     }
   }
 
+  // Revenue is core dine-in food/beverage only (CORE_REVENUE_ACCOUNT_NUMBERS)
+  // — deliberately NOT all category='revenue' rows. Event Sales, Catering,
+  // Retail, and Other Service Income land as large uneven lumps (a single
+  // catering booking can be $20-25K/week) with few or no matching Toast
+  // covers, which massively inflates the per-cover figure this page exists
+  // to sanity-check. Same "core dine-in" definition the Dashboard and the
+  // Historical tab already use — see server/utils/core-revenue.ts.
   function actualCoversRevenue(startIso: string, endIso: string) {
     const coversRow = db.prepare(
       'SELECT SUM(covers) AS covers, COUNT(*) AS days FROM daily_toast_metrics WHERE date BETWEEN ? AND ?'
     ).get(startIso, endIso) as { covers: number | null, days: number }
+    const placeholders = CORE_REVENUE_ACCOUNT_NUMBERS.map(() => '?').join(',')
     const revenueRow = db.prepare(`
       SELECT SUM(dli.amount) AS revenue FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
-      WHERE a.category = 'revenue' AND dli.date BETWEEN ? AND ?
-    `).get(startIso, endIso) as { revenue: number | null }
+      WHERE a.account_number IN (${placeholders}) AND a.is_active = 1 AND dli.date BETWEEN ? AND ?
+    `).get(...CORE_REVENUE_ACCOUNT_NUMBERS, startIso, endIso) as { revenue: number | null }
     return { covers: coversRow.covers, revenue: revenueRow.revenue, toastDaysSynced: coversRow.days }
   }
 

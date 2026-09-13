@@ -3449,6 +3449,41 @@ from the same fix, not a new bug.
   — instead of the old dismissive phrase. Reverted every edited row back to
   its exact original value afterward and re-confirmed no trace remained.
 
+## Capacity Pace per-cover revenue now excludes catering/event income — 2026-09-07
+
+Prompted by the user viewing production's Capacity Pace page: the four
+period cards (Last/This Week, Last/This Month) showed per-cover revenue
+spiking well above the assumed rate (e.g. This Week $128.27 vs. $96.10
+assumed) with nothing in the per-area breakdown below explaining it — the
+area cards, being table-classified from `daily_toast_area_metrics`, don't
+see catering at all. Cause: `actualCoversRevenue` in
+[`server/api/capacity.get.ts`](server/api/capacity.get.ts) summed **every**
+`category='revenue'` account for its numerator, so a single ~$24,605
+catering booking for the week (real, posted to `4200 Catering Income`
+sub-accounts, entered into Toast) landed in the per-cover numerator with no
+matching Toast covers in the denominator, inflating the whole page's
+$/cover.
+
+- **Fixed** by switching that query from `a.category = 'revenue'` to the
+  `CORE_REVENUE_ACCOUNT_NUMBERS` allowlist
+  ([`server/utils/core-revenue.ts`](server/utils/core-revenue.ts)) — the
+  same "core dine-in food/beverage only, excludes Event Sales 4100s /
+  Catering 4200s / Retail 4300s / Other Service Income 4400" definition the
+  Dashboard's Weekly Performance section and the Historical tab already
+  use. The assumed side (`assumedForRange`/`assumedAvgCheck`, built from
+  `capacity_areas`/`capacity_area_seasonality`) was already catering-free
+  and is unchanged; the per-area breakdown was already table-scoped and is
+  unchanged.
+- **Verified in local dev** (asOfDate 2026-07-28 — local synced data has no
+  catering activity in-window, so the numeric shift there is tiny: the
+  query now also drops a $110 `4035 Late Cancellation & No-Show Fees`
+  amount from July). The catering-sized impact only shows against
+  production data. `/api/capacity` and `/capacity` both still return 200
+  with sane numbers; the mechanism (allowlist vs. category) is the same
+  one already proven on the other pages.
+- **Not yet deployed to production** — plain code change, needs `fly
+  deploy`; no schema or backfill change.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`
