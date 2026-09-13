@@ -31,5 +31,18 @@ export default defineEventHandler((event) => {
     GROUP BY account_id
   `).all(start, end) as { accountId: number, amount: number }[]
 
-  return { year, month, accounts: rows }
+  // The latest date this month that has any real labor posting. Labor is
+  // dominated by payroll paid every Friday — a lump on the pay date, not a
+  // cost that accrues evenly across the month — so the Edit Budget page
+  // prorates its labor projection by how many of the month's Friday payroll
+  // runs have already landed (Fridays on or before this date) rather than by
+  // elapsed operating days. null when no labor has synced for the month yet.
+  const laborLatest = db.prepare(`
+    SELECT MAX(dli.date) AS latest
+    FROM daily_line_items dli
+    JOIN accounts a ON a.id = dli.account_id
+    WHERE dli.date BETWEEN ? AND ? AND a.category = 'labor'
+  `).get(start, end) as { latest: string | null }
+
+  return { year, month, accounts: rows, laborLatestDate: laborLatest.latest ?? null }
 })

@@ -116,21 +116,28 @@ function onAmountBlur(accountId: number) {
 // actuals-by-account.get.ts.
 const selectedMonthAccountActuals = ref<Record<number, number>>({})
 const selectedMonthHasActuals = ref(false)
+// Latest real labor posting date in the selected month (see
+// laborPayrollFraction below and actuals-by-account.get.ts) — drives the
+// payroll-cycle-aware labor projection, replacing the straight-line one.
+const selectedMonthLaborLatestDate = ref<string | null>(null)
 watch(editMonth, async (month) => {
   if (!isMonthClosed(YEAR, month) && !isMonthCurrent(YEAR, month)) {
     selectedMonthAccountActuals.value = {}
     selectedMonthHasActuals.value = false
+    selectedMonthLaborLatestDate.value = null
     return
   }
   try {
-    const result = await $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+    const result = await $fetch<{ accounts: { accountId: number, amount: number }[], laborLatestDate: string | null }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
     const map: Record<number, number> = {}
     for (const a of result.accounts) map[a.accountId] = a.amount
     selectedMonthAccountActuals.value = map
     selectedMonthHasActuals.value = result.accounts.length > 0
+    selectedMonthLaborLatestDate.value = result.laborLatestDate
   } catch {
     selectedMonthAccountActuals.value = {}
     selectedMonthHasActuals.value = false
+    selectedMonthLaborLatestDate.value = null
   }
 }, { immediate: true })
 
@@ -144,14 +151,12 @@ watch(editMonth, async (month) => {
 function accountsForCategory(cat: Category) {
   const all = (editMonthData.value?.accounts || []).filter(a => a.category === cat)
   // The $0-row filter (leafVisible/accountVisible above) is meant to
-  // declutter, not to hide an entire category — but a category whose
-  // previous month has no stored amounts anywhere (e.g. Labor/Opex/Other
-  // budgets got cleared or never entered) can filter every single one of
-  // its accounts out, leaving the expanded category looking empty/broken
-  // instead of showing an editable tree. Same escape hatch as the
-  // whole-month one at previousMonthAccountsById.value.size === 0 above,
-  // just scoped to "would this category end up with nothing," not "is the
-  // whole previous month missing."
+  // declutter, not to hide an entire category — but a category with no
+  // stored amounts anywhere yet (e.g. a future month's Labor/Opex/Other
+  // never entered) can filter every single one of its accounts out,
+  // leaving the expanded category looking empty/broken instead of showing
+  // an editable tree. Falls back to showing everything unfiltered in that
+  // case.
   const visible = all.filter(accountVisible)
   return (visible.length > 0 ? visible : all).sort((a, b) => {
     const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
@@ -253,21 +258,68 @@ function categoryActualTotal(cat: Category): number {
   return roots.reduce((sum, a) => sum + computedAccountActual(a), 0)
 }
 
-// Straight-line projection of the current month's final total: actual so
-// far, scaled up by how much of the month (by Tue-Sun operating days, see
-// monthExpectedFraction below) has elapsed. A simple scalar multiply, so
+// Projection of the current month's final total: actual so far, scaled up
+// by the fraction of the month elapsed. A simple scalar multiply, so
 // projecting a parent's already-summed actual gives the same result as
 // summing each child's own projection — no separate recursive walk needed.
-function projectFromActual(actual: number): number {
-  if (monthExpectedFraction.value <= 0) return actual
-  return actual / monthExpectedFraction.value
+// Most categories use the Tue-Sun operating-day fraction
+// (monthExpectedFraction). Labor is the exception: it's dominated by
+// payroll paid every Friday — a lump on the pay date, not a cost that
+// accrues evenly across operating days — so straight-line proration badly
+// understates the month's last payroll run before it posts (a restaurant
+// 92% through its operating days can still have a quarter of the month's
+// payroll unpaid). Labor instead prorates by payroll cycles
+// (laborPayrollFraction). Same class of fix as opexLumpSumPostingDays for
+// rent/loan interest in useBudgetData.ts.
+function projectFromActual(actual: number, category?: Category): number {
+  const fraction = (category === 'labor' && laborPayrollFraction.value !== null)
+    ? laborPayrollFraction.value
+    : monthExpectedFraction.value
+  if (fraction <= 0) return actual
+  return actual / fraction
 }
 function categoryProjectedTotal(cat: Category): number {
-  return projectFromActual(categoryActualTotal(cat))
+  return projectFromActual(categoryActualTotal(cat), cat)
 }
 function computedAccountProjected(acc: BudgetAccount): number {
-  return projectFromActual(computedAccountActual(acc))
+  return projectFromActual(computedAccountActual(acc), acc.category)
 }
+
+// Payroll-cycle fraction of the current month elapsed, for labor only:
+// (Friday payroll runs already posted) / (total Fridays in the month). On
+// cash basis every Friday payment that lands in the calendar month is a
+// cost of that month, so total Fridays is the right denominator. "Posted"
+// is derived from real data, not assumed — it's the count of Fridays on or
+// before the latest actual labor posting in daily_line_items
+// (selectedMonthLaborLatestDate), which tolerates a run that posts a day
+// early or late rather than requiring an exact Friday match. null (→ fall
+// back to straight-line) when the month has no labor synced yet, or when
+// not even the first Friday's run has landed (nothing to extrapolate from).
+function countFridays(start: Date, end: Date): number {
+  let count = 0
+  const d = new Date(start)
+  while (d <= end) {
+    if (d.getDay() === 5) count++ // Date#getDay(): 5 = Friday
+    d.setDate(d.getDate() + 1)
+  }
+  return count
+}
+const laborPayrollBasis = computed<{ posted: number, total: number } | null>(() => {
+  if (viewingAnnualTotal.value || !isMonthCurrent(YEAR, editMonth.value)) return null
+  const latest = selectedMonthLaborLatestDate.value
+  if (!latest) return null
+  const monthStart = new Date(YEAR, editMonth.value - 1, 1)
+  const monthEnd = new Date(YEAR, editMonth.value, 0)
+  const total = countFridays(monthStart, monthEnd)
+  if (total === 0) return null
+  const [ly, lm, ld] = latest.split('-').map(Number)
+  const posted = countFridays(monthStart, new Date(ly, lm - 1, ld))
+  if (posted < 1) return null
+  return { posted, total }
+})
+const laborPayrollFraction = computed<number | null>(() =>
+  laborPayrollBasis.value ? laborPayrollBasis.value.posted / laborPayrollBasis.value.total : null
+)
 
 // Shared budget-vs-actual comparison used by both the per-line-item table
 // and the summary card below, for any category (leaf account rows reuse
@@ -347,45 +399,16 @@ const monthExpectedFraction = computed(() => {
 })
 
 // ---- Row filter: hide $0 rows ---------------------------------------------
-// A single adaptive toggle rather than two independent ones (simplified
-// 2026-07-28 — two side-by-side toggles read as confusing about which one
-// to use when). What "$0" means depends on the month being viewed, since a
-// fresh unbudgeted month's own values are all null and filtering by them
-// would hide nearly everything:
-//   - closed month: filters by that month's own stored budget amount — the
-//     month is final, so its own $0 rows meaningfully mean "not used."
-//   - future month: filters by the *previous* month's amount instead,
-//     since the future month has nothing of its own yet; the previous
-//     month is the best available signal of which accounts typically get
-//     budgeted.
-//   - current (in-progress) month: treated like a future month (filter by
-//     previous month) for its first two weeks, since its own budget may
-//     still be mid-setup and an entered $0 isn't yet a reliable signal;
-//     after that it's treated like a closed month (filter by its own
-//     value). "Two weeks" is real calendar days elapsed, not synced
-//     actuals — simpler, and sync lag is normally hours, not days.
-// Pure declutter — never affects what's summed into a total
-// (categoryComputedTotal/computedAccountAmount always include every
-// account regardless of visibility) or what's saved. Compares against
-// *stored* amounts, not live unsaved edits, so a row never vanishes
-// mid-edit just because you cleared it to retype a number.
+// Simplified 2026-09-13 (was an adaptive own/previous-month toggle before
+// this — see git history) — just filters by the selected month's own
+// stored budget amount, whichever month that is. Pure declutter — never
+// affects what's summed into a total (categoryComputedTotal/
+// computedAccountAmount always include every account regardless of
+// visibility) or what's saved. Compares against *stored* amounts, not live
+// unsaved edits, so a row never vanishes mid-edit just because you cleared
+// it to retype a number.
 const hideZeroRows = ref(true)
-const filterMode = computed<'own' | 'previous'>(() => {
-  // The annual total has no "previous" period to fall back to — it's
-  // always judged against its own value, exactly like a closed month.
-  if (viewingAnnualTotal.value) return 'own'
-  if (selectedMonthClosed.value) return 'own'
-  if (selectedMonthIsCurrent.value) return new Date().getDate() >= 14 ? 'own' : 'previous'
-  return 'previous'
-})
 const previousMonthLabel = computed(() => editMonth.value > 1 ? MONTH_NAMES[editMonth.value - 2] : null)
-const previousMonthAccountsById = computed(() => {
-  const map = new Map<number, BudgetAccount>()
-  const prevData = editMonth.value > 1 ? monthlyData.value[editMonth.value - 2] : null
-  if (!prevData) return map
-  for (const acc of prevData.accounts) map.set(acc.accountId, acc)
-  return map
-})
 
 function hasNoStoredAmount(amount: number | null): boolean {
   return amount === null || amount === 0
@@ -393,10 +416,6 @@ function hasNoStoredAmount(amount: number | null): boolean {
 
 function leafVisible(acc: BudgetAccount): boolean {
   if (!hideZeroRows.value) return true
-  if (filterMode.value === 'previous') {
-    if (previousMonthAccountsById.value.size === 0) return true
-    return !hasNoStoredAmount(previousMonthAccountsById.value.get(acc.accountId)?.amount ?? null)
-  }
   return !hasNoStoredAmount(acc.amount)
 }
 
@@ -1377,10 +1396,8 @@ function exportForQuickBooks() {
             <div class="section-label">Edit Monthly Budget</div>
             <button
               type="button" class="filter-tab" :class="{ active: hideZeroRows }"
-              :disabled="filterMode === 'previous' && !previousMonthLabel"
-              :title="filterMode === 'previous' && !previousMonthLabel ? 'No prior month to compare' : undefined"
               @click="hideZeroRows = !hideZeroRows"
-            >{{ hideZeroRows ? 'Show' : 'Hide' }} {{ filterMode === 'previous' ? `rows with $0 in ${previousMonthLabel || '—'}` : '$0 rows' }}</button>
+            >{{ hideZeroRows ? 'Show' : 'Hide' }} $0 rows</button>
           </div>
           <div class="month-tabs">
             <button
@@ -1552,6 +1569,14 @@ function exportForQuickBooks() {
                       <span v-else-if="cogsRecomputeStatus !== 'done' && cogsHasComparableData" class="chip neutral">Already tracking the trailing average</span>
                       <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
                       <span v-if="cogsRecomputeStatus === 'error'" class="chip warning">{{ cogsRecomputeMessage }}</span>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="cat === 'labor' && laborPayrollBasis" class="cogs-avg-row">
+                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
+                    <div class="section-note">
+                      Labor is paid as a lump each Friday, not spread evenly across the month — so this projection prorates by payroll cycles, not elapsed days.
+                      <strong>{{ laborPayrollBasis.posted }} of {{ laborPayrollBasis.total }}</strong> Friday payroll runs have posted so far this month.
                     </div>
                   </td>
                 </tr>
