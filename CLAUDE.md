@@ -3484,9 +3484,45 @@ $/cover.
 - **Not yet deployed to production** — plain code change, needs `fly
   deploy`; no schema or backfill change.
 
+## Nightly Margin's Marginal/Fully-loaded toggle removed — 2026-09-13
+
+The Marginal/Fully-loaded toggle added to
+[`app/pages/nightly-margin.vue`](app/pages/nightly-margin.vue) on 2026-08-25
+(never previously documented in this file — a pre-existing gap, closed by
+adding this page to "Where to look" below) was raised by the user as
+unhelpful: Marginal judges a night against variable (hourly) labor + COGS
+only, deliberately excluding fixed labor & benefits (paid whether the
+restaurant opens or not) — which is *by design* almost always positive ("a
+restaurant only opens on nights it expects to clear that low a bar," per
+the page's own code comment), so in practice it made every night look
+"worth opening" with no real day-to-day discriminating power. Fully-loaded
+(judging a night against its full share of costs, including fixed labor &
+benefits) was the one actually useful for telling a strong night from a
+merely-adequate one.
+
+**The toggle is gone — the page now only shows the fully-loaded view.**
+Rather than lose the one thing Marginal's underlying comparison *was* good
+for — flagging the rare night that didn't even clear that low a bar — a
+night where revenue falls below variable labor + COGS alone now gets its
+own darkest calendar status, `severe`, distinct from and worse than the
+existing `critical` (a fully-loaded loss of 10%+ of revenue, which mostly
+just reflects the normal fixed-cost allocation and isn't nearly as
+alarming). Per this app's own "color + icon + label, never color alone"
+rule (see Design direction above), `severe` isn't just a darker shade — the
+month view prefixes a ⚠ to the cell's dollar figure, the year view's tiny
+mini-cells swap their day number for a bare ⚠ (still recoverable via
+hover), and the legend gets its own "⚠ Didn't cover variable labor + COGS"
+chip. The darker fill itself
+(`color-mix(in srgb, var(--shortfall-deep) 80%, black)`) is a darkened
+shade of the existing `--shortfall-deep` token rather than a new hue, so it
+didn't need a fresh `dataviz` palette validation pass. A dedicated callout
+above the usual fully-loaded shortfall callout names these nights by date
+explicitly, and the per-day hover tooltip adds an explicit warning line
+when it applies.
+
 ## Not yet done
 
-- Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast`
+- Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast` (`npm run db:backfill-toast`
   extended further back, via `fly ssh console`) so the Historical page's
   two indexes show a real multi-year comparison in production the way
   local dev now does — see the Historical tab section above. Deliberately
@@ -3639,3 +3675,5 @@ $/cover.
 - [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast covers/labor-hours backfill (see "Toast POS integration" above); re-run with an extended `--since` 2026-08-12 to reach back through the Mass Ave era for the Historical tab's two indexes
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue)'s "Recompute Revenue from Capacity" section — feeds Capacity's projected Food/Beverage revenue into the Budget tab's real revenue accounts (see "Capacity revenue feeds the Budget tab" above)
 - [`server/api/budget/beverage-revenue-mix.get.ts`](server/api/budget/beverage-revenue-mix.get.ts) — real Beer/Liquor/Wine/Non-Alcoholic revenue split since the location move, used by the Recompute Revenue action above
+- [`app/pages/nightly-margin.vue`](app/pages/nightly-margin.vue) — Nightly Margin: each operating night's estimated fully-loaded profit, with a distinct darkest-red/⚠ flag for a night that didn't even cover variable labor + COGS (route `/nightly-margin`)
+- [`server/api/nightly-margin.get.ts`](server/api/nightly-margin.get.ts) — Nightly Margin's data route (trailing hourly-labor rate, COGS%, and fixed-labor-per-night, applied per day)

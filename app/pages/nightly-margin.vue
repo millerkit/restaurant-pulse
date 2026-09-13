@@ -40,31 +40,31 @@ function fmtMoneySigned(n: number): string {
 const period = ref<Period>('month')
 const pageTitle = computed(() => period.value === 'month' ? "This Month's Nightly Margin" : "This Year's Nightly Margin")
 
-// Marginal: judged against variable (hourly) labor + COGS only — "was
-// tonight worth being open." Full: also includes this night's flat share
-// of fixed labor & benefits — "is this night pulling its weight toward
-// overhead." Raised by the user 2026-08-21 after seeing every night read
-// green under Marginal alone (expected — a restaurant only opens on nights
-// it expects to clear that low a bar — but not useful for telling a strong
-// night from a merely-adequate one, which needs the fuller view).
-type ViewMode = 'marginal' | 'full'
-const viewMode = ref<ViewMode>('marginal')
-function costFor(d: MarginDayLocal, mode: ViewMode): number {
-  return mode === 'marginal' ? d.comparison : d.comparison + d.estFixedLabor
+// Judged against each night's full cost — variable (hourly) labor + COGS
+// plus its even share of fixed labor & benefits — "is this night pulling
+// its weight toward overhead." A separate "Marginal" view (judged against
+// variable cost alone — "was tonight worth being open") used to sit behind
+// a toggle here, but was removed 2026-09-13: it read green on almost every
+// night by design (a restaurant only opens on nights it expects to clear
+// that low a bar), which made it useless day-to-day. The one thing it WAS
+// good for — flagging the rare night that didn't even cover its own
+// variable cost — is kept below as a distinct "severe" status instead of
+// losing that signal along with the toggle (see `variableShortfall` in
+// `dayStatus`).
+function costFor(d: MarginDayLocal): number {
+  return d.comparison + d.estFixedLabor
 }
 
 type MarginDayLocal = { date: string, actual: number, comparison: number, laborHours: number, estVariableLabor: number, estFixedLabor: number, estCogs: number }
 const marginDaysMap = computed(() => new Map((data.value?.margin[period.value]?.days ?? []).map((d: MarginDayLocal) => [d.date, d])))
 
-type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
+type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'severe' | 'no-data' | 'future'
 type DayCell = { date: string, day: number, status: DayStatus, profit: number | null, marginPct: number | null, detail: MarginDayLocal | null }
 // Bands are real profit-margin % of revenue (profit / revenue), not the
 // old profit / cost "markup" framing — checked against this restaurant's
-// real distribution before picking these (2026-08-21): Marginal mode's
-// real nights run roughly -10% to +86% (median ~59%), Full mode's run
-// roughly -46% to +74% (median ~46%, ~25% of nights actually negative) —
-// so a single set of absolute breakpoints spreads meaningfully across both
-// modes' real data rather than needing a different scale per mode.
+// real fully-loaded distribution before picking these (2026-08-21): real
+// nights run roughly -46% to +74% (median ~46%, ~25% of nights actually
+// negative).
 function marginStatus(marginPct: number): DayStatus {
   return marginPct < -10 ? 'critical' : marginPct < 0 ? 'bad' : marginPct < 20 ? 'neutral' : 'good'
 }
@@ -73,22 +73,36 @@ function dayStatus(dateStr: string): DayCell {
   if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', profit: null, marginPct: null, detail: null }
   const entry = marginDaysMap.value.get(dateStr) as MarginDayLocal | undefined
   if (!entry || entry.actual === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', profit: null, marginPct: null, detail: null }
-  const cost = costFor(entry, viewMode.value)
+  const cost = costFor(entry)
   const profit = entry.actual - cost
   const marginPct = (profit / entry.actual) * 100
-  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: marginStatus(marginPct), profit, marginPct, detail: entry }
+  // Didn't even cover variable (hourly) labor + COGS — a distinct, rarer,
+  // and worse signal than an ordinary fully-loaded loss (which mostly just
+  // reflects the normal fixed-cost allocation), so it overrides the usual
+  // profit-margin band with its own darkest status.
+  const variableShortfall = entry.actual < entry.comparison
+  const status = variableShortfall ? 'severe' : marginStatus(marginPct)
+  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, profit, marginPct, detail: entry }
 }
 function showMiniDayNum(status: DayStatus): boolean {
-  return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical'
+  return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical' || status === 'severe'
 }
 function cellTitle(cell: DayCell): string | undefined {
   if (!cell.detail) return undefined
   const d = cell.detail
-  const marginalProfit = d.actual - d.comparison
-  const fullProfit = marginalProfit - d.estFixedLabor
-  const marginalNote = viewMode.value === 'marginal' ? ' (judged below)' : ''
-  const fullNote = viewMode.value === 'full' ? ' (judged below)' : ' — for context, not counted above'
-  return `Revenue: ${fmtMoney0(d.actual)}\nEst. variable (hourly) labor: ${fmtMoney0(d.estVariableLabor)} (${d.laborHours.toFixed(1)}h)\nEst. food + beverage COGS: ${fmtMoney0(d.estCogs)}\n———\nMarginal profit${marginalNote}: ${fmtMoneySigned(marginalProfit)}\nFixed labor & benefits share (paid whether open or not): ${fmtMoney0(d.estFixedLabor)}\nFull profit after fixed labor & benefits${fullNote}: ${fmtMoneySigned(fullProfit)}`
+  const variableProfit = d.actual - d.comparison
+  const fullProfit = variableProfit - d.estFixedLabor
+  const lines = [
+    `Revenue: ${fmtMoney0(d.actual)}`,
+    `Est. variable (hourly) labor: ${fmtMoney0(d.estVariableLabor)} (${d.laborHours.toFixed(1)}h)`,
+    `Est. food + beverage COGS: ${fmtMoney0(d.estCogs)}`,
+    '———',
+    `Variable profit (revenue − variable labor − COGS): ${fmtMoneySigned(variableProfit)}`,
+    `Fixed labor & benefits share (paid whether open or not): ${fmtMoney0(d.estFixedLabor)}`,
+    `Full profit after fixed labor & benefits (judged below): ${fmtMoneySigned(fullProfit)}`
+  ]
+  if (variableProfit < 0) lines.push('⚠ Revenue did not cover even variable (hourly) labor + COGS tonight.')
+  return lines.join('\n')
 }
 function buildMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
@@ -109,17 +123,31 @@ const calendarView = computed<CalendarView | null>(() => {
   return { kind: 'year', months: Array.from({ length: 12 }, (_, i) => buildMonthGrid(data.value!.asOfYear, i + 1)) }
 })
 
-const VIEW_COST_LABEL: Record<ViewMode, string> = { marginal: 'their own variable (hourly) labor + COGS', full: 'their own variable labor + COGS + fixed labor & benefits share' }
+const COST_LABEL = 'their own variable labor + COGS + fixed labor & benefits share'
 
 const marginDays = computed(() => (data.value?.margin[period.value]?.days ?? []) as MarginDayLocal[])
-const shortfallDays = computed(() => marginDays.value.filter(d => d.actual < costFor(d, viewMode.value)))
+const shortfallDays = computed(() => marginDays.value.filter(d => d.actual < costFor(d)))
 const marginFlagged = computed(() => shortfallDays.value.length > 0)
-const shortfallTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (costFor(d, viewMode.value) - d.actual), 0))
+const shortfallTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (costFor(d) - d.actual), 0))
 const marginCallout = computed(() => {
   const total = marginDays.value.length
   const covered = total - shortfallDays.value.length
   if (!total || !marginFlagged.value) return ''
-  return `${covered} of ${total} night${total === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} covered ${VIEW_COST_LABEL[viewMode.value]}. The shortfall is concentrated in ${shortfallDays.value.length} night${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for ${fmtMoney0(shortfallTotal.value)} of the gap.`
+  return `${covered} of ${total} night${total === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} covered ${COST_LABEL}. The shortfall is concentrated in ${shortfallDays.value.length} night${shortfallDays.value.length === 1 ? '' : 's'} below — combined, they account for ${fmtMoney0(shortfallTotal.value)} of the gap.`
+})
+
+// The rare, more alarming case: a night whose revenue didn't even cover
+// variable (hourly) labor + COGS, before fixed labor & benefits are even
+// considered. This is what the old "Marginal" toggle view was actually
+// useful for (see the comment above `costFor`) — kept as its own flagged
+// status instead of a whole second view.
+const variableShortfallDays = computed(() => marginDays.value.filter(d => d.actual < d.comparison))
+const variableShortfallFlagged = computed(() => variableShortfallDays.value.length > 0)
+const variableShortfallCallout = computed(() => {
+  const n = variableShortfallDays.value.length
+  if (!n) return ''
+  const dates = variableShortfallDays.value.map(d => formatWeekdayDate(d.date)).join(', ')
+  return `${n} night${n === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} didn't even cover variable (hourly) labor + COGS — revenue itself fell short of the marginal cost of being open: ${dates}.`
 })
 
 const rates = computed(() => data.value?.rates ?? null)
@@ -140,7 +168,7 @@ const rates = computed(() => data.value?.rates ?? null)
     <template v-else>
       <PageHeader
         :page-name="pageTitle"
-        :description="viewMode === 'marginal' ? `Each operating night's estimated profit above its own variable cost — was it worth being open?` : `Each operating night's estimated profit after also covering its share of fixed labor & benefits`"
+        description="Each operating night's estimated profit after covering variable (hourly) labor, COGS, and its share of fixed labor & benefits"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
       />
@@ -150,14 +178,6 @@ const rates = computed(() => data.value?.rates ?? null)
         <div class="period-tabs">
           <span :class="['period-tab', period === 'month' && 'active']" @click="period = 'month'">Month</span>
           <span :class="['period-tab', period === 'year' && 'active']" @click="period = 'year'">Year</span>
-        </div>
-      </div>
-
-      <div class="drilldown-toggle-bar">
-        <div class="drilldown-toggle-label">View</div>
-        <div class="period-tabs">
-          <span :class="['period-tab', viewMode === 'marginal' && 'active']" @click="viewMode = 'marginal'">Marginal (worth opening?)</span>
-          <span :class="['period-tab', viewMode === 'full' && 'active']" @click="viewMode = 'full'">Fully-loaded (pulling its weight?)</span>
         </div>
       </div>
 
@@ -171,16 +191,14 @@ const rates = computed(() => data.value?.rates ?? null)
       <section v-else>
         <div class="section-head">
           <div class="section-note">
-            Estimated from trailing rates, not exact nightly costs.
-            <template v-if="viewMode === 'marginal'">Judged against hourly labor + COGS only — fixed labor &amp; benefits are paid either way, so they're excluded here (see hover).</template>
-            <template v-else>Also counts each night's share of fixed labor &amp; benefits — a stricter bar than Marginal.</template>
-            Big number = profit; percent = margin. Current rates: ${{ rates!.hourlyLaborRate!.toFixed(2) }}/hr, {{ (rates!.cogsPct! * 100).toFixed(1) }}% COGS, {{ fmtMoney0(rates!.fixedLaborPerNight!) }}/night fixed labor, {{ rates!.operatingNights }} nights.
+            Estimated from trailing rates, not exact nightly costs. Counts each night's variable (hourly) labor, food &amp; beverage COGS, and its even share of fixed labor &amp; benefits. Big number = profit; percent = margin. Current rates: ${{ rates!.hourlyLaborRate!.toFixed(2) }}/hr, {{ (rates!.cogsPct! * 100).toFixed(1) }}% COGS, {{ fmtMoney0(rates!.fixedLaborPerNight!) }}/night fixed labor, {{ rates!.operatingNights }} nights.
           </div>
         </div>
 
         <div v-if="calendarView" class="drill-card">
+          <div v-if="variableShortfallFlagged" class="callout callout-severe">⚠ {{ variableShortfallCallout }}</div>
           <div v-if="marginFlagged" class="callout">{{ marginCallout }}</div>
-          <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All nights this {{ period }} comfortably covered {{ VIEW_COST_LABEL[viewMode] }}.</span></div>
+          <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All nights this {{ period }} comfortably covered {{ COST_LABEL }}.</span></div>
 
           <template v-if="calendarView.kind === 'month'">
             <div class="calendar-weekday-header-row">
@@ -191,7 +209,7 @@ const rates = computed(() => data.value?.rates ?? null)
                 <template v-if="cell">
                   <div class="day-num">{{ cell.day }}</div>
                   <template v-if="cell.profit !== null">
-                    <span class="cell-delta">{{ fmtMoneySigned(cell.profit) }}</span>
+                    <span class="cell-delta">{{ cell.status === 'severe' ? '⚠ ' : '' }}{{ fmtMoneySigned(cell.profit) }}</span>
                     <div class="cell-amount">{{ (cell.marginPct ?? 0).toFixed(0) }}% margin</div>
                   </template>
                 </template>
@@ -205,7 +223,7 @@ const rates = computed(() => data.value?.rates ?? null)
                 <div class="mini-month-label">{{ m.label }}</div>
                 <div class="calendar-grid mini">
                   <div v-for="(cell, idx) in m.cells" :key="idx" :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']" :title="cell ? cellTitle(cell) : undefined">
-                    <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.day }}</span>
+                    <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.status === 'severe' ? '⚠' : cell.day }}</span>
                   </div>
                 </div>
               </div>
@@ -217,6 +235,7 @@ const rates = computed(() => data.value?.rates ?? null)
             <span class="legend-chip neutral">0–20% margin</span>
             <span class="legend-chip bad">Loss, under 10% of revenue</span>
             <span class="legend-chip critical">Loss, 10%+ of revenue</span>
+            <span class="legend-chip severe">⚠ Didn't cover variable labor + COGS</span>
             <span class="legend-chip no-data">No data / closed</span>
           </div>
         </div>
@@ -298,6 +317,11 @@ const rates = computed(() => data.value?.rates ?? null)
   padding: 10px 12px;
   line-height: 1.5;
 }
+.drill-card .callout.callout-severe {
+  color: var(--shortfall-deep);
+  background: color-mix(in srgb, var(--shortfall-deep) 16%, var(--surface-alt));
+  font-weight: 700;
+}
 .section-head { margin-bottom: 10px; }
 .section-note { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 
@@ -339,12 +363,15 @@ const rates = computed(() => data.value?.rates ?? null)
 .calendar-cell.good { background: color-mix(in srgb, var(--good) 45%, var(--surface-alt)); }
 .calendar-cell.bad { background: color-mix(in srgb, var(--shortfall) 45%, var(--surface-alt)); }
 .calendar-cell.critical { background: color-mix(in srgb, var(--shortfall-deep) 45%, var(--surface-alt)); }
+.calendar-cell.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .calendar-cell.good .cell-delta,
 .calendar-cell.good .day-num { color: var(--good); }
 .calendar-cell.bad .cell-delta,
 .calendar-cell.bad .day-num { color: var(--shortfall); }
 .calendar-cell.critical .cell-delta,
 .calendar-cell.critical .day-num { color: var(--shortfall-deep); }
+.calendar-cell.severe .cell-delta,
+.calendar-cell.severe .day-num { color: #fff; }
 
 .year-calendar-grid {
   display: grid;
@@ -357,10 +384,12 @@ const rates = computed(() => data.value?.rates ?? null)
 .calendar-cell.mini.good { background: var(--good); }
 .calendar-cell.mini.bad { background: var(--shortfall); }
 .calendar-cell.mini.critical { background: var(--shortfall-deep); }
+.calendar-cell.mini.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .mini-day-num { font-size: 9px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); }
 .calendar-cell.mini.good .mini-day-num,
 .calendar-cell.mini.bad .mini-day-num,
-.calendar-cell.mini.critical .mini-day-num { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); }
+.calendar-cell.mini.critical .mini-day-num,
+.calendar-cell.mini.severe .mini-day-num { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); }
 
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; border-top: 1px solid var(--hair); }
 .legend-chip {
@@ -374,5 +403,6 @@ const rates = computed(() => data.value?.rates ?? null)
 .legend-chip.good { color: var(--good); background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
 .legend-chip.bad { color: var(--shortfall); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
 .legend-chip.critical { color: var(--shortfall-deep); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
+.legend-chip.severe { color: #fff; background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
 </style>
