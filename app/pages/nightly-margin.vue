@@ -59,7 +59,11 @@ type MarginDayLocal = { date: string, actual: number, comparison: number, laborH
 const marginDaysMap = computed(() => new Map((data.value?.margin[period.value]?.days ?? []).map((d: MarginDayLocal) => [d.date, d])))
 
 type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'severe' | 'no-data' | 'future'
-type DayCell = { date: string, day: number, status: DayStatus, profit: number | null, marginPct: number | null, detail: MarginDayLocal | null }
+// A hover-card row: label/value pair, table-aligned via a 2-col CSS grid.
+// `strong` bumps weight+size for the one number worth scanning for; `tone`
+// colors the value good/bad the same way the rest of this page's chips do.
+type TipRow = { label: string, value: string, strong?: boolean, tone?: 'good' | 'bad' }
+type DayCell = { date: string, day: number, status: DayStatus, profit: number | null, marginPct: number | null, detail: MarginDayLocal | null, tip: TipRow[] | null }
 // Bands are real profit-margin % of revenue (profit / revenue), not the
 // old profit / cost "markup" framing — checked against this restaurant's
 // real fully-loaded distribution before picking these (2026-08-21): real
@@ -68,11 +72,23 @@ type DayCell = { date: string, day: number, status: DayStatus, profit: number | 
 function marginStatus(marginPct: number): DayStatus {
   return marginPct < -10 ? 'critical' : marginPct < 0 ? 'bad' : marginPct < 20 ? 'neutral' : 'good'
 }
+function buildTip(status: DayStatus, profit: number, marginPct: number, d: MarginDayLocal): TipRow[] {
+  const rows: TipRow[] = []
+  if (status === 'severe') rows.push({ label: '⚠', value: 'Under variable cost', strong: true, tone: 'bad' })
+  rows.push(
+    { label: 'Revenue', value: fmtMoney0(d.actual) },
+    { label: 'Labor', value: fmtMoney0(d.estVariableLabor) },
+    { label: 'COGS', value: fmtMoney0(d.estCogs) },
+    { label: 'Fixed', value: fmtMoney0(d.estFixedLabor) },
+    { label: 'Profit', value: `${fmtMoneySigned(profit)} (${marginPct.toFixed(0)}%)`, strong: true, tone: profit >= 0 ? 'good' : 'bad' }
+  )
+  return rows
+}
 function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
-  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', profit: null, marginPct: null, detail: null }
+  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', profit: null, marginPct: null, detail: null, tip: null }
   const entry = marginDaysMap.value.get(dateStr) as MarginDayLocal | undefined
-  if (!entry || entry.actual === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', profit: null, marginPct: null, detail: null }
+  if (!entry || entry.actual === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', profit: null, marginPct: null, detail: null, tip: null }
   const cost = costFor(entry)
   const profit = entry.actual - cost
   const marginPct = (profit / entry.actual) * 100
@@ -82,27 +98,14 @@ function dayStatus(dateStr: string): DayCell {
   // profit-margin band with its own darkest status.
   const variableShortfall = entry.actual < entry.comparison
   const status = variableShortfall ? 'severe' : marginStatus(marginPct)
-  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, profit, marginPct, detail: entry }
+  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, profit, marginPct, detail: entry, tip: buildTip(status, profit, marginPct, entry) }
 }
 function showMiniDayNum(status: DayStatus): boolean {
   return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical' || status === 'severe'
 }
-function cellTitle(cell: DayCell): string | undefined {
-  if (!cell.detail) return undefined
-  const d = cell.detail
-  const variableProfit = d.actual - d.comparison
-  const fullProfit = variableProfit - d.estFixedLabor
-  const lines = [
-    `Revenue: ${fmtMoney0(d.actual)}`,
-    `Est. variable (hourly) labor: ${fmtMoney0(d.estVariableLabor)} (${d.laborHours.toFixed(1)}h)`,
-    `Est. food + beverage COGS: ${fmtMoney0(d.estCogs)}`,
-    '———',
-    `Variable profit (revenue − variable labor − COGS): ${fmtMoneySigned(variableProfit)}`,
-    `Fixed labor & benefits share (paid whether open or not): ${fmtMoney0(d.estFixedLabor)}`,
-    `Full profit after fixed labor & benefits (judged below): ${fmtMoneySigned(fullProfit)}`
-  ]
-  if (variableProfit < 0) lines.push('⚠ Revenue did not cover even variable (hourly) labor + COGS tonight.')
-  return lines.join('\n')
+const tooltip = useHoverTooltip<TipRow[]>()
+function setTooltipEl(el: unknown) {
+  tooltip.tipRef.value = el as HTMLElement | null
 }
 function buildMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
@@ -205,7 +208,13 @@ const rates = computed(() => data.value?.rates ?? null)
               <span v-for="wd in WEEKDAY_LABELS" :key="wd">{{ wd }}</span>
             </div>
             <div class="calendar-grid">
-              <div v-for="(cell, idx) in calendarView.grid.cells" :key="idx" :class="['calendar-cell', cell ? cell.status : 'blank']" :title="cell ? cellTitle(cell) : undefined">
+              <div
+                v-for="(cell, idx) in calendarView.grid.cells"
+                :key="idx"
+                :class="['calendar-cell', cell ? cell.status : 'blank']"
+                @mouseenter="tooltip.show($event, cell?.tip)"
+                @mouseleave="tooltip.hide()"
+              >
                 <template v-if="cell">
                   <div class="day-num">{{ cell.day }}</div>
                   <template v-if="cell.profit !== null">
@@ -222,7 +231,13 @@ const rates = computed(() => data.value?.rates ?? null)
               <div v-for="m in calendarView.months" :key="m.month" class="mini-month">
                 <div class="mini-month-label">{{ m.label }}</div>
                 <div class="calendar-grid mini">
-                  <div v-for="(cell, idx) in m.cells" :key="idx" :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']" :title="cell ? cellTitle(cell) : undefined">
+                  <div
+                    v-for="(cell, idx) in m.cells"
+                    :key="idx"
+                    :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']"
+                    @mouseenter="tooltip.show($event, cell?.tip)"
+                    @mouseleave="tooltip.hide()"
+                  >
                     <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.status === 'severe' ? '⚠' : cell.day }}</span>
                   </div>
                 </div>
@@ -249,6 +264,15 @@ const rates = computed(() => data.value?.rates ?? null)
         <span>Data sources: QuickBooks Online + Toast POS, synced nightly. Estimated cost, not a measured figure — see the note above.</span>
       </footer>
     </template>
+
+    <Teleport to="body">
+      <div v-if="tooltip.rows.value" :ref="setTooltipEl" class="hover-tip" :style="tooltip.style.value">
+        <template v-for="(row, i) in tooltip.rows.value" :key="i">
+          <span :class="['tip-label', row.strong && 'strong']">{{ row.label }}</span>
+          <span :class="['tip-value', row.strong && 'strong', row.tone]">{{ row.value }}</span>
+        </template>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -405,4 +429,31 @@ const rates = computed(() => data.value?.rates ?? null)
 .legend-chip.critical { color: var(--shortfall-deep); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
 .legend-chip.severe { color: #fff; background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
+
+/* ---------- hover-card tooltip: a single instance, teleported to <body>
+   and positioned via useHoverTooltip's clamped getBoundingClientRect math,
+   so it can never clip off-screen the way a per-cell `position: absolute`
+   tooltip did for cells in the rightmost column. ---------- */
+.hover-tip {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 12px;
+  row-gap: 3px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1000;
+}
+.hover-tip .tip-label { color: var(--ink-3); font-weight: 600; text-align: left; }
+.hover-tip .tip-value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); }
+.hover-tip .tip-label.strong,
+.hover-tip .tip-value.strong { font-weight: 800; font-size: 12px; }
+.hover-tip .tip-value.good { color: var(--good); }
+.hover-tip .tip-value.bad { color: var(--shortfall); }
 </style>

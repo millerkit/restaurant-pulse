@@ -44,24 +44,37 @@ const pageTitle = computed(() => period.value === 'month' ? 'This Month’s Reve
 
 const revenueDaysMap = computed(() => new Map((data.value?.revenue[period.value]?.days ?? []).map(d => [d.date, d])))
 type DayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
-type DayCell = { date: string, day: number, status: DayStatus, deltaPct: number | null, actual: number | null, comparison: number | null }
+// A hover-card row: label/value pair, table-aligned via a 2-col CSS grid.
+// `strong` bumps weight+size for the one number worth scanning for; `tone`
+// colors the value good/bad the same way the rest of this page's chips do.
+type TipRow = { label: string, value: string, strong?: boolean, tone?: 'good' | 'bad' }
+type DayCell = { date: string, day: number, status: DayStatus, deltaPct: number | null, actual: number | null, comparison: number | null, tip: TipRow[] | null }
+function buildTip(actual: number, comparison: number, deltaPct: number): TipRow[] {
+  const shortLabel = revenueComparisonShortLabel.value
+  const capShortLabel = shortLabel.charAt(0).toUpperCase() + shortLabel.slice(1)
+  return [
+    { label: 'Revenue', value: `$${Math.round(actual).toLocaleString()}` },
+    { label: capShortLabel, value: `$${Math.round(comparison).toLocaleString()}` },
+    { label: `vs. ${shortLabel}`, value: `${deltaPct >= 0 ? '+' : '−'}${Math.abs(deltaPct).toFixed(0)}%`, strong: true, tone: deltaPct >= 0 ? 'good' : 'bad' }
+  ]
+}
 // A day within ±5% of its weekday goal reads as "normal fluctuation," not a
 // signal — below that, red; above, green. -18.75% mirrors the same
 // "critical" cutoff the old ranked list used, so a truly bad day still
 // stands out from a merely-soft one.
 function dayStatus(dateStr: string): DayCell {
   const asOf = data.value?.asOfDate
-  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null }
+  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null, tip: null }
   const entry = revenueDaysMap.value.get(dateStr)
   // No entry means either no target exists for this day (before the
   // location move, or no weekly_revenue_benchmark configured — see
   // pl.get.ts) or a $0 goal, which can't support a percentage either way.
   // Rendered the same as "no data" — either way there's nothing meaningful
   // to compare.
-  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null }
+  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null, tip: null }
   const deltaPct = ((entry.actual - entry.comparison) / entry.comparison) * 100
   const status: DayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
-  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison }
+  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison, tip: buildTip(entry.actual, entry.comparison, deltaPct) }
 }
 // Year-view mini-cells get a day number only when there's a real result to
 // label — good/neutral/bad/critical. no-data and future stay bare (a
@@ -71,6 +84,10 @@ function dayStatus(dateStr: string): DayCell {
 // this list — no separate Monday check needed.
 function showMiniDayNum(status: DayStatus): boolean {
   return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical'
+}
+const tooltip = useHoverTooltip<TipRow[]>()
+function setTooltipEl(el: unknown) {
+  tooltip.tipRef.value = el as HTMLElement | null
 }
 function buildMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
@@ -155,7 +172,13 @@ const revenueCallout = computed(() => {
               <span v-for="wd in WEEKDAY_LABELS" :key="wd">{{ wd }}</span>
             </div>
             <div class="calendar-grid">
-              <div v-for="(cell, idx) in calendarView.grid.cells" :key="idx" :class="['calendar-cell', cell ? cell.status : 'blank']">
+              <div
+                v-for="(cell, idx) in calendarView.grid.cells"
+                :key="idx"
+                :class="['calendar-cell', cell ? cell.status : 'blank']"
+                @mouseenter="tooltip.show($event, cell?.tip)"
+                @mouseleave="tooltip.hide()"
+              >
                 <template v-if="cell">
                   <div class="day-num">{{ cell.day }}</div>
                   <template v-if="cell.actual !== null">
@@ -172,7 +195,13 @@ const revenueCallout = computed(() => {
               <div v-for="m in calendarView.months" :key="m.month" class="mini-month">
                 <div class="mini-month-label">{{ m.label }}</div>
                 <div class="calendar-grid mini">
-                  <div v-for="(cell, idx) in m.cells" :key="idx" :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']">
+                  <div
+                    v-for="(cell, idx) in m.cells"
+                    :key="idx"
+                    :class="['calendar-cell', 'mini', cell ? cell.status : 'blank']"
+                    @mouseenter="tooltip.show($event, cell?.tip)"
+                    @mouseleave="tooltip.hide()"
+                  >
                     <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.day }}</span>
                   </div>
                 </div>
@@ -198,6 +227,15 @@ const revenueCallout = computed(() => {
         <span>Data source: QuickBooks Online, synced nightly</span>
       </footer>
     </template>
+
+    <Teleport to="body">
+      <div v-if="tooltip.rows.value" :ref="setTooltipEl" class="hover-tip" :style="tooltip.style.value">
+        <template v-for="(row, i) in tooltip.rows.value" :key="i">
+          <span :class="['tip-label', row.strong && 'strong']">{{ row.label }}</span>
+          <span :class="['tip-value', row.strong && 'strong', row.tone]">{{ row.value }}</span>
+        </template>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -342,4 +380,31 @@ const revenueCallout = computed(() => {
 .legend-chip.bad { color: var(--shortfall); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
 .legend-chip.critical { color: var(--shortfall-deep); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
 .legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
+
+/* ---------- hover-card tooltip: a single instance, teleported to <body>
+   and positioned via useHoverTooltip's clamped getBoundingClientRect math,
+   so it can never clip off-screen the way a per-cell `position: absolute`
+   tooltip did for cells in the rightmost column. ---------- */
+.hover-tip {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 12px;
+  row-gap: 3px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1000;
+}
+.hover-tip .tip-label { color: var(--ink-3); font-weight: 600; text-align: left; }
+.hover-tip .tip-value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); }
+.hover-tip .tip-label.strong,
+.hover-tip .tip-value.strong { font-weight: 800; font-size: 12px; }
+.hover-tip .tip-value.good { color: var(--good); }
+.hover-tip .tip-value.bad { color: var(--shortfall); }
 </style>
