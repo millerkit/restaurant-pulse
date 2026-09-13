@@ -3522,7 +3522,7 @@ when it applies.
 
 ## Not yet done
 
-- Running the production Toast covers backfill (`npm run db:backfill-toast` (`npm run db:backfill-toast` (`npm run db:backfill-toast`
+- Running the production Toast covers backfill (`npm run db:backfill-toast`
   extended further back, via `fly ssh console`) so the Historical page's
   two indexes show a real multi-year comparison in production the way
   local dev now does — see the Historical tab section above. Deliberately
