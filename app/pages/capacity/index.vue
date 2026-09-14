@@ -204,7 +204,13 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
           </div>
         </div>
 
-        <!-- By area: average covers/night and per-cover spend, actual vs. projected -->
+        <!-- By area: average covers/night and per-cover spend, actual vs. projected.
+             Same period as the month-detail card directly above (areaBreakdownForMonth
+             shares that card's startIso/endIso, capped at asOfDate) — the label here
+             says so explicitly rather than relying on visual proximity alone. -->
+        <div v-if="selectedMonthData" class="area-section-head">
+          By Area &middot; {{ MONTH_NAMES[selectedMonthData.month - 1] }} {{ data.asOfYear }}{{ selectedMonthData.isCurrent ? ' (to date)' : '' }}
+        </div>
         <div class="area-grid">
           <div v-for="a in (selectedMonthData?.areaBreakdown ?? [])" :key="a.areaId" class="assumption-card area-card">
             <div class="card-head">
@@ -298,7 +304,17 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
 .month-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
 
 /* ---------- per-area breakdown (below the month detail card) ---------- */
-.area-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 14px; }
+.area-section-head {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--hair);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.area-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 10px; }
 .area-card .metric-figure.small { font-size: 22px; }
 
 .drill-card {

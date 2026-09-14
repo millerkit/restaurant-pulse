@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { MONTH_NAMES, paceStatus } from '~/composables/useBudgetData'
+import { MONTH_NAMES, YEAR, paceStatus } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Capacity` })
 
@@ -259,6 +259,21 @@ function areaCapacityForMonth(a: AreaDraft, month: number): number {
   if (cap == null || !Number.isFinite(cap)) return 0
   return cap
 }
+// Operating nights for a month, anchored to YEAR (the same "current year"
+// convention useBudgetData's other figures use) — Tue-Sun (the standing
+// Monday closure) minus that row's own Closures input. This is the same
+// definition capacity.get.ts's isOperatingDow/holidayAdjustment apply to
+// real dates, just computed generically for month 1-12 rather than a real
+// calendar range, since this table's rows aren't tied to any specific year.
+function operatingNightsInMonth(s: MonthlyDraft): number {
+  const dim = new Date(Date.UTC(YEAR, s.month, 0)).getUTCDate()
+  let nights = 0
+  for (let day = 1; day <= dim; day++) {
+    if (new Date(Date.UTC(YEAR, s.month - 1, day)).getUTCDay() !== 1) nights++
+  }
+  const closures = intNum(s.holidayClosuresInput)
+  return Math.max(0, nights - (Number.isFinite(closures) ? closures : 0))
+}
 function monthDerived(s: MonthlyDraft) {
   let covers = 0, revenue = 0, maxCovers = 0
   for (const a of areaDrafts.value) {
@@ -271,7 +286,8 @@ function monthDerived(s: MonthlyDraft) {
   return {
     totalCovers: covers,
     fillPct: maxCovers > 0 ? covers / maxCovers : null,
-    avgCheck: covers > 0 ? revenue / covers : null
+    avgCheck: covers > 0 ? revenue / covers : null,
+    projectedMonthlyRevenue: revenue * operatingNightsInMonth(s)
   }
 }
 // Rounded to the nearest whole percent / dollar for quick readability
@@ -283,6 +299,50 @@ function fmtPct(n: number | null): string {
 function fmtMoney2(n: number | null): string {
   return n == null ? '—' : String(Math.round(n))
 }
+function fmtMoneyFull(n: number | null): string {
+  return n == null ? '—' : `$${Math.round(n).toLocaleString('en-US')}`
+}
+
+// Year-total footer row (added at the user's request, 2026-09-14) — only
+// Closures and Projected Revenue are genuinely additive across months; the
+// rest of the table's columns (covers per area, the monthly Total, Fill %,
+// Per-Cover $) are nightly rates, and summing a rate across 12 months
+// doesn't produce a meaningful number — those instead show the plain
+// (unweighted) average of the 12 monthly figures, added 2026-09-14 in
+// place of the "—" placeholder those columns started with. Fill %/
+// Per-Cover $ average only over months with a real (non-null) value —
+// null only happens if a month's capacity or covers are both zero, which
+// doesn't occur in practice given every area has some capacity, but this
+// guards it anyway rather than letting a null silently count as zero and
+// drag the average down.
+const yearlyTotals = computed(() => {
+  const months = monthlyDrafts.value
+  const areaCoversSum = new Map(areaDrafts.value.map(a => [a.id, 0]))
+  let closures = 0, projectedRevenue = 0
+  let totalCoversSum = 0, fillPctSum = 0, fillPctCount = 0, avgCheckSum = 0, avgCheckCount = 0
+  for (const s of months) {
+    const c = Number(s.holidayClosuresInput)
+    closures += Number.isFinite(c) ? c : 0
+    const d = monthDerived(s)
+    projectedRevenue += d.projectedMonthlyRevenue
+    totalCoversSum += d.totalCovers
+    if (d.fillPct != null) { fillPctSum += d.fillPct; fillPctCount++ }
+    if (d.avgCheck != null) { avgCheckSum += d.avgCheck; avgCheckCount++ }
+    for (const a of areaDrafts.value) {
+      const v = Number(s.areaCoversInput[a.id])
+      areaCoversSum.set(a.id, (areaCoversSum.get(a.id) ?? 0) + (Number.isFinite(v) ? v : 0))
+    }
+  }
+  const areaCoversAvg = new Map(areaDrafts.value.map(a => [a.id, months.length > 0 ? (areaCoversSum.get(a.id) ?? 0) / months.length : 0]))
+  return {
+    closures,
+    projectedRevenue,
+    areaCoversAvg,
+    totalCoversAvg: months.length > 0 ? totalCoversSum / months.length : 0,
+    fillPctAvg: fillPctCount > 0 ? fillPctSum / fillPctCount : null,
+    avgCheckAvg: avgCheckCount > 0 ? avgCheckSum / avgCheckCount : null
+  }
+})
 
 function historyIndexFor(month: number): number | null {
   return historyData.value?.monthlyIndex?.find(m => m.month === month)?.indexPct ?? null
@@ -458,7 +518,12 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Per-Area Capacity &amp; Revenue</div>
-          <div class="section-note">Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly. Outdoor has no Nov–Apr season — it stays closed through winter. Per-Cover Revenue (Total) is an assumed target; Actual This/Last Month is real Toast covers/revenue by area, for comparison — see <NuxtLink to="/capacity">Capacity Pace</NuxtLink> for the blended (non-area) version of this comparison. "Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</div>
+          <ul class="section-note note-list">
+            <li>Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly.</li>
+            <li>Outdoor has no Nov–Apr season — it stays closed through winter.</li>
+            <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see <NuxtLink to="/capacity">Capacity Pace</NuxtLink> for the blended (non-area) version.</li>
+            <li>"Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</li>
+          </ul>
         </div>
         <div class="pl-table-card">
           <table class="pl-table edit-table">
@@ -524,25 +589,31 @@ async function save() {
       <section>
         <div class="section-head">
           <div class="section-label">Expected Nightly Covers by Area &amp; Closures</div>
-          <div class="section-note">Average nightly covers per area, by month — edit these directly, or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month (overwrites that row's per-area covers to the right). Total, Fill %, and Per-Cover $ are derived. Closures are additional nights closed beyond the standing Monday closure.</div>
+          <ul class="section-note note-list">
+            <li>Average nightly covers per area, by month — edit these directly.</li>
+            <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
+            <li>Total, Fill %, and Per-Cover $ are derived.</li>
+            <li>Closures are additional nights closed beyond the standing Monday closure.</li>
+          </ul>
         </div>
-        <div class="pl-table-card">
-          <table class="pl-table edit-table">
-            <caption>Editable monthly expected covers per area, a history-derived quick-set blended fill percentage, a total covers figure, derived fill percentage and per-cover revenue, and holiday closure counts</caption>
+        <div class="pl-table-card covers-table-card">
+          <table class="pl-table edit-table covers-table">
+            <caption>Editable monthly expected covers per area, a history-derived quick-set blended fill percentage, a total covers figure, derived fill percentage, per-cover revenue, projected revenue, and holiday closure counts</caption>
             <thead>
               <tr>
-                <th scope="col">Month</th>
+                <th scope="col" class="sticky-col">Month</th>
                 <th scope="col">Set by History</th>
                 <th v-for="a in areaDrafts" :key="a.id" scope="col" style="text-transform: capitalize;">{{ a.name }}</th>
                 <th scope="col">Total</th>
                 <th scope="col">Fill %</th>
                 <th scope="col">Per-Cover $</th>
                 <th scope="col">Closures</th>
+                <th scope="col">Projected Revenue</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="s in monthlyDrafts" :key="s.month">
-                <th scope="row">{{ MONTH_NAMES[s.month - 1] }}</th>
+                <th scope="row" class="sticky-col">{{ MONTH_NAMES[s.month - 1] }}</th>
                 <td class="setpct-cell">
                   <div class="setpct-row">
                     <button
@@ -561,8 +632,21 @@ async function save() {
                 <td class="derived">{{ fmtPct(monthDerived(s).fillPct) }}</td>
                 <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
                 <td><input v-model="s.holidayClosuresInput" class="cell-input" inputmode="numeric" /></td>
+                <td class="derived">{{ fmtMoneyFull(monthDerived(s).projectedMonthlyRevenue) }}</td>
               </tr>
             </tbody>
+            <tfoot>
+              <tr>
+                <th scope="row" class="sticky-col">Total</th>
+                <td class="derived">—</td>
+                <td v-for="a in areaDrafts" :key="a.id" class="derived">{{ Math.round(yearlyTotals.areaCoversAvg.get(a.id) ?? 0) }}</td>
+                <td class="derived">{{ Math.round(yearlyTotals.totalCoversAvg) }}</td>
+                <td class="derived">{{ fmtPct(yearlyTotals.fillPctAvg) }}</td>
+                <td class="derived">${{ fmtMoney2(yearlyTotals.avgCheckAvg) }}</td>
+                <td class="derived">{{ yearlyTotals.closures }}</td>
+                <td class="derived">{{ fmtMoneyFull(yearlyTotals.projectedRevenue) }}</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </section>
@@ -589,6 +673,22 @@ async function save() {
 .page-head h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
 .page-head .sub { font-size: 13px; color: var(--ink-3); max-width: 720px; line-height: 1.5; }
 
+/* Section-note text as a bulleted list (2026-09-14, at the user's request,
+   for readability) instead of one dense run-on paragraph — .section-note
+   itself is a shared global class (main.css) other pages use for plain
+   inline text, so the list layout/spacing is scoped locally here rather
+   than added to that shared rule. Stacked under the title and given the
+   full row width (rather than main.css's default side-by-side
+   space-between layout, which squeezed the bullets into a narrow right
+   column and forced heavy wrapping) — also at the user's request, same
+   day. .section-head/.section-label are shared global classes too
+   (main.css), so both overrides are scoped here rather than changed
+   globally. */
+.section-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+.section-label { font-size: 15px; }
+.note-list { width: 100%; margin: 2px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.note-list li { line-height: 1.5; }
+
 .pl-table-card {
   background: var(--surface);
   border: 1px solid var(--hair);
@@ -607,7 +707,15 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
    "Per-Cover Revenue" no longer set the column width on their own; the
    narrow input boxes now do, and center comfortably under a 2-line
    header. */
-.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink-3); border-bottom: 1px solid var(--hair); white-space: normal; }
+/* Header row background: a fixed slate blue-gray with white text (added at
+   the user's request, 2026-09-14), not one of the app's light/dark-aware
+   surface tokens — this is meant to read as a distinct "table header bar"
+   regardless of theme, the same way it would in a spreadsheet, rather than
+   shift with light/dark mode. Applies to both tables on this page since
+   both use .pl-table; the covers-table's own thead th rule below (needed
+   for sticky positioning) relies on this already-opaque background rather
+   than re-declaring it. */
+.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: #ffffff; background: #3e5c76; border-bottom: 1px solid #2c4459; white-space: normal; padding-top: 16px; padding-bottom: 16px; }
 .pl-table tbody th { text-align: left; font-weight: 600; font-size: 13px; color: var(--ink); }
 .pl-table tbody tr { border-bottom: 1px solid var(--hair); }
 .pl-table tbody tr:last-child { border-bottom: none; }
@@ -672,6 +780,80 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 }
 .apply-pct-btn:disabled { opacity: 0.4; cursor: default; }
 .apply-pct-btn:not(:disabled):hover { background: var(--accent); color: white; border-color: var(--accent); }
+
+/* Expected Nightly Covers table: sticky header row + sticky Month column
+   (added at the user's request, 2026-09-14) so both stay visible while
+   scrolling a 12-month, 5-area grid — the column headers when scrolling
+   down, and which month a row belongs to when scrolling right on a narrow
+   screen. Both need an explicit opaque background (not transparent, the
+   table default) since content scrolls underneath them. Tighter
+   padding/input widths than the table above make room for the new
+   Projected Revenue column without the table growing much wider. */
+/* Bounded height + its own scroll, rather than relying on the page's own
+   scroll — needed for the sticky header/column below to actually have
+   something to stick within. (A plain `overflow-x: auto` card with no
+   height cap technically becomes its own scroll container too, per the
+   CSS overflow spec, but since it never actually overflows vertically on
+   its own, position:sticky has nothing to stick against and the header
+   just scrolls away with the page — confirmed by testing before landing
+   on this fix.) */
+.covers-table-card { overflow: auto; max-height: 70vh; }
+/* `position: sticky` on a <th>/<td> is a no-op in every major browser when
+   the table uses `border-collapse: collapse` (this.pl-table's default) —
+   confirmed by testing (the sticky computed style showed up correctly but
+   the cell still scrolled away). Switching to `separate` fixes it, but
+   `separate` doesn't paint a border set on <tr> at all (only cell borders
+   render), so the row-divider line has to move from tr to the cells
+   themselves for this table. */
+/* `.pl-table.covers-table` (two classes), not just `.covers-table` — needs
+   to out-specificity the base `table.pl-table { border-collapse: collapse }`
+   rule (element + class), which a single-class selector alone loses to
+   regardless of source order. */
+.pl-table.covers-table { border-collapse: separate; border-spacing: 0; }
+.covers-table tbody tr { border-bottom: none; }
+.covers-table tbody td, .covers-table tbody th { border-bottom: 1px solid var(--hair); }
+.covers-table tbody tr:last-child td, .covers-table tbody tr:last-child th { border-bottom: none; }
+.covers-table th, .covers-table td { padding: 8px 7px; }
+.covers-table .cell-input.narrow { width: 34px; }
+/* Row shading (zebra striping) was tried and reverted (2026-09-14, at the
+   user's request) — the existing 1px row-divider line above is enough on
+   its own. */
+.covers-table .sticky-col { position: sticky; left: 0; }
+.covers-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* .covers-table th, .covers-table td above sets the table's tighter 8px
+     7px padding, which would otherwise win over .pl-table thead th's own
+     padding-top/bottom (same specificity, but that rule comes first in the
+     file) — re-declared here, after it, so the header row's extra vertical
+     padding actually applies on this table too. */
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.covers-table thead th.sticky-col { z-index: 3; }
+.covers-table tbody th.sticky-col {
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* Year-total footer row (added at the user's request, 2026-09-14; restyled
+   to match the header — slate blue background, white text, same extra
+   vertical padding — 2026-09-14), sticky to the bottom of the same scroll
+   container the header sticks to the top of, so both ends of the table
+   stay visible while scrolling through 12 months. */
+.covers-table tfoot th, .covers-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #3e5c76;
+  font-weight: 700;
+  color: #ffffff;
+  border-top: 2px solid #2c4459;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.covers-table tfoot th.sticky-col { z-index: 3; }
 
 .save-bar { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; }
 .save-btn {

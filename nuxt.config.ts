@@ -3,6 +3,24 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
   css: ['~/assets/css/main.css'],
+  app: {
+    head: {
+      script: [
+        // Applies a saved manual light/dark theme choice (see
+        // app/composables/useTheme.ts) before first paint, so a user who
+        // picked "Dark" doesn't see a flash of the OS-preferred theme while
+        // Vue boots. Deliberately outside Vue/Pinia entirely — inline,
+        // synchronous, and un-deferred so it runs in <head> before <body>
+        // renders. A 'system' choice (or nothing saved) leaves the
+        // attribute unset, same as a first-time visitor — main.css's
+        // prefers-color-scheme media query then decides, unchanged from
+        // before this feature existed.
+        {
+          innerHTML: `(function(){try{var t=localStorage.getItem('theme-preference');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();`
+        }
+      ]
+    }
+  },
   runtimeConfig: {
     qbo: {
       clientId: process.env.QBO_CLIENT_ID,

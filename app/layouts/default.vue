@@ -6,6 +6,7 @@ import site from '~/config/site.json'
   <div class="wrap">
     <div class="app-header">
       <NuxtLink to="/" class="brand">{{ site.restaurantName }}</NuxtLink>
+      <ThemeToggle class="theme-toggle" />
     </div>
     <nav class="tabnav">
       <NuxtLink to="/" exact-active-class="active">Dashboard</NuxtLink>
