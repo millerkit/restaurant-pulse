@@ -12,6 +12,11 @@ export type BudgetAccount = {
   subcategory: string | null
   costBehavior: 'fixed' | 'variable' | null
   isOwnerCompensation: number // 0/1 — only meaningful for category='labor', see schema.sql
+  // Whether this leaf account has a labor_position_settings row, i.e. it's edited on the
+  // Labor tab (app/pages/budget/labor.vue) rather than as a direct dollar figure here —
+  // see schema.sql's labor_position_settings comment and the Edit Budget page's
+  // laborManaged-gated <input>.
+  laborManaged: boolean
   amount: number | null
 }
 export type MonthData = { year: number, month: number, accounts: BudgetAccount[] }
@@ -34,6 +39,22 @@ export function dayOfYear(year: number, month: number, day: number): number {
 
 export function daysInYear(year: number): number {
   return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365
+}
+
+// Payroll runs every Friday (see CLAUDE.md's Labor tab section) — this is the shared
+// definition of "how many payroll cycles land in this month," used by both Edit Budget's
+// labor payroll-cycle projection and the Labor tab's weekly-$-to-monthly-$ conversion.
+export function countFridays(start: Date, end: Date): number {
+  let count = 0
+  const d = new Date(start)
+  while (d <= end) {
+    if (d.getDay() === 5) count++ // Date#getDay(): 5 = Friday
+    d.setDate(d.getDate() + 1)
+  }
+  return count
+}
+export function fridaysInMonth(year: number, month: number): number {
+  return countFridays(new Date(year, month - 1, 1), new Date(year, month, 0))
 }
 
 export function categoryTotals(monthlyData: MonthData[], monthNumbers: number[]) {

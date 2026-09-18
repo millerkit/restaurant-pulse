@@ -416,6 +416,77 @@ CREATE TABLE drilldown_thresholds (
   updated_at      TEXT NOT NULL
 );
 
+-- The Labor tab (added 2026-09-18) — one row per labor leaf account it manages.
+-- Presence of a row here (not a hardcoded account-number list) is what marks an account
+-- as "edited on the Labor tab" — server/api/budget/targets.get.ts uses this to set
+-- `laborManaged` so budget/edit.vue renders it read-only instead of an editable input.
+-- pay_type drives what else is meaningful for that account:
+--   'hourly'   — modeled from this account's labor_position_slots rows (see below)
+--   'salary'   — modeled from this account's labor_position_slots rows (weekly_salary)
+--   'overtime' — 1.5 * that ot_base_group's blended hourly rate * ot_hours (BOH/FOH OT only)
+--   'flat'     — flat_amount is a fixed monthly $, not scaled by payroll frequency or season
+--   'tax'      — tax_key selects which labor_tax_rates column applies; the resulting $ is
+--                rate * that month's modeled wage-subject total (see server-side compute)
+-- scales_with_seasonality (default 1) applies only to 'hourly'/'overtime' accounts: when
+-- on, modeled hours for a given month are multiplied by that month's real historical
+-- demand index (monthlyIndex.indexPct from server/api/capacity/history.get.ts — the same
+-- real, already-computed figure "Set by History" on the Capacity tab uses) instead of
+-- staying flat all year. Off for a role whose hours genuinely don't track overall demand.
+-- Seeded once (scripts/seed-labor-position-settings.mjs) with pay_type assigned by a
+-- first-pass rule from the account name/parent (same "classify now, editable/revisable
+-- later" posture as accounts.cost_behavior/is_owner_compensation); numeric fields start
+-- at 0 rather than being guessed from today's budget_targets dollar figures.
+-- 6082 Employer FICA Tax deliberately gets no row — confirmed unused/legacy and being
+-- deactivated by the user, so it's left as a normal editable line on the Budget Edit page.
+CREATE TABLE labor_position_settings (
+  account_id               INTEGER PRIMARY KEY REFERENCES accounts(id),
+  pay_type                 TEXT NOT NULL CHECK (pay_type IN ('hourly', 'salary', 'overtime', 'flat', 'tax')),
+  scales_with_seasonality  INTEGER NOT NULL DEFAULT 1,
+  ot_hours                 REAL NOT NULL DEFAULT 0,
+  ot_base_group            TEXT CHECK (ot_base_group IN ('boh', 'foh')),
+  flat_amount              REAL NOT NULL DEFAULT 0,
+  tax_key                  TEXT CHECK (tax_key IN ('medicare', 'social_security', 'futa', 'suta_ma', 'pfml_ma')),
+  updated_at                TEXT NOT NULL
+);
+
+-- Named people under an 'hourly' or 'salary' account — what lets a role like Prep Cook
+-- (staffed by several people) be broken into individually-editable rows instead of one
+-- blended rate. Every hourly/salary account gets at least one slot (seeded blank); the
+-- Labor tab's "+ Add person" / per-row remove controls just add/delete rows here.
+-- employee_name is optional (shown as "Person N" until named) — naming is a convenience,
+-- not required, so a role nobody's bothered to name still models correctly.
+-- hourly_rate/weekly_hours are this SLOT's own typical figures (pre-seasonality) when the
+-- parent account's pay_type='hourly'; weekly_salary is used when pay_type='salary'.
+-- 'overtime'/'flat'/'tax' accounts have no slot rows at all — their one relevant number
+-- lives directly on labor_position_settings.
+CREATE TABLE labor_position_slots (
+  id             INTEGER PRIMARY KEY,
+  account_id     INTEGER NOT NULL REFERENCES accounts(id),
+  slot_index     INTEGER NOT NULL,
+  employee_name  TEXT,
+  hourly_rate    REAL NOT NULL DEFAULT 0,
+  weekly_hours   REAL NOT NULL DEFAULT 0,
+  weekly_salary  REAL NOT NULL DEFAULT 0,
+  updated_at     TEXT NOT NULL,
+  UNIQUE (account_id, slot_index)
+);
+
+-- The current employer payroll tax rates used to compute the Labor tab's 'tax'-type
+-- accounts (6083-6087; never 6082, see above) from modeled wages. Single-row (id=1),
+-- same shape as reserve_plan/weekly_revenue_benchmark. No wage-base columns — v1
+-- deliberately ignores wage-base caps (FUTA's $7,000/employee/year, etc.), applying a
+-- flat % to modeled wages every month instead — the user's own explicit choice, since
+-- this app doesn't track individual employees' cumulative pay across the year.
+CREATE TABLE labor_tax_rates (
+  id                    INTEGER PRIMARY KEY CHECK (id = 1),
+  medicare_rate         REAL NOT NULL,
+  social_security_rate  REAL NOT NULL,
+  futa_rate             REAL NOT NULL,
+  suta_ma_rate          REAL NOT NULL,
+  pfml_ma_rate          REAL NOT NULL,
+  updated_at            TEXT NOT NULL
+);
+
 -- Tracks each nightly sync run against the QBO Reports API, so the
 -- dashboard can show "as of" freshness and surface sync failures instead
 -- of silently going stale.

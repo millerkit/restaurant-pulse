@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -295,15 +295,6 @@ function computedAccountProjected(acc: BudgetAccount): number {
 // early or late rather than requiring an exact Friday match. null (→ fall
 // back to straight-line) when the month has no labor synced yet, or when
 // not even the first Friday's run has landed (nothing to extrapolate from).
-function countFridays(start: Date, end: Date): number {
-  let count = 0
-  const d = new Date(start)
-  while (d <= end) {
-    if (d.getDay() === 5) count++ // Date#getDay(): 5 = Friday
-    d.setDate(d.getDate() + 1)
-  }
-  return count
-}
 const laborPayrollBasis = computed<{ posted: number, total: number } | null>(() => {
   if (viewingAnnualTotal.value || !isMonthCurrent(YEAR, editMonth.value)) return null
   const latest = selectedMonthLaborLatestDate.value
@@ -1001,7 +992,7 @@ async function recomputeCogsFromTrailingAverage() {
 }
 
 // ---- Revenue from Capacity assumptions -----------------------------------
-// The Capacity tab (app/pages/capacity/edit.vue) already models a real
+// The Capacity tab's Edit Capacity view (app/pages/capacity/index.vue) already models a real
 // bottom-up revenue projection — per-area expected covers x per-cover
 // Food/Beverage revenue (see schema.sql's capacity_areas comment and
 // server/api/capacity.get.ts) — so rather than typing a Revenue budget in
@@ -1516,10 +1507,13 @@ function exportForQuickBooks() {
                     </th>
                     <td>
                       <input
-                        v-if="isLeafAccount(acc)" type="text" inputmode="numeric" class="amount-input"
+                        v-if="isLeafAccount(acc) && !acc.laborManaged" type="text" inputmode="numeric" class="amount-input"
                         v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
                       />
-                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
+                      <span v-else class="amount-input readonly">
+                        ${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}
+                        <NuxtLink v-if="acc.laborManaged" to="/budget/labor" class="labor-managed-note">Edit on Labor tab</NuxtLink>
+                      </span>
                     </td>
                     <td v-if="selectedMonthIsCurrent">
                       <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
@@ -1541,7 +1535,7 @@ function exportForQuickBooks() {
                 <tr v-if="cat === 'revenue' && revenueHasCapacityData" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
-                      From the <NuxtLink to="/capacity/edit">Capacity tab's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
+                      From the <NuxtLink to="/capacity?tab=edit">Capacity tab's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
                       Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>,
                       Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
                       <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
@@ -1796,6 +1790,14 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   font-weight: 700;
 }
 .amount-input.readonly.muted { color: var(--ink-3); font-weight: 500; }
+.labor-managed-note {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+}
+.labor-managed-note:hover { text-decoration: underline; }
 
 /* Variance is shown directly on the Actual/Projected figure (color + a ✓/▲/▼
    icon, per the "color must pair with an icon" rule, plus the dollar delta

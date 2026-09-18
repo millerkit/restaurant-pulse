@@ -16,6 +16,7 @@
     "db:backfill-pl": "node --env-file=.env.local scripts/backfill-qbo-pl.mjs",
     "db:backfill-toast": "node --env-file=.env.local scripts/backfill-toast-metrics.mjs",
     "db:seed-benchmarks": "node scripts/seed-category-benchmarks.mjs",
+    "db:seed-labor-settings": "node scripts/seed-labor-position-settings.mjs",
     "db:seed-dev-actuals": "node scripts/seed-dev-actuals.mjs",
     "db:pull-accounts": "node scripts/pull-accounts-from-prod.mjs",
     "db:migrate-other-categories": "node scripts/migrate-other-categories.mjs",

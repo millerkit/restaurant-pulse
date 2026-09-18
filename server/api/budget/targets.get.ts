@@ -21,12 +21,17 @@ export default defineEventHandler((event) => {
       a.subcategory,
       a.cost_behavior AS costBehavior,
       a.is_owner_compensation AS isOwnerCompensation,
+      EXISTS (SELECT 1 FROM labor_position_settings lps WHERE lps.account_id = a.id) AS laborManaged,
       bt.amount AS amount
     FROM accounts a
     LEFT JOIN budget_targets bt ON bt.account_id = a.id AND bt.year = ? AND bt.month = ?
     WHERE a.is_active = 1
     ORDER BY a.category, a.id
-  `).all(year, month)
+  `).all(year, month) as any[]
+
+  // SQLite's EXISTS(...) comes back as 0/1 — coerce to a real boolean so the client
+  // (BudgetAccount.laborManaged: boolean) doesn't have to know that.
+  for (const r of rows) r.laborManaged = !!r.laborManaged
 
   return { year, month, accounts: rows }
 })
