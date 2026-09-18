@@ -59,7 +59,7 @@ function otHistoryFor(db: ReturnType<typeof useDb>, accountNumber: string): { we
 // "implied hours" needs an hourly rate, and the only rate that means anything is whatever
 // the user has currently typed into this account's own slots (their live, unsaved draft),
 // which this server route has no visibility into. That conversion happens client-side
-// instead (see accountAvgRate/impliedMonthlyHours in labor.vue).
+// instead (see accountAvgRate/impliedWeeklyHours in labor.vue).
 function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
   return (db.prepare(`
     SELECT DISTINCT strftime('%Y-%m', dli.date) AS ym
@@ -69,18 +69,29 @@ function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
   `).all() as { ym: string }[]).map(r => r.ym)
 }
 
-function trailingActualsByAccount(db: ReturnType<typeof useDb>, months: string[]): Record<number, number> {
+// avgMonthlyDollars backs the flat accounts' (Other Labor/Benefits) "$/mo" hint directly.
+// weeklyAvg backs the hourly roles' "hrs/wk" hint instead — added after the user pointed
+// out monthly hours don't map cleanly onto a field labeled "typical hrs/wk"; you'd have to
+// do the month-to-week conversion yourself. Rather than a flat /4.33-weeks-per-month
+// guess, this reuses the exact same real-Friday-count technique otHistoryFor already uses
+// (per-account MIN/MAX date within the window, divided by the real number of Fridays
+// between them) — consistent with the rest of this app treating payroll as a real weekly
+// Friday lump, not a smoothed monthly average.
+function trailingActualsByAccount(db: ReturnType<typeof useDb>, months: string[]): Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }> {
   if (months.length === 0) return {}
   const placeholders = months.map(() => '?').join(',')
   const rows = db.prepare(`
-    SELECT dli.account_id AS accountId, SUM(dli.amount) AS total
+    SELECT dli.account_id AS accountId, SUM(dli.amount) AS total, MIN(dli.date) AS minDate, MAX(dli.date) AS maxDate
     FROM daily_line_items dli
     JOIN labor_position_settings lps ON lps.account_id = dli.account_id
     WHERE strftime('%Y-%m', dli.date) IN (${placeholders})
     GROUP BY dli.account_id
-  `).all(...months) as { accountId: number, total: number }[]
-  const result: Record<number, number> = {}
-  for (const r of rows) result[r.accountId] = r.total / months.length
+  `).all(...months) as { accountId: number, total: number, minDate: string, maxDate: string }[]
+  const result: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }> = {}
+  for (const r of rows) {
+    const fridays = countFridaysBetween(r.minDate, r.maxDate)
+    result[r.accountId] = { avgMonthlyDollars: r.total / months.length, weeklyAvg: fridays > 0 ? r.total / fridays : null }
+  }
   return result
 }
 

@@ -66,7 +66,7 @@ const hasCurrentMonthActuals = ref(false)
 // (the 2 most recent months with any real labor activity), so "trailing Jun-Jul avg"
 // means the same thing next to every account it's shown for.
 const trailingWindowMonths = ref<string[]>([])
-const trailingActuals = ref<Record<number, number>>({})
+const trailingActuals = ref<Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>>({})
 const trailingTaxRates = ref<Record<string, number | null>>({ medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null })
 const trailingWindowLabel = computed(() => {
   if (trailingWindowMonths.value.length === 0) return null
@@ -80,7 +80,7 @@ async function loadAll() {
     const [settingsRes, historyRes, actualsRes] = await Promise.all([
       $fetch<{
         accounts: any[], taxRates: TaxRates | null, otHistory: typeof otHistory.value,
-        trailingWindow: { months: string[] }, trailingActuals: Record<number, number>, trailingTaxRates: Record<string, number | null>
+        trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>
       }>('/api/budget/labor-settings'),
       $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] })),
       $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } }).catch(() => ({ accounts: [] }))
@@ -181,21 +181,24 @@ function impliedOtHours(group: 'boh' | 'foh'): number | null {
 
 // A plain (unweighted) average of whatever nonzero $/hr rates have been entered across
 // this one role's own people — deliberately NOT weighted by hours, unlike blendedRate()
-// above: hours is exactly the thing "implied monthly hours" (below) is trying to help set,
+// above: hours is exactly the thing "implied weekly hours" (below) is trying to help set,
 // so weighting by an as-yet-unset/zero value would be circular. One person's own rate
 // stands in trivially; two people at different rates average evenly.
 function accountAvgRate(account: LaborAccount): number {
   const rates = account.slots.map(s => s.hourlyRate).filter(r => r > 0)
   return rates.length > 0 ? rates.reduce((sum, r) => sum + r, 0) / rates.length : 0
 }
-// Trailing avg $/month actual ÷ this role's own rate = implied avg hours/month — null
-// until a rate is entered (see accountAvgRate), same "hide the conversion rather than show
-// a meaningless number" posture as impliedOtHours above.
-function impliedMonthlyHours(account: LaborAccount): number | null {
+// Trailing real $/week (Friday-count-normalized, see labor-settings.get.ts) ÷ this role's
+// own rate = implied avg hrs/wk — directly comparable to the "typical hrs/wk" field itself,
+// unlike a monthly figure the user would have to convert by hand. Null until a rate is
+// entered (see accountAvgRate) or if the trailing window has no real Friday span to divide
+// by, same "hide the conversion rather than show a meaningless number" posture as
+// impliedOtHours above.
+function impliedWeeklyHours(account: LaborAccount): number | null {
   const rate = accountAvgRate(account)
-  const avgMonthly = trailingActuals.value[account.accountId]
-  if (rate <= 0 || avgMonthly === undefined) return null
-  return avgMonthly / rate
+  const weeklyAvg = trailingActuals.value[account.accountId]?.weeklyAvg
+  if (rate <= 0 || weeklyAvg == null) return null
+  return weeklyAvg / rate
 }
 
 function slotWeeklyDollars(account: LaborAccount, slot: Slot, month: number): number {
@@ -469,9 +472,9 @@ async function save() {
                     {{ referenceClass(accountMonthlyDollars(acc, asOfMonth), actualReference(acc.accountId).amount) === 'good' ? '✓ near' : '▲' }} last actual {{ fmt(actualReference(acc.accountId).amount) }}
                   </td>
                 </tr>
-                <tr v-if="trailingActuals[acc.accountId] !== undefined" class="note-row">
+                <tr v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="note-row">
                   <td colspan="5" class="quiet-note small">
-                    trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId]) }}/mo<template v-if="impliedMonthlyHours(acc) !== null"> (&asymp;{{ impliedMonthlyHours(acc)!.toFixed(0) }} hrs/mo at ${{ accountAvgRate(acc).toFixed(2) }}/hr)</template><template v-else> — enter an hourly rate to see implied hours</template>
+                    trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk<template v-if="impliedWeeklyHours(acc) !== null"> (&asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk at ${{ accountAvgRate(acc).toFixed(2) }}/hr)</template><template v-else> — enter an hourly rate to see implied hours</template>
                   </td>
                 </tr>
                 <tr class="add-row">
@@ -526,7 +529,7 @@ async function save() {
                 <input type="number" step="1" min="0" v-model.number="acc.flatAmount" class="simple-input small" />
                 <span class="unit">/mo</span>
               </div>
-              <div v-if="trailingActuals[acc.accountId] !== undefined" class="simple-hint">trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId]) }}/mo</div>
+              <div v-if="trailingActuals[acc.accountId] !== undefined" class="simple-hint">trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId].avgMonthlyDollars) }}/mo</div>
             </div>
           </div>
 
