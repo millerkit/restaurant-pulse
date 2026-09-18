@@ -1,6 +1,6 @@
 // Loads the current capacity_areas + capacity_seasonality (holiday
 // closures) + capacity_area_seasonality (per-area, per-month expected
-// covers) rows for the Edit Capacity page (app/pages/capacity/edit.vue) —
+// covers) rows for the Edit Capacity page (app/pages/capacity/index.vue (Edit tab)) —
 // the same tables server/api/capacity.get.ts reads, just without the
 // projection math, since this route only needs to populate an editable
 // form.

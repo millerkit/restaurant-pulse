@@ -1,4 +1,4 @@
-// Saves edits from the Edit Capacity page (app/pages/capacity/edit.vue) —
+// Saves edits from the Edit Capacity page (app/pages/capacity/index.vue (Edit tab)) —
 // per the user's explicit 2026-08-07 request to be able to revise
 // capacity/turns/per-cover-revenue, holiday closures, and (same day, after
 // a follow-up request) each area's own expected nightly covers per month

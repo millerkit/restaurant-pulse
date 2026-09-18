@@ -15,9 +15,9 @@ import site from '~/config/site.json'
       <NuxtLink to="/nightly-margin" exact-active-class="active">Nightly Margin</NuxtLink>
       <NuxtLink to="/budget" exact-active-class="active">Budget Pace</NuxtLink>
       <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
+      <NuxtLink to="/budget/labor" exact-active-class="active">Labor</NuxtLink>
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
-      <NuxtLink to="/capacity" exact-active-class="active">Capacity Pace</NuxtLink>
-      <NuxtLink to="/capacity/edit" exact-active-class="active">Edit Capacity</NuxtLink>
+      <NuxtLink to="/capacity" exact-active-class="active">Capacity</NuxtLink>
       <NuxtLink to="/historical" exact-active-class="active">Historical</NuxtLink>
     </nav>
     <slot />

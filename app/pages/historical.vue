@@ -63,7 +63,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
         <section v-if="historyData.coversSeries.length">
           <div class="section-head">
             <div class="section-label">Covers Seasonality</div>
-            <div class="section-note">Covers per open day (Toast, core dine-in — events/catering excluded, closures excluded), indexed to each year's own average. Answers "was this month busier or slower than a typical month here" without needing to compare against a fixed capacity — same figure that powers Edit Capacity's <NuxtLink to="/capacity/edit">Set by History</NuxtLink> button.</div>
+            <div class="section-note">Covers per open day (Toast, core dine-in — events/catering excluded, closures excluded), indexed to each year's own average. Answers "was this month busier or slower than a typical month here" without needing to compare against a fixed capacity — same figure that powers the Capacity tab's Edit Capacity <NuxtLink to="/capacity?tab=edit">Set by History</NuxtLink> button.</div>
           </div>
           <div class="pl-table-card chart-card">
             <SeasonalityChart
