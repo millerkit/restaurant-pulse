@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, monthCategoryBudget, useBudgetYear } from '~/composables/useBudgetData'
+import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, monthCategoryBudget, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Labor` })
 
@@ -13,6 +13,13 @@ const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (
 // the month before this page's own Sep-Dec-style range) have a real number to draw from,
 // not just this page's own forward-looking draft. loadYear() runs on mount automatically.
 const { monthlyData: yearBudgetData } = useBudgetYear()
+
+// Real per-month labor actuals from daily_line_items — used to make "Total labor, 2026"
+// (below) a true actual-YTD + modeled-remainder figure instead of budgeted-YTD +
+// modeled-remainder. Independent of yearBudgetData/budget_targets above, which sometimes
+// gets hand-overwritten with real numbers for a closed month (see CLAUDE.md) and so isn't
+// a reliable "what actually happened" signal on its own.
+const { monthlyActuals } = useActualsYear()
 
 // Slider bounds for $/hr and hrs/wk — one fixed range on every hourly card rather than a
 // per-role range, so nothing shifts around as different roles are edited (the user's own
@@ -226,6 +233,11 @@ function slotWeeklyDollars(account: LaborAccount, slot: Slot, month: number): nu
 function slotMonthlyDollars(account: LaborAccount, slot: Slot, month: number): number {
   return slotWeeklyDollars(account, slot, month) * fridaysInMonth(YEAR, month)
 }
+// Total scaled hrs/wk across every person on an hourly role, for the role's totals row —
+// each slot's own effectiveHours (seasonality-scaled), summed, not the raw typical hours.
+function accountEffectiveHours(account: LaborAccount, month: number): number {
+  return account.slots.reduce((sum, s) => sum + effectiveHours(account, s.weeklyHours, month), 0)
+}
 
 function accountWeeklyDollars(account: LaborAccount, month: number): number {
   if (account.payType === 'hourly') {
@@ -256,6 +268,15 @@ function setTaxRate(key: NonNullable<LaborAccount['taxKey']>, pct: number) {
   const field = { medicare: 'medicareRate', social_security: 'socialSecurityRate', futa: 'futaRate', suta_ma: 'sutaMaRate', pfml_ma: 'pfmlMaRate' }[key] as keyof TaxRates
   taxRates.value[field] = Number.isFinite(pct) ? pct / 100 : 0
 }
+// Medicare/Social Security are flat federal statutory employer rates (1.45%/6.2%) — they
+// never vary by employer, state, or experience, unlike FUTA/SUTA MA/PFML MA. Rendered
+// read-only rather than editable so they can't drift away from the true rate again
+// (production's copies of these two had been edited to 2.12%/9.03% at some point,
+// matching the trailing-effective-rate hint almost exactly — likely mistaken for a
+// number to copy in, rather than a fixed constant).
+function isFixedRateTax(key: LaborAccount['taxKey']): boolean {
+  return key === 'medicare' || key === 'social_security'
+}
 
 function accountMonthlyDollars(account: LaborAccount, month: number): number {
   if (account.payType === 'flat') return account.flatAmount
@@ -277,9 +298,31 @@ function groupMonthlyTotal(group: GroupKey, month: number): number {
 function modeledLaborTotal(month: number): number {
   return GROUP_ORDER.reduce((sum, g) => sum + groupMonthlyTotal(g, month), 0)
 }
+// For a closed month, prefer the real actual (daily_line_items, via monthlyActuals) over
+// the budgeted figure — the whole point of this card is "what did labor really cost this
+// year," not "what was planned." Falls back to the budgeted amount only if that month
+// genuinely has no synced actuals yet (hasData false — e.g. before this year's QBO
+// backfill reached that far back), so a month with no real data still contributes
+// something rather than silently reading as $0.
 function yearLaborTotal(month: number): number {
-  return month < asOfMonth ? (monthCategoryBudget(yearBudgetData.value[month - 1], 'labor') ?? 0) : modeledLaborTotal(month)
+  if (month < asOfMonth) {
+    const actual = monthlyActuals.value[month - 1]
+    if (actual?.hasData) return actual.totals.labor
+    return monthCategoryBudget(yearBudgetData.value[month - 1], 'labor') ?? 0
+  }
+  return modeledLaborTotal(month)
 }
+// Whether every closed month behind this card's total came from a real actual, some from
+// a budgeted fallback, or (before Jan) none at all — drives the small note under the
+// "Total labor" stat tile so the figure's real composition isn't left implicit.
+const yearLaborActualCoverage = computed<'all' | 'partial' | 'none'>(() => {
+  const closedMonths = asOfMonth > 1 ? Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1) : []
+  if (closedMonths.length === 0) return 'none'
+  const withActuals = closedMonths.filter(m => monthlyActuals.value[m - 1]?.hasData).length
+  if (withActuals === closedMonths.length) return 'all'
+  if (withActuals === 0) return 'none'
+  return 'partial'
+})
 function average(values: number[]): number {
   return values.length > 0 ? values.reduce((sum, v) => sum + v, 0) / values.length : 0
 }
@@ -441,6 +484,12 @@ async function save() {
         <div class="stat-tile">
           <div class="stat-label">Total labor, {{ YEAR }}</div>
           <div class="stat-value">{{ fmt(totalLaborForYear) }}</div>
+          <div class="stat-subnote">
+            <template v-if="yearLaborActualCoverage === 'all'">actual Jan&ndash;{{ MONTH_NAMES[asOfMonth - 2] }} + modeled {{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec</template>
+            <template v-else-if="yearLaborActualCoverage === 'partial'">actual where synced, budgeted elsewhere, through {{ MONTH_NAMES[asOfMonth - 2] }} + modeled {{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec</template>
+            <template v-else-if="asOfMonth > 1">budgeted Jan&ndash;{{ MONTH_NAMES[asOfMonth - 2] }} (no synced actuals yet) + modeled {{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec</template>
+            <template v-else>modeled Jan&ndash;Dec</template>
+          </div>
         </div>
         <div class="stat-tile">
           <div class="stat-label">Labor % of projected revenue</div>
@@ -516,6 +565,13 @@ async function save() {
                     <strong>{{ fmt(slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
                     <button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button>
                   </td>
+                </tr>
+                <tr v-if="acc.slots.length > 1" class="total-row">
+                  <td>Total</td>
+                  <td class="num muted">—</td>
+                  <td class="num">{{ accountEffectiveHours(acc, asOfMonth).toFixed(1) }}</td>
+                  <td class="num muted">{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</td>
+                  <td class="num"><strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong></td>
                 </tr>
                 <tr v-if="actualReference(acc.accountId).hasActual" class="note-row">
                   <td colspan="5" class="reference" :class="referenceClass(expectedToDate(acc), actualReference(acc.accountId).amount)">
@@ -607,15 +663,21 @@ async function save() {
             <div v-for="acc in accountsIn('tax')" :key="acc.accountId" class="simple-row-wrap">
               <div class="simple-row">
               <span class="label">{{ acc.name }}</span>
-              <NumberStepper
-                :model-value="taxRateFor(acc.taxKey!) * 100"
-                @update:model-value="v => setTaxRate(acc.taxKey!, v)"
-                :step="0.01" :min="0" :decimals="2" width="64px"
-              />
-              <span class="unit">%</span>
+              <template v-if="isFixedRateTax(acc.taxKey)">
+                <span class="fixed-rate" title="Set by federal law — not editable">{{ (taxRateFor(acc.taxKey!) * 100).toFixed(2) }}%</span>
+              </template>
+              <template v-else>
+                <NumberStepper
+                  :model-value="taxRateFor(acc.taxKey!) * 100"
+                  @update:model-value="v => setTaxRate(acc.taxKey!, v)"
+                  :step="0.01" :min="0" :decimals="2" width="64px"
+                />
+                <span class="unit">%</span>
+              </template>
               <span class="value">{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</span>
               </div>
-              <div v-if="acc.taxKey && trailingTaxRates[acc.taxKey] !== null && trailingTaxRates[acc.taxKey] !== undefined" class="simple-hint">
+              <div v-if="isFixedRateTax(acc.taxKey)" class="simple-hint">fixed federal rate — never changes, not computed from actuals</div>
+              <div v-else-if="acc.taxKey && trailingTaxRates[acc.taxKey] !== null && trailingTaxRates[acc.taxKey] !== undefined" class="simple-hint">
                 trailing {{ trailingWindowLabel }} effective rate: {{ (trailingTaxRates[acc.taxKey]! * 100).toFixed(2) }}%
               </div>
             </div>
@@ -653,14 +715,19 @@ async function save() {
 .stat-tile { background: var(--surface-alt); border-radius: 10px; padding: 10px 14px; }
 .stat-label { font-size: 11px; color: var(--ink-3); }
 .stat-value { font-size: 19px; font-weight: 500; }
+.stat-subnote { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
 
 /* Each group is its own card with a colored header row (the user's own request, after
    finding the earlier one-card-per-role grid "visually overwhelming") — margin-bottom on
    the card itself is the "vertical space between groupings" the user asked for, rather
    than relying on the browser's default table spacing. */
+/* No overflow: hidden here (removed — it used to clip the table to the card's rounded
+   corners, but an overflow:hidden ancestor also breaks position: sticky for any
+   descendant, which is what the sticky column-header row below needs). Rounded corners
+   are recreated by hand on .group-header/.labor-table below instead. */
 .group-block {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 14px;
-  box-shadow: var(--card-shadow); overflow: hidden; margin-bottom: 26px;
+  box-shadow: var(--card-shadow); margin-bottom: 26px;
 }
 .labor-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .labor-table .num { text-align: right; }
@@ -671,7 +738,7 @@ async function save() {
    same color-mix technique this app already uses elsewhere for mode-safe tints. */
 .group-header {
   text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
-  color: var(--ink);
+  color: var(--ink); border-radius: 14px 14px 0 0;
 }
 .group-header.boh { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
 .group-header.foh { background: color-mix(in srgb, var(--good) 16%, var(--surface)); }
@@ -680,11 +747,18 @@ async function save() {
 .group-header.benefits { background: color-mix(in srgb, #c15990 16%, var(--surface)); }
 .group-header.tax { background: color-mix(in srgb, var(--warning) 16%, var(--surface)); }
 
-.col-labels td { font-size: 10px; color: var(--ink-3); padding: 8px 12px 2px; }
+/* Sticky, not just visually pinned-looking — position: sticky on the thead itself (not
+   the tr/td) is what keeps it in place as the page scrolls, since each group's table has
+   no scroll container of its own to hang a sticky row off of. Dark-gray + white per the
+   user's own request, so it reads as a real fixed header bar rather than blending into
+   the group's own colored header directly above it. */
+.labor-table thead { position: sticky; top: 0; z-index: 2; }
+.col-labels td { font-size: 12.5px; font-weight: 600; color: #fff; background: #3a3a3a; padding: 9px 12px; }
 .role-row td { padding: 10px 12px 4px; }
 .person-row td { padding: 6px 12px; border-top: 1px solid var(--hair); vertical-align: middle; }
 .role-row + .person-row td { border-top: none; }
 .note-row td { padding: 0 12px 8px; }
+.total-row td { padding: 6px 12px; border-top: 1px solid var(--hair); font-weight: 600; }
 .add-row td { padding: 2px 12px 12px; }
 .ot-row td { padding: 10px 12px; border-top: 1px solid var(--hair); vertical-align: middle; }
 
@@ -693,6 +767,10 @@ async function save() {
   background: var(--surface); color: var(--ink); width: 100%;
 }
 .unit { font-size: 11px; color: var(--ink-3); }
+.fixed-rate {
+  font-size: 14px; font-weight: 500; padding: 6px 8px; color: var(--ink-3);
+  border: 1px solid transparent; cursor: default;
+}
 
 /* Two-up grid for the short, single-input rows (Management/Other/Benefits/Taxes) — moved
    off the single-column table these used to share with BOH/FOH, at the user's own
