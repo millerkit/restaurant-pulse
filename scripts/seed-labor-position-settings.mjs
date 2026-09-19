@@ -36,6 +36,7 @@ db.exec(`
     ot_base_group            TEXT CHECK (ot_base_group IN ('boh', 'foh')),
     flat_amount              REAL NOT NULL DEFAULT 0,
     tax_key                  TEXT CHECK (tax_key IN ('medicare', 'social_security', 'futa', 'suta_ma', 'pfml_ma')),
+    is_hidden                 INTEGER NOT NULL DEFAULT 0,
     updated_at                TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS labor_position_slots (
@@ -60,10 +61,26 @@ db.exec(`
   );
 `)
 
+// The CREATE TABLE IF NOT EXISTS above only applies the is_hidden column to a genuinely
+// fresh install — a database that already had labor_position_settings from an earlier
+// run of this script needs it added by hand. SQLite has no "ADD COLUMN IF NOT EXISTS",
+// so check pragma_table_info first; safe to run every time.
+const hasIsHidden = db.prepare(`SELECT 1 FROM pragma_table_info('labor_position_settings') WHERE name = 'is_hidden'`).get()
+if (!hasIsHidden) {
+  db.exec(`ALTER TABLE labor_position_settings ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0`)
+  console.log('Added labor_position_settings.is_hidden column (existing rows default to visible).')
+}
+
 // account_number -> classification. 6082 Employer FICA Tax is deliberately absent
 // (unused/legacy, excluded per the user).
-const HOURLY = ['6012', '6016', '6018', '6019', '6021', '6023', '6025', '6031', '6032', '6033', '6035', '6037', '6038', '6039', '6040', '6044']
-const SALARY = ['6051', '6054', '6055', '6056', '6057', '6058']
+// Wine Director moved from hourly to salaried 2026-09 (the user's own real QBO
+// chart-of-accounts change — re-parented under 6050 Management Salaries and renumbered
+// 6040 -> 6059 to match that series, both confirmed against real production data after
+// syncing). A fresh sync/seed against real data would already reflect this; this script
+// only matters for a from-scratch local dev seed, where the classification below has to
+// be told by hand since there's no live QBO connection to infer it from.
+const HOURLY = ['6012', '6016', '6018', '6019', '6021', '6023', '6025', '6031', '6032', '6033', '6035', '6037', '6038', '6039', '6044']
+const SALARY = ['6059', '6051', '6054', '6055', '6056', '6057', '6058']
 const FLAT = ['6003', '6006', '6015', '6061', '6062', '6063', '6065', '6066']
 const OVERTIME = { 6026: 'boh', 6036: 'foh' }
 const TAX = { 6083: 'futa', 6084: 'medicare', 6085: 'pfml_ma', 6086: 'social_security', 6087: 'suta_ma' }

@@ -95,6 +95,36 @@ interface LocalAccountRow {
   is_active: number
 }
 
+// Same five labor sub-group boundaries the Labor tab itself uses to derive groupKey
+// (server/api/budget/labor-settings.get.ts's GROUP_PARENT_NUMBERS) — matched by
+// account_number, never name text, per this repo's standing discipline. Lets a brand-new
+// QBO labor account get a real labor_position_settings row (and start showing up on the
+// Labor tab) the moment the nightly sync sees it, instead of needing a manual
+// scripts/seed-labor-position-settings.mjs re-run — added 2026-09 after the user pointed
+// out the COA structure already tells you the pay type, so guessing shouldn't be needed.
+const LABOR_GROUP_PARENT_PAY_TYPE: Record<string, 'hourly' | 'salary' | 'flat' | 'tax'> = {
+  '6010': 'hourly', '6030': 'hourly', '6050': 'salary', '6060': 'flat', '6080': 'tax'
+}
+
+// null means "don't auto-manage this one" — used for a new account directly under
+// Employer Payroll Taxes (6080): pay_type='tax' needs a tax_key mapped to one of the five
+// fixed labor_tax_rates columns (medicare/social_security/futa/suta_ma/pfml_ma), which a
+// genuinely new tax account has no way to supply automatically. Left unmanaged instead,
+// same graceful "not on the Labor tab yet, stays a normal editable Budget Edit line"
+// fallback 6082 Employer FICA Tax already relies on. A new account directly under 6000
+// Labor itself (not one of the five named subgroups) defaults to 'flat', matching how
+// 6003 Additional Pay/6006 Employee Bonus are already classified.
+function inferLaborPayType(qboAccount: QboAccount, byQboId: Map<string, QboAccount>): 'hourly' | 'salary' | 'flat' | null {
+  const parentId = qboAccount.ParentRef?.value
+  const parent = parentId ? byQboId.get(parentId) : undefined
+  const parentNumber = parent?.AcctNum?.trim()
+  if (parentNumber && parentNumber in LABOR_GROUP_PARENT_PAY_TYPE) {
+    const kind = LABOR_GROUP_PARENT_PAY_TYPE[parentNumber]
+    return kind === 'tax' ? null : kind
+  }
+  return 'flat'
+}
+
 export async function syncQboAccounts(): Promise<{ inserted: number, updated: number, deactivated: number, reactivated: number }> {
   const { qbo } = useRuntimeConfig()
   const db = useDb()
@@ -130,6 +160,18 @@ export async function syncQboAccounts(): Promise<{ inserted: number, updated: nu
   const setParent = db.prepare('UPDATE accounts SET parent_account_id = ? WHERE qbo_account_id = ?')
   const deactivate = db.prepare('UPDATE accounts SET is_active = 0 WHERE id = ?')
   const reactivate = db.prepare('UPDATE accounts SET is_active = 1 WHERE id = ?')
+  // Brings a brand-new labor account straight into Labor tab management — see
+  // inferLaborPayType above. Numeric fields start at 0/blank, same "classify now, fill in
+  // real numbers later" posture the one-time seed script already uses.
+  const insertLaborSettings = db.prepare(`
+    INSERT INTO labor_position_settings (account_id, pay_type, scales_with_seasonality, ot_hours, ot_base_group, flat_amount, tax_key, is_hidden, updated_at)
+    VALUES (?, ?, 1, 0, NULL, 0, NULL, 0, ?)
+  `)
+  const insertLaborSlot = db.prepare(`
+    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, updated_at)
+    VALUES (?, 1, NULL, 0, 0, 0, ?)
+  `)
+  const now = new Date().toISOString()
 
   let inserted = 0
   let updated = 0
@@ -166,7 +208,7 @@ export async function syncQboAccounts(): Promise<{ inserted: number, updated: nu
 
       const categorization = categorizeNewAccount(qboAccount, byQboId)
       if (!categorization) continue // shouldn't happen given the PL_ACCOUNT_TYPES filter, but don't insert a mis-categorized row
-      insertNew.run({
+      const result = insertNew.run({
         qboAccountId: qboAccount.Id,
         accountNumber: acctNum,
         name: qboAccount.Name,
@@ -177,6 +219,15 @@ export async function syncQboAccounts(): Promise<{ inserted: number, updated: nu
       })
       inserted++
       touchedQboIds.push(qboAccount.Id)
+
+      if (categorization.category === 'labor') {
+        const payType = inferLaborPayType(qboAccount, byQboId)
+        if (payType) {
+          const newAccountId = result.lastInsertRowid as number
+          insertLaborSettings.run(newAccountId, payType, now)
+          if (payType === 'hourly' || payType === 'salary') insertLaborSlot.run(newAccountId, now)
+        }
+      }
     }
   })
   runPass1()

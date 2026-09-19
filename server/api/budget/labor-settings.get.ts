@@ -1,9 +1,13 @@
 // Everything the Labor tab (app/pages/budget/labor.vue) needs in one fetch: every
 // labor_position_settings-managed account, its labor_position_slots rows, the current
 // labor_tax_rates (or null if never saved — the seed script normally sets a starting
-// suggestion, see scripts/seed-labor-position-settings.mjs), and a trailing-actual
-// $/week hint for BOH OT / FOH OT. See schema.sql's labor_position_settings comment for
-// the overall design.
+// suggestion, see scripts/seed-labor-position-settings.mjs), and trailing-actual hints
+// (including BOH/FOH OT, which used to have its own separate 6-month-window computation
+// here — aligned 2026-09 to the same shared 2-month window as every other account's hint,
+// after the user noticed the mismatch: OT's own account rows are already covered by
+// trailingActualsByAccount below since they carry a labor_position_settings row like any
+// other managed account, so a second, differently-windowed mechanism was redundant, not
+// additive). See schema.sql's labor_position_settings comment for the overall design.
 type SlotRow = { id: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number }
 type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
 
@@ -32,24 +36,9 @@ function countFridaysBetween(startIso: string, endIso: string): number {
   return count
 }
 
-function otHistoryFor(db: ReturnType<typeof useDb>, accountNumber: string): { weeklyAvg: number | null, monthsOfData: number } {
-  const account = db.prepare('SELECT id FROM accounts WHERE account_number = ?').get(accountNumber) as { id: number } | undefined
-  if (!account) return { weeklyAvg: null, monthsOfData: 0 }
-  const months = (db.prepare(`
-    SELECT DISTINCT strftime('%Y-%m', date) AS ym FROM daily_line_items WHERE account_id = ? ORDER BY ym DESC LIMIT 6
-  `).all(account.id) as { ym: string }[]).map(r => r.ym)
-  if (months.length === 0) return { weeklyAvg: null, monthsOfData: 0 }
-  const placeholders = months.map(() => '?').join(',')
-  const bounds = db.prepare(`
-    SELECT MIN(date) AS minDate, MAX(date) AS maxDate, COALESCE(SUM(amount), 0) AS total
-    FROM daily_line_items WHERE account_id = ? AND strftime('%Y-%m', date) IN (${placeholders})
-  `).get(account.id, ...months) as { minDate: string, maxDate: string, total: number }
-  const fridays = countFridaysBetween(bounds.minDate, bounds.maxDate)
-  return { weeklyAvg: fridays > 0 ? bounds.total / fridays : null, monthsOfData: months.length }
-}
-
-// Trailing 2-month reference data for wage roles (hourly), flat accounts (Other Labor,
-// Employee Benefits), and the tax accounts — added at the user's request to help set more
+// Trailing 2-month reference data for wage roles (hourly), overtime (BOH/FOH OT), flat
+// accounts (Other Labor, Employee Benefits), and the tax accounts — added at the user's
+// request to help set more
 // accurate hours/amounts/rates than guessing. A single shared window (the 2 most recent
 // months with any real labor activity at all), not each account picking its own — keeps
 // the "trailing Jun-Jul avg" label meaningful across every account it's shown next to,
@@ -70,13 +59,11 @@ function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
 }
 
 // avgMonthlyDollars backs the flat accounts' (Other Labor/Benefits) "$/mo" hint directly.
-// weeklyAvg backs the hourly roles' "hrs/wk" hint instead — added after the user pointed
-// out monthly hours don't map cleanly onto a field labeled "typical hrs/wk"; you'd have to
-// do the month-to-week conversion yourself. Rather than a flat /4.33-weeks-per-month
-// guess, this reuses the exact same real-Friday-count technique otHistoryFor already uses
-// (per-account MIN/MAX date within the window, divided by the real number of Fridays
-// between them) — consistent with the rest of this app treating payroll as a real weekly
-// Friday lump, not a smoothed monthly average.
+// weeklyAvg backs the hourly roles' and OT's "hrs/wk" hints instead — a real Friday-count
+// technique (per-account MIN/MAX date within the window, divided by the real number of
+// Fridays between them) rather than a flat /4.33-weeks-per-month guess, consistent with
+// the rest of this app treating payroll as a real weekly Friday lump, not a smoothed
+// monthly average.
 function trailingActualsByAccount(db: ReturnType<typeof useDb>, months: string[]): Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }> {
   if (months.length === 0) return {}
   const placeholders = months.map(() => '?').join(',')
@@ -138,7 +125,8 @@ export default defineEventHandler(() => {
       a.id AS accountId, a.account_number AS accountNumber, a.name, a.parent_account_id AS parentAccountId,
       p.account_number AS parentAccountNumber,
       lps.pay_type AS payType, lps.scales_with_seasonality AS scalesWithSeasonality,
-      lps.ot_hours AS otHours, lps.ot_base_group AS otBaseGroup, lps.flat_amount AS flatAmount, lps.tax_key AS taxKey
+      lps.ot_hours AS otHours, lps.ot_base_group AS otBaseGroup, lps.flat_amount AS flatAmount, lps.tax_key AS taxKey,
+      lps.is_hidden AS isHidden
     FROM accounts a
     JOIN labor_position_settings lps ON lps.account_id = a.id
     LEFT JOIN accounts p ON p.id = a.parent_account_id
@@ -171,6 +159,7 @@ export default defineEventHandler(() => {
     otBaseGroup: r.otBaseGroup as 'boh' | 'foh' | null,
     flatAmount: r.flatAmount,
     taxKey: r.taxKey as 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null,
+    isHidden: !!r.isHidden,
     slots: slotsByAccount.get(r.accountId) ?? []
   }))
 
@@ -185,10 +174,6 @@ export default defineEventHandler(() => {
   return {
     accounts,
     taxRates: taxRow ?? null,
-    otHistory: {
-      boh: otHistoryFor(db, '6026'),
-      foh: otHistoryFor(db, '6036')
-    },
     trailingWindow: { months: trailingMonths },
     trailingActuals: trailingActualsByAccount(db, trailingMonths),
     trailingTaxRates: trailingTaxRates(db, trailingMonths)

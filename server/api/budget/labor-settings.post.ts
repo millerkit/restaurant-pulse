@@ -7,7 +7,7 @@
 // (slot_index 1..N) — simplest way to represent "a person was removed" without a
 // separate delete list: any stored slot_index beyond what's sent for that account is
 // deleted, then every sent slot is upserted by (account_id, slot_index).
-type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number }
+type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number, isHidden: boolean }
 type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number }
 type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
 
@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const updateSettings = db.prepare(`
-    UPDATE labor_position_settings SET scales_with_seasonality = @scalesWithSeasonality, ot_hours = @otHours, flat_amount = @flatAmount, updated_at = @updatedAt
+    UPDATE labor_position_settings SET scales_with_seasonality = @scalesWithSeasonality, ot_hours = @otHours, flat_amount = @flatAmount, is_hidden = @isHidden, updated_at = @updatedAt
     WHERE account_id = @accountId
   `)
   const upsertSlot = db.prepare(`
@@ -50,7 +50,7 @@ export default defineEventHandler(async (event) => {
 
   const run = db.transaction(() => {
     for (const s of settings) {
-      updateSettings.run({ accountId: s.accountId, scalesWithSeasonality: s.scalesWithSeasonality ? 1 : 0, otHours: s.otHours ?? 0, flatAmount: s.flatAmount ?? 0, updatedAt: now })
+      updateSettings.run({ accountId: s.accountId, scalesWithSeasonality: s.scalesWithSeasonality ? 1 : 0, otHours: s.otHours ?? 0, flatAmount: s.flatAmount ?? 0, isHidden: s.isHidden ? 1 : 0, updatedAt: now })
     }
 
     const maxSlotIndexByAccount = new Map<number, number>()

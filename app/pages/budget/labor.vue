@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { MONTH_NAMES, YEAR, currentAsOfMonth, fridaysInMonth, monthCategoryBudget, useBudgetYear } from '~/composables/useBudgetData'
+import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, monthCategoryBudget, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Labor` })
 
 const asOfMonth = currentAsOfMonth()
+const asOfDay = currentAsOfDay()
 const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i))
 
 // For the "model changes" summary cards: the same year-of-budget_targets fetch Budget
@@ -20,6 +21,9 @@ const { monthlyData: yearBudgetData } = useBudgetYear()
 const RATE_MIN = 10, RATE_MAX = 40, RATE_STEP = 0.25
 const HOURS_MIN = 0, HOURS_MAX = 60, HOURS_STEP = 1
 const OT_HOURS_MAX = 30
+// Annual salary slider — one fixed range across every management role, same reasoning as
+// RATE_MIN/MAX above (nothing shifts around as different roles are edited).
+const SALARY_MIN = 20000, SALARY_MAX = 150000, SALARY_STEP = 1000
 
 // The real seasonal index (monthlyIndex, from /api/capacity/history) is built from a
 // SINGLE prior year of real Toast covers (see that route's own comment) — no averaging
@@ -39,7 +43,7 @@ type Slot = { id: number | null, slotIndex: number, employeeName: string, hourly
 type LaborAccount = {
   accountId: number, accountNumber: string | null, name: string, groupKey: GroupKey, payType: PayType,
   scalesWithSeasonality: boolean, otHours: number, otBaseGroup: 'boh' | 'foh' | null, flatAmount: number,
-  taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, slots: Slot[]
+  taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, isHidden: boolean, slots: Slot[]
 }
 type TaxRates = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
 type MonthlyIndexEntry = { month: number, indexPct: number | null, years: number[] }
@@ -55,12 +59,15 @@ const loading = ref(true)
 const loadError = ref<string | null>(null)
 const accounts = ref<LaborAccount[]>([])
 const taxRates = ref<TaxRates>({ medicareRate: 0, socialSecurityRate: 0, futaRate: 0, sutaMaRate: 0, pfmlMaRate: 0 })
-const otHistory = ref<{ boh: { weeklyAvg: number | null, monthsOfData: number }, foh: { weeklyAvg: number | null, monthsOfData: number } }>({
-  boh: { weeklyAvg: null, monthsOfData: 0 }, foh: { weeklyAvg: null, monthsOfData: 0 }
-})
 const monthlyIndex = ref<MonthlyIndexEntry[]>([])
 const currentMonthActuals = ref<Record<number, number>>({})
 const hasCurrentMonthActuals = ref(false)
+
+// Declutter for unused-but-not-yet-QBO-deactivated accounts — off by default so hidden
+// accounts stay out of the way; "Show N hidden" reveals them again without needing to
+// re-save first.
+const showHidden = ref(false)
+const hiddenCount = computed(() => accounts.value.filter(a => a.isHidden).length)
 
 // Trailing 2-month reference data (see labor-settings.get.ts) — a single shared window
 // (the 2 most recent months with any real labor activity), so "trailing Jun-Jul avg"
@@ -79,7 +86,7 @@ async function loadAll() {
   try {
     const [settingsRes, historyRes, actualsRes] = await Promise.all([
       $fetch<{
-        accounts: any[], taxRates: TaxRates | null, otHistory: typeof otHistory.value,
+        accounts: any[], taxRates: TaxRates | null,
         trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>
       }>('/api/budget/labor-settings'),
       $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] })),
@@ -90,7 +97,6 @@ async function loadAll() {
       slots: (a.slots ?? []).map((s: any) => ({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName ?? '', hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary }))
     }))
     if (settingsRes.taxRates) taxRates.value = settingsRes.taxRates
-    otHistory.value = settingsRes.otHistory
     trailingWindowMonths.value = settingsRes.trailingWindow?.months ?? []
     trailingActuals.value = settingsRes.trailingActuals ?? {}
     trailingTaxRates.value = settingsRes.trailingTaxRates ?? { medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null }
@@ -111,11 +117,21 @@ onMounted(loadAll)
 function accountsIn(group: GroupKey) {
   return accounts.value.filter(a => a.groupKey === group).sort((a, b) => (a.accountNumber ?? '').localeCompare(b.accountNumber ?? '', undefined, { numeric: true }))
 }
+// Visibility-filtered — for rendering only. Every total/computation on this page (
+// groupMonthlyTotal, wageSubjectTotal, Save's write to budget_targets, etc.) reads from
+// accountsIn()/accounts.value directly and never this — hiding an account is purely a
+// declutter, per schema.sql's is_hidden comment, not an exclusion from what's modeled.
+function visibleAccountsIn(group: GroupKey) {
+  return accountsIn(group).filter(a => showHidden.value || !a.isHidden)
+}
 function hourlyAccountsIn(group: GroupKey) {
-  return accountsIn(group).filter(a => a.payType === 'hourly')
+  return visibleAccountsIn(group).filter(a => a.payType === 'hourly')
 }
 function overtimeAccountIn(group: GroupKey) {
-  return accountsIn(group).find(a => a.payType === 'overtime')
+  return visibleAccountsIn(group).find(a => a.payType === 'overtime')
+}
+function toggleHidden(account: LaborAccount) {
+  account.isHidden = !account.isHidden
 }
 
 // The real index, the capped-for-use version, whether capping actually kicked in, and
@@ -167,15 +183,18 @@ function blendedRate(group: 'boh' | 'foh'): number {
   return totalHours > 0 ? weightedSum / totalHours : 0
 }
 
-// Converts the OT trailing-$/week hint into "≈ N hrs" at today's blended rate — null
-// (hide the conversion, but still show the raw $/wk) when nothing's been entered for
-// that group's hourly roles yet, since dividing by a $0 blended rate would otherwise
-// produce a meaningless, oversized hours figure (caught while testing: it showed
-// "≈1132.8 hrs" against a $1,133/wk trailing average with no rates entered yet).
+// Converts the OT trailing-$/week hint (from trailingActuals, keyed by the OT account's
+// own id — it's a labor_position_settings-managed account like any other, so it's already
+// covered by the same shared 2-month window as everything else) into "≈ N hrs" at today's
+// blended rate — null (hide the conversion, but still show the raw $/wk) when nothing's
+// been entered for that group's hourly roles yet, since dividing by a $0 blended rate
+// would otherwise produce a meaningless, oversized hours figure (caught while testing: it
+// showed "≈1132.8 hrs" against a $1,133/wk trailing average with no rates entered yet).
 function impliedOtHours(group: 'boh' | 'foh'): number | null {
   const rate = blendedRate(group)
-  const weeklyAvg = otHistory.value[group].weeklyAvg
-  if (rate <= 0 || weeklyAvg === null) return null
+  const otAccount = overtimeAccountIn(group)
+  const weeklyAvg = otAccount ? trailingActuals.value[otAccount.accountId]?.weeklyAvg : undefined
+  if (rate <= 0 || weeklyAvg == null) return null
   return weeklyAvg / (1.5 * rate)
 }
 
@@ -319,10 +338,34 @@ function setAnnualSalary(account: LaborAccount, annual: number) {
 function actualReference(accountId: number): { hasActual: boolean, amount: number } {
   return { hasActual: hasCurrentMonthActuals.value, amount: currentMonthActuals.value[accountId] ?? 0 }
 }
-function referenceClass(computedAmount: number, actualAmount: number): string {
-  const diff = Math.abs(computedAmount - actualAmount)
-  if (actualAmount === 0) return 'neutral'
-  return diff / actualAmount <= 0.1 ? 'good' : 'warning'
+
+// Fraction of this month's payroll cycles that have happened so far — mirrors Edit
+// Budget's own labor projection (laborPayrollBasis there), which prorates by Friday
+// count rather than elapsed calendar days since payroll posts as a weekly lump, not
+// smoothly across the month.
+const monthExpectedToDateFraction = computed(() => {
+  const totalFridays = fridaysInMonth(YEAR, asOfMonth)
+  if (totalFridays === 0) return 1
+  const monthStart = new Date(YEAR, asOfMonth - 1, 1)
+  const today = new Date(YEAR, asOfMonth - 1, asOfDay)
+  return countFridays(monthStart, today) / totalFridays
+})
+// Prorated "should be by now" figure for this role's full-month computed total — added
+// after the user flagged that comparing a month-to-date actual against a full-month
+// projection always reads as "behind," even with perfectly accurate rates, until the
+// month is nearly over.
+function expectedToDate(account: LaborAccount): number {
+  return accountMonthlyDollars(account, asOfMonth) * monthExpectedToDateFraction.value
+}
+function referenceClass(expected: number, actual: number): string {
+  if (expected === 0) return 'neutral'
+  return Math.abs(actual - expected) / expected <= 0.1 ? 'good' : 'warning'
+}
+// 'neutral' (nothing entered yet, so there's no real expectation to compare against) gets
+// no icon at all — showing a ▲ there read as a false warning even though the color was
+// already correctly neutral gray.
+function referenceIcon(cls: string): string {
+  return cls === 'good' ? '✓' : cls === 'warning' ? '▲' : ''
 }
 
 const saveStatus = ref<'idle' | 'saving' | 'done' | 'error'>('idle')
@@ -332,7 +375,7 @@ async function save() {
   saveStatus.value = 'saving'
   try {
     const settingsPayload = accounts.value.map(a => ({
-      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount
+      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden
     }))
     const slotsPayload = accounts.value
       .filter(a => a.payType === 'hourly' || a.payType === 'salary')
@@ -420,8 +463,14 @@ async function save() {
         </div>
       </div>
 
+      <div v-if="hiddenCount > 0" class="hidden-toggle-row">
+        <button type="button" class="add-person" @click="showHidden = !showHidden">
+          {{ showHidden ? 'Hide' : 'Show' }} {{ hiddenCount }} hidden account{{ hiddenCount === 1 ? '' : 's' }}
+        </button>
+      </div>
+
       <template v-for="group in GROUP_ORDER" :key="group">
-        <div v-if="accountsIn(group).length > 0" class="group-block">
+        <div v-if="visibleAccountsIn(group).length > 0" class="group-block">
           <div class="group-header" :class="group">{{ GROUP_LABEL[group] }}</div>
 
           <!-- BOH/FOH keep the dense table (sliders + multi-person rows need the room).
@@ -438,8 +487,9 @@ async function save() {
 
             <tbody>
               <template v-for="acc in hourlyAccountsIn(group)" :key="acc.accountId">
-                <tr class="role-row">
-                  <td colspan="5"><strong>{{ acc.name }}</strong></td>
+                <tr class="role-row" :class="{ 'is-hidden-row': acc.isHidden }">
+                  <td colspan="4"><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                  <td class="num"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
                 </tr>
                 <tr v-for="(slot, i) in acc.slots" :key="i" class="person-row">
                   <td><input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" /></td>
@@ -449,7 +499,7 @@ async function save() {
                         type="range" :min="RATE_MIN" :max="RATE_MAX" :step="RATE_STEP" v-model.number="slot.hourlyRate"
                         :style="{ '--pct': sliderPct(slot.hourlyRate, RATE_MIN, RATE_MAX) }"
                       />
-                      <input type="number" :step="RATE_STEP" min="0" v-model.number="slot.hourlyRate" class="slider-readout" />
+                      <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="62px" />
                     </div>
                   </td>
                   <td>
@@ -458,7 +508,7 @@ async function save() {
                         type="range" :min="HOURS_MIN" :max="HOURS_MAX" :step="HOURS_STEP" v-model.number="slot.weeklyHours"
                         :style="{ '--pct': sliderPct(slot.weeklyHours, HOURS_MIN, HOURS_MAX) }"
                       />
-                      <input type="number" :step="HOURS_STEP" min="0" v-model.number="slot.weeklyHours" class="slider-readout" />
+                      <NumberStepper v-model="slot.weeklyHours" :step="HOURS_STEP" :min="0" width="56px" />
                     </div>
                   </td>
                   <td class="num muted">{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</td>
@@ -468,8 +518,8 @@ async function save() {
                   </td>
                 </tr>
                 <tr v-if="actualReference(acc.accountId).hasActual" class="note-row">
-                  <td colspan="5" class="reference" :class="referenceClass(accountMonthlyDollars(acc, asOfMonth), actualReference(acc.accountId).amount)">
-                    {{ referenceClass(accountMonthlyDollars(acc, asOfMonth), actualReference(acc.accountId).amount) === 'good' ? '✓ near' : '▲' }} last actual {{ fmt(actualReference(acc.accountId).amount) }}
+                  <td colspan="5" class="reference" :class="referenceClass(expectedToDate(acc), actualReference(acc.accountId).amount)">
+                    {{ referenceIcon(referenceClass(expectedToDate(acc), actualReference(acc.accountId).amount)) }} {{ fmt(actualReference(acc.accountId).amount) }} actual vs. {{ fmt(expectedToDate(acc)) }} expected to date
                   </td>
                 </tr>
                 <tr v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="note-row">
@@ -495,39 +545,59 @@ async function save() {
                         type="range" min="0" :max="OT_HOURS_MAX" :step="HOURS_STEP" v-model.number="overtimeAccountIn(group)!.otHours"
                         :style="{ '--pct': sliderPct(overtimeAccountIn(group)!.otHours, 0, OT_HOURS_MAX) }"
                       />
-                      <input type="number" :step="HOURS_STEP" min="0" v-model.number="overtimeAccountIn(group)!.otHours" class="slider-readout" />
+                      <NumberStepper v-model="overtimeAccountIn(group)!.otHours" :step="HOURS_STEP" :min="0" width="56px" />
                     </div>
                   </td>
                   <td class="num muted">{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</td>
                   <td class="num"><strong>{{ fmt(accountMonthlyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</strong></td>
                 </tr>
-                <tr v-if="otHistory[group as 'boh' | 'foh'].weeklyAvg !== null" class="note-row">
+                <tr v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="note-row">
                   <td colspan="5" class="quiet-note small">
-                    trailing actual ~{{ fmt(otHistory[group as 'boh' | 'foh'].weeklyAvg!) }}/wk<template v-if="impliedOtHours(group as 'boh' | 'foh') !== null"> (&asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs at today's rate)</template>
+                    trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk<template v-if="impliedOtHours(group as 'boh' | 'foh') !== null"> (&asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs at today's rate)</template>
                   </td>
                 </tr>
               </template>
             </tbody>
           </table>
-          <div v-else-if="group === 'management'" class="simple-grid">
-            <div v-for="acc in accountsIn('management')" :key="acc.accountId" class="simple-row">
-              <span class="label">{{ acc.name }}</span>
-              <input
-                type="number" step="500" min="0" class="simple-input"
-                :value="Math.round(annualSalary(acc))"
-                @input="setAnnualSalary(acc, Number(($event.target as HTMLInputElement).value))"
-              />
-              <span class="unit">/yr</span>
-              <span class="value">{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</span>
-            </div>
-          </div>
+          <table v-else-if="group === 'management'" class="labor-table">
+            <thead>
+              <tr class="col-labels">
+                <td>role</td><td>salary $/yr</td><td class="num">this month</td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="acc in visibleAccountsIn('management')" :key="acc.accountId" class="person-row" :class="{ 'is-hidden-row': acc.isHidden }">
+                <td><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                <td>
+                  <div class="slider-cell">
+                    <input
+                      type="range" :min="SALARY_MIN" :max="SALARY_MAX" :step="SALARY_STEP"
+                      :value="Math.round(annualSalary(acc))"
+                      :style="{ '--pct': sliderPct(annualSalary(acc), SALARY_MIN, SALARY_MAX) }"
+                      @input="setAnnualSalary(acc, Number(($event.target as HTMLInputElement).value))"
+                    />
+                    <NumberStepper
+                      :model-value="Math.round(annualSalary(acc))"
+                      @update:model-value="v => setAnnualSalary(acc, v)"
+                      :step="SALARY_STEP" :min="0" width="88px"
+                    />
+                  </div>
+                </td>
+                <td class="num">
+                  <strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong>
+                  <button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
 
           <div v-else-if="group === 'other' || group === 'benefits'" class="simple-grid">
-            <div v-for="acc in accountsIn(group)" :key="acc.accountId" class="simple-row-wrap">
+            <div v-for="acc in visibleAccountsIn(group)" :key="acc.accountId" class="simple-row-wrap" :class="{ 'is-hidden-row': acc.isHidden }">
               <div class="simple-row">
-                <span class="label">{{ acc.name }}</span>
-                <input type="number" step="1" min="0" v-model.number="acc.flatAmount" class="simple-input small" />
+                <span class="label">{{ acc.name }}<span v-if="acc.isHidden" class="hidden-tag">hidden</span></span>
+                <NumberStepper v-model="acc.flatAmount" :step="1" :min="0" width="80px" />
                 <span class="unit">/mo</span>
+                <button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button>
               </div>
               <div v-if="trailingActuals[acc.accountId] !== undefined" class="simple-hint">trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId].avgMonthlyDollars) }}/mo</div>
             </div>
@@ -537,10 +607,10 @@ async function save() {
             <div v-for="acc in accountsIn('tax')" :key="acc.accountId" class="simple-row-wrap">
               <div class="simple-row">
               <span class="label">{{ acc.name }}</span>
-              <input
-                type="number" step="0.01" min="0" class="simple-input tiny"
-                :value="(taxRateFor(acc.taxKey!) * 100).toFixed(2)"
-                @input="setTaxRate(acc.taxKey!, Number(($event.target as HTMLInputElement).value))"
+              <NumberStepper
+                :model-value="taxRateFor(acc.taxKey!) * 100"
+                @update:model-value="v => setTaxRate(acc.taxKey!, v)"
+                :step="0.01" :min="0" :decimals="2" width="64px"
               />
               <span class="unit">%</span>
               <span class="value">{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</span>
@@ -644,12 +714,6 @@ async function save() {
 .simple-row-wrap { border-top: 1px solid var(--hair); padding: 7px 0; }
 .simple-row-wrap > .simple-row { border-top: none; padding: 0; }
 .simple-hint { font-size: 10.5px; color: var(--ink-3); padding-top: 3px; }
-.simple-input {
-  font-size: 12.5px; border: 1px solid var(--hair); border-radius: 5px; padding: 4px 6px;
-  background: var(--surface); color: var(--ink); text-align: right; width: 92px;
-}
-.simple-input.small { width: 72px; }
-.simple-input.tiny { width: 56px; }
 .simple-note { grid-column: 1 / -1; padding-top: 6px; }
 
 .slider-cell { display: flex; align-items: center; gap: 8px; min-width: 150px; }
@@ -700,16 +764,23 @@ async function save() {
   box-shadow: 0 0 0 1px var(--accent);
   cursor: pointer;
 }
-.slider-readout {
-  width: 56px; font-size: 12px; border: 1px solid var(--hair); border-radius: 5px;
-  padding: 3px 4px; background: var(--surface); color: var(--ink); text-align: right;
-}
-
 .remove-slot {
   margin-left: 8px; font-size: 14px; color: var(--ink-3); background: none; border: none; cursor: pointer;
 }
 .remove-slot:hover { color: var(--critical); }
 .add-person { font-size: 11px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; }
+
+.hide-toggle {
+  margin-left: 8px; font-size: 10.5px; color: var(--ink-3); background: none; border: none;
+  cursor: pointer; text-decoration: underline; white-space: nowrap;
+}
+.hide-toggle:hover { color: var(--accent); }
+.hidden-tag {
+  margin-left: 6px; font-size: 10px; font-weight: 500; color: var(--ink-3);
+  background: var(--surface-alt); border-radius: 4px; padding: 1px 5px;
+}
+.is-hidden-row { opacity: 0.55; }
+.hidden-toggle-row { margin: -8px 0 18px; }
 
 .seasonality-panel { padding: 12px 16px; margin-bottom: 22px; gap: 4px; }
 .seasonal-toggle-lg { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }

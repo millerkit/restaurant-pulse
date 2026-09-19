@@ -438,6 +438,12 @@ CREATE TABLE drilldown_thresholds (
 -- at 0 rather than being guessed from today's budget_targets dollar figures.
 -- 6082 Employer FICA Tax deliberately gets no row — confirmed unused/legacy and being
 -- deactivated by the user, so it's left as a normal editable line on the Budget Edit page.
+-- is_hidden (added 2026-09-19, default 0) is a display-only declutter flag for accounts
+-- that are unused but not yet formally deactivated in the real QBO chart of accounts —
+-- deliberately separate from accounts.is_active, which reflects real QBO state and drives
+-- laborManaged/Budget Edit visibility too. Hiding an account never excludes it from any
+-- computation (totals, wage-subject, what Save writes to budget_targets) — purely a Labor
+-- tab display filter, toggleable back via a "Show N hidden" control on the page.
 CREATE TABLE labor_position_settings (
   account_id               INTEGER PRIMARY KEY REFERENCES accounts(id),
   pay_type                 TEXT NOT NULL CHECK (pay_type IN ('hourly', 'salary', 'overtime', 'flat', 'tax')),
@@ -446,6 +452,7 @@ CREATE TABLE labor_position_settings (
   ot_base_group            TEXT CHECK (ot_base_group IN ('boh', 'foh')),
   flat_amount              REAL NOT NULL DEFAULT 0,
   tax_key                  TEXT CHECK (tax_key IN ('medicare', 'social_security', 'futa', 'suta_ma', 'pfml_ma')),
+  is_hidden                 INTEGER NOT NULL DEFAULT 0,
   updated_at                TEXT NOT NULL
 );
 
