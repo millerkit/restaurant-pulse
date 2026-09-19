@@ -21,16 +21,13 @@ const { monthlyData: yearBudgetData } = useBudgetYear()
 // a reliable "what actually happened" signal on its own.
 const { monthlyActuals } = useActualsYear()
 
-// Slider bounds for $/hr and hrs/wk — one fixed range on every hourly card rather than a
-// per-role range, so nothing shifts around as different roles are edited (the user's own
-// call). OT's hours slider reuses HOURS_STEP but caps lower (OT rarely approaches a full
-// second workweek).
-const RATE_MIN = 10, RATE_MAX = 40, RATE_STEP = 0.25
-const HOURS_MIN = 0, HOURS_MAX = 60, HOURS_STEP = 1
-const OT_HOURS_MAX = 30
-// Annual salary slider — one fixed range across every management role, same reasoning as
-// RATE_MIN/MAX above (nothing shifts around as different roles are edited).
-const SALARY_MIN = 20000, SALARY_MAX = 150000, SALARY_STEP = 1000
+// Bump-step sizes for each number field's up/down arrows (see NumberStepper) — kept as
+// named constants rather than inlined so $/hr, hrs/wk, and annual salary each bump by a
+// sensible increment (a quarter-dollar, a whole hour, a thousand dollars) rather than a
+// generic 1.
+const RATE_STEP = 0.25
+const HOURS_STEP = 1
+const SALARY_STEP = 1000
 
 // The real seasonal index (monthlyIndex, from /api/capacity/history) is built from a
 // SINGLE prior year of real Toast covers (see that route's own comment) — no averaging
@@ -82,9 +79,13 @@ const hiddenCount = computed(() => accounts.value.filter(a => a.isHidden).length
 const trailingWindowMonths = ref<string[]>([])
 const trailingActuals = ref<Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>>({})
 const trailingTaxRates = ref<Record<string, number | null>>({ medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null })
+// First–last month only (e.g. "Jul–Sep"), not every month in between ("Jul–Aug–Sep") —
+// shortened at the user's request; the window is always contiguous months, so naming the
+// two ends is enough to know what's covered.
 const trailingWindowLabel = computed(() => {
   if (trailingWindowMonths.value.length === 0) return null
-  return [...trailingWindowMonths.value].reverse().map(ym => MONTH_NAMES[Number(ym.slice(5, 7)) - 1]).join('–')
+  const names = [...trailingWindowMonths.value].reverse().map(ym => MONTH_NAMES[Number(ym.slice(5, 7)) - 1])
+  return names.length > 1 ? `${names[0]}–${names[names.length - 1]}` : names[0]
 })
 
 async function loadAll() {
@@ -335,19 +336,38 @@ const projectedAnnualRevenue = computed(() =>
 )
 const laborPctOfRevenue = computed(() => projectedAnnualRevenue.value > 0 ? (totalLaborForYear.value / projectedAnnualRevenue.value) * 100 : null)
 
+// ---- Trailing-actual comparison row (rendered above the modeled summary cards) --------
+// A second, independently-sourced answer to the same 5 questions, built entirely from
+// real trailing actuals rather than this page's own live model — a sanity check for
+// "does my model roughly match recent reality," without leaving the page. Reuses the same
+// per-account trailingActuals already fetched for the per-role "trailing avg" hints (a
+// 3-month window — see trailingWindowMonths() in labor-settings.get.ts), so no extra
+// fetch is needed here.
+function trailingGroupAvgPerMonth(groups: GroupKey[]): number {
+  return groups.reduce((sum, g) => sum + accountsIn(g).reduce((s, a) => s + (trailingActuals.value[a.accountId]?.avgMonthlyDollars ?? 0), 0), 0)
+}
+const trailingWagesPerMonth = computed(() => trailingGroupAvgPerMonth(['boh', 'foh']))
+const trailingSalariesPerMonth = computed(() => trailingGroupAvgPerMonth(['management']))
+const trailingLaborPerMonth = computed(() => trailingGroupAvgPerMonth(GROUP_ORDER))
+
+// Real YTD actual (same actual-preferring logic as yearLaborTotal, but stopping before
+// asOfMonth — the current month's own actual is still partial, not a fair thing to add to
+// a "so far" total) plus a projection for the remaining months (asOfMonth..Dec) at the
+// trailing 3-month rate — a second, trend-based projection independent of this page's own
+// live model, for comparison against totalLaborForYear/laborPctOfRevenue above.
+const ytdActualLaborTotal = computed(() => {
+  let sum = 0
+  for (let m = 1; m < asOfMonth; m++) {
+    const actual = monthlyActuals.value[m - 1]
+    sum += actual?.hasData ? actual.totals.labor : (monthCategoryBudget(yearBudgetData.value[m - 1], 'labor') ?? 0)
+  }
+  return sum
+})
+const projectedTotalLaborForYear = computed(() => ytdActualLaborTotal.value + targetMonths.value.length * trailingLaborPerMonth.value)
+const projectedLaborPctOfRevenue = computed(() => projectedAnnualRevenue.value > 0 ? (projectedTotalLaborForYear.value / projectedAnnualRevenue.value) * 100 : null)
+
 function fmt(n: number): string {
   return `$${Math.round(n).toLocaleString()}`
-}
-
-// Drives the filled portion of a slider's track (bound as the --pct custom property —
-// see the .slider-cell CSS) so the blue fill actually tracks each slider's own min/max
-// instead of relying on a browser default that can't be styled consistently across
-// engines (Chrome/Safari have no native "filled track" pseudo-element; Firefox's
-// ::-moz-range-progress needs no help, but computing this once and using it everywhere
-// is simpler than maintaining two different mechanisms).
-function sliderPct(value: number, min: number, max: number): string {
-  if (max <= min) return '0%'
-  return `${Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))}%`
 }
 
 function addPerson(account: LaborAccount) {
@@ -400,6 +420,19 @@ const monthExpectedToDateFraction = computed(() => {
 function expectedToDate(account: LaborAccount): number {
   return accountMonthlyDollars(account, asOfMonth) * monthExpectedToDateFraction.value
 }
+// "Projected this month" — real actual-to-date plus the modeled remainder of the month
+// (whatever Fridays haven't happened yet), rather than a pure hypothetical full-month
+// model with no grounding in what's already actually happened. Same actual +
+// modeled-remainder shape as the year-level "Projected total labor" card above, just at
+// month grain (accountMonthlyDollars − expectedToDate is exactly the modeled remainder,
+// since expectedToDate is the modeled total's own to-date share). Falls back to the plain
+// modeled full-month figure when there's no synced current-month actual yet — nothing
+// real exists to blend in.
+function projectedMonthDollars(account: LaborAccount): number {
+  const actual = actualReference(account.accountId)
+  const modeled = accountMonthlyDollars(account, asOfMonth)
+  return actual.hasActual ? actual.amount + (modeled - expectedToDate(account)) : modeled
+}
 function referenceClass(expected: number, actual: number): string {
   if (expected === 0) return 'neutral'
   return Math.abs(actual - expected) / expected <= 0.1 ? 'good' : 'warning'
@@ -409,6 +442,27 @@ function referenceClass(expected: number, actual: number): string {
 // already correctly neutral gray.
 function referenceIcon(cls: string): string {
   return cls === 'good' ? '✓' : cls === 'warning' ? '▲' : ''
+}
+// '' (rather than 'neutral') specifically means "nothing to compare against at all" (no
+// trailing data yet) — distinct from referenceClass's own 'neutral' (a real comparison
+// where the expected side happens to be 0) — so the caller can skip rendering an icon or
+// color entirely instead of showing a misleadingly-confident gray one.
+function weeklyStatusClass(modeledWeekly: number, accountId: number): string {
+  const trailing = trailingActuals.value[accountId]?.weeklyAvg
+  return trailing != null ? referenceClass(modeledWeekly, trailing) : ''
+}
+// The month's real trailing-3-month weekly average, projected out across this month's own
+// Fridays — a second, trend-based reference for "projected this month" (the bold figure)
+// to be checked against, replacing the old to-date actual-vs-expected pacing comparison
+// with a full-month, trend-based one (consistent with the weekly column's own comparison,
+// and with the year-level "Projected total labor" card's same trailing-average logic).
+function trailingProjectedMonthDollars(accountId: number): number | null {
+  const weeklyAvg = trailingActuals.value[accountId]?.weeklyAvg
+  return weeklyAvg != null ? weeklyAvg * fridaysInMonth(YEAR, asOfMonth) : null
+}
+function monthStatusClass(account: LaborAccount): string {
+  const trailing = trailingProjectedMonthDollars(account.accountId)
+  return trailing != null ? referenceClass(projectedMonthDollars(account), trailing) : ''
 }
 
 const saveStatus = ref<'idle' | 'saving' | 'done' | 'error'>('idle')
@@ -467,6 +521,34 @@ async function save() {
       </div>
       <div v-if="saveStatus === 'done'" class="chip good">{{ saveMessage }}</div>
       <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+
+      <!-- Trailing-actual comparison row: a second, real-data-only answer to the same 5
+           questions the modeled row below asks, for an at-a-glance "does my model roughly
+           match recent reality" check. Visually distinguished with its own tint (see
+           .stat-tile.trailing) so it doesn't get mistaken for more modeled figures. -->
+      <div class="stat-grid comparison-row">
+        <div class="stat-tile trailing">
+          <div class="stat-label">Trailing 3-mo avg wages / mo<template v-if="trailingWindowLabel"> ({{ trailingWindowLabel }})</template></div>
+          <div class="stat-value">{{ fmt(trailingWagesPerMonth) }}</div>
+        </div>
+        <div class="stat-tile trailing">
+          <div class="stat-label">Trailing 3-mo avg salaries / mo<template v-if="trailingWindowLabel"> ({{ trailingWindowLabel }})</template></div>
+          <div class="stat-value">{{ fmt(trailingSalariesPerMonth) }}</div>
+        </div>
+        <div class="stat-tile trailing">
+          <div class="stat-label">Trailing 3-mo avg labor / mo<template v-if="trailingWindowLabel"> ({{ trailingWindowLabel }})</template></div>
+          <div class="stat-value">{{ fmt(trailingLaborPerMonth) }}</div>
+        </div>
+        <div class="stat-tile trailing">
+          <div class="stat-label">Projected total labor, {{ YEAR }}</div>
+          <div class="stat-value">{{ fmt(projectedTotalLaborForYear) }}</div>
+          <div class="stat-subnote">actual/budgeted YTD + trailing avg &times; {{ targetMonths.length }} mo ({{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec)</div>
+        </div>
+        <div class="stat-tile trailing">
+          <div class="stat-label">Projected labor % of revenue</div>
+          <div class="stat-value">{{ projectedLaborPctOfRevenue !== null ? projectedLaborPctOfRevenue.toFixed(1) + '%' : '—' }}</div>
+        </div>
+      </div>
 
       <div class="stat-grid">
         <div class="stat-tile">
@@ -530,7 +612,7 @@ async function save() {
           <table v-if="TABLE_GROUPS.includes(group)" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role / person</td><td>$/hr</td><td>hrs/wk</td><td class="num">weekly</td><td class="num">this month</td>
+                <td>role / person</td><td class="num num-inset">$/hr</td><td class="num num-inset">hrs/wk</td><td class="num">weekly</td><td class="num">projected this month</td><td class="actions-col"></td>
               </tr>
             </thead>
 
@@ -538,53 +620,51 @@ async function save() {
               <template v-for="acc in hourlyAccountsIn(group)" :key="acc.accountId">
                 <tr class="role-row" :class="{ 'is-hidden-row': acc.isHidden }">
                   <td colspan="4"><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
-                  <td class="num"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
+                  <td></td>
+                  <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
                 </tr>
                 <tr v-for="(slot, i) in acc.slots" :key="i" class="person-row">
                   <td><input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" /></td>
-                  <td>
-                    <div class="slider-cell">
-                      <input
-                        type="range" :min="RATE_MIN" :max="RATE_MAX" :step="RATE_STEP" v-model.number="slot.hourlyRate"
-                        :style="{ '--pct': sliderPct(slot.hourlyRate, RATE_MIN, RATE_MAX) }"
-                      />
-                      <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="62px" />
-                    </div>
-                  </td>
-                  <td>
-                    <div class="slider-cell">
-                      <input
-                        type="range" :min="HOURS_MIN" :max="HOURS_MAX" :step="HOURS_STEP" v-model.number="slot.weeklyHours"
-                        :style="{ '--pct': sliderPct(slot.weeklyHours, HOURS_MIN, HOURS_MAX) }"
-                      />
-                      <NumberStepper v-model="slot.weeklyHours" :step="HOURS_STEP" :min="0" width="56px" />
-                    </div>
-                  </td>
-                  <td class="num muted">{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</td>
                   <td class="num">
-                    <strong>{{ fmt(slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
-                    <button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button>
+                    <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="72px" />
                   </td>
+                  <td class="num">
+                    <NumberStepper v-model="slot.weeklyHours" :step="HOURS_STEP" :min="0" width="64px" />
+                    <div v-if="acc.slots.length === 1 && impliedWeeklyHours(acc) !== null" class="cell-hint reference" :class="referenceClass(slot.weeklyHours, impliedWeeklyHours(acc)!)">
+                      {{ referenceIcon(referenceClass(slot.weeklyHours, impliedWeeklyHours(acc)!)) }} &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
+                    </div>
+                  </td>
+                  <td class="num muted">
+                    <span v-if="acc.slots.length === 1 && weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)" class="status-icon" :class="weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)">{{ referenceIcon(weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)) }}</span><span class="status-text" :class="acc.slots.length === 1 ? weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId) : ''">{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</span>
+                    <div v-if="acc.slots.length === 1 && trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
+                  </td>
+                  <td class="num">
+                    <span v-if="acc.slots.length === 1 && monthStatusClass(acc)" class="status-icon" :class="monthStatusClass(acc)">{{ referenceIcon(monthStatusClass(acc)) }}</span><strong class="status-text" :class="acc.slots.length === 1 ? monthStatusClass(acc) : ''">{{ fmt(acc.slots.length === 1 ? projectedMonthDollars(acc) : slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
+                    <div v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                  </td>
+                  <td class="actions-col"><button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button></td>
                 </tr>
                 <tr v-if="acc.slots.length > 1" class="total-row">
                   <td>Total</td>
-                  <td class="num muted">—</td>
-                  <td class="num">{{ accountEffectiveHours(acc, asOfMonth).toFixed(1) }}</td>
-                  <td class="num muted">{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</td>
-                  <td class="num"><strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong></td>
-                </tr>
-                <tr v-if="actualReference(acc.accountId).hasActual" class="note-row">
-                  <td colspan="5" class="reference" :class="referenceClass(expectedToDate(acc), actualReference(acc.accountId).amount)">
-                    {{ referenceIcon(referenceClass(expectedToDate(acc), actualReference(acc.accountId).amount)) }} {{ fmt(actualReference(acc.accountId).amount) }} actual vs. {{ fmt(expectedToDate(acc)) }} expected to date
+                  <td class="num muted num-inset">—</td>
+                  <td class="num num-inset">
+                    {{ accountEffectiveHours(acc, asOfMonth).toFixed(1) }}
+                    <div v-if="impliedWeeklyHours(acc) !== null" class="cell-hint reference" :class="referenceClass(accountEffectiveHours(acc, asOfMonth), impliedWeeklyHours(acc)!)">
+                      {{ referenceIcon(referenceClass(accountEffectiveHours(acc, asOfMonth), impliedWeeklyHours(acc)!)) }} &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
+                    </div>
                   </td>
-                </tr>
-                <tr v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="note-row">
-                  <td colspan="5" class="quiet-note small">
-                    trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk<template v-if="impliedWeeklyHours(acc) !== null"> (&asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk at ${{ accountAvgRate(acc).toFixed(2) }}/hr)</template><template v-else> — enter an hourly rate to see implied hours</template>
+                  <td class="num muted">
+                    <span v-if="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)" class="status-icon" :class="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)">{{ referenceIcon(weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)) }}</span><span class="status-text" :class="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)">{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</span>
+                    <div v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
                   </td>
+                  <td class="num">
+                    <span v-if="monthStatusClass(acc)" class="status-icon" :class="monthStatusClass(acc)">{{ referenceIcon(monthStatusClass(acc)) }}</span><strong class="status-text" :class="monthStatusClass(acc)">{{ fmt(projectedMonthDollars(acc)) }}</strong>
+                    <div v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                  </td>
+                  <td class="actions-col"></td>
                 </tr>
                 <tr class="add-row">
-                  <td colspan="5"><button type="button" class="add-person" @click="addPerson(acc)">+ Add person to {{ acc.name }}</button></td>
+                  <td colspan="6"><button type="button" class="add-person" @click="addPerson(acc)">+ Add person to {{ acc.name }}</button></td>
                 </tr>
               </template>
 
@@ -594,23 +674,22 @@ async function save() {
                     <strong>{{ overtimeAccountIn(group)!.name }}</strong>
                     <span class="ot-note">1.5&times; ${{ blendedRate(group as 'boh' | 'foh').toFixed(2) }}/hr blended</span>
                   </td>
-                  <td class="num muted">—</td>
-                  <td>
-                    <div class="slider-cell">
-                      <input
-                        type="range" min="0" :max="OT_HOURS_MAX" :step="HOURS_STEP" v-model.number="overtimeAccountIn(group)!.otHours"
-                        :style="{ '--pct': sliderPct(overtimeAccountIn(group)!.otHours, 0, OT_HOURS_MAX) }"
-                      />
-                      <NumberStepper v-model="overtimeAccountIn(group)!.otHours" :step="HOURS_STEP" :min="0" width="56px" />
+                  <td class="num muted num-inset">—</td>
+                  <td class="num">
+                    <NumberStepper v-model="overtimeAccountIn(group)!.otHours" :step="HOURS_STEP" :min="0" width="64px" />
+                    <div v-if="impliedOtHours(group as 'boh' | 'foh') !== null" class="cell-hint reference" :class="referenceClass(overtimeAccountIn(group)!.otHours, impliedOtHours(group as 'boh' | 'foh')!)">
+                      {{ referenceIcon(referenceClass(overtimeAccountIn(group)!.otHours, impliedOtHours(group as 'boh' | 'foh')!)) }} &asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs trailing
                     </div>
                   </td>
-                  <td class="num muted">{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</td>
-                  <td class="num"><strong>{{ fmt(accountMonthlyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</strong></td>
-                </tr>
-                <tr v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="note-row">
-                  <td colspan="5" class="quiet-note small">
-                    trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk<template v-if="impliedOtHours(group as 'boh' | 'foh') !== null"> (&asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs at today's rate)</template>
+                  <td class="num muted">
+                    <span v-if="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)" class="status-icon" :class="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)">{{ referenceIcon(weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)) }}</span><span class="status-text" :class="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)">{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</span>
+                    <div v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk</div>
                   </td>
+                  <td class="num">
+                    <span v-if="monthStatusClass(overtimeAccountIn(group)!)" class="status-icon" :class="monthStatusClass(overtimeAccountIn(group)!)">{{ referenceIcon(monthStatusClass(overtimeAccountIn(group)!)) }}</span><strong class="status-text" :class="monthStatusClass(overtimeAccountIn(group)!)">{{ fmt(projectedMonthDollars(overtimeAccountIn(group)!)) }}</strong>
+                    <div v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                  </td>
+                  <td class="actions-col"></td>
                 </tr>
               </template>
             </tbody>
@@ -618,31 +697,23 @@ async function save() {
           <table v-else-if="group === 'management'" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role</td><td>salary $/yr</td><td class="num">this month</td>
+                <td>role</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
               </tr>
             </thead>
             <tbody>
               <tr v-for="acc in visibleAccountsIn('management')" :key="acc.accountId" class="person-row" :class="{ 'is-hidden-row': acc.isHidden }">
                 <td><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
-                <td>
-                  <div class="slider-cell">
-                    <input
-                      type="range" :min="SALARY_MIN" :max="SALARY_MAX" :step="SALARY_STEP"
-                      :value="Math.round(annualSalary(acc))"
-                      :style="{ '--pct': sliderPct(annualSalary(acc), SALARY_MIN, SALARY_MAX) }"
-                      @input="setAnnualSalary(acc, Number(($event.target as HTMLInputElement).value))"
-                    />
-                    <NumberStepper
-                      :model-value="Math.round(annualSalary(acc))"
-                      @update:model-value="v => setAnnualSalary(acc, v)"
-                      :step="SALARY_STEP" :min="0" width="88px"
-                    />
-                  </div>
+                <td class="num">
+                  <NumberStepper
+                    :model-value="Math.round(annualSalary(acc))"
+                    @update:model-value="v => setAnnualSalary(acc, v)"
+                    :step="SALARY_STEP" :min="0" width="96px"
+                  />
                 </td>
                 <td class="num">
                   <strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong>
-                  <button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button>
                 </td>
+                <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
               </tr>
             </tbody>
           </table>
@@ -685,6 +756,17 @@ async function save() {
           </div>
         </div>
       </template>
+
+      <!-- Mirrors the top scope-row's Save button — this page can run long once every
+           group is expanded, and scrolling back to the top just to save was the user's
+           own complaint. Same saveStatus/saveMessage state as the top button, so a click
+           on either one shows the same result. -->
+      <div class="scope-row bottom-save-row">
+        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong> — already-closed months stay as budgeted.</span>
+        <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="save">Save</button>
+      </div>
+      <div v-if="saveStatus === 'done'" class="chip good">{{ saveMessage }}</div>
+      <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
     </template>
   </div>
 </template>
@@ -702,6 +784,7 @@ async function save() {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-bottom: 4px;
 }
+.bottom-save-row { margin-top: 4px; }
 .action-btn {
   font-size: 13px; border: 1px solid var(--border); background: var(--surface);
   border-radius: 8px; padding: 8px 14px; color: var(--ink); cursor: pointer;
@@ -712,7 +795,15 @@ async function save() {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;
   margin: 14px 0 24px;
 }
-.stat-tile { background: var(--surface-alt); border-radius: 10px; padding: 10px 14px; }
+/* Tighter gap under the comparison row specifically, so its 5 cards read as paired with
+   the modeled row directly beneath rather than as two independent, evenly-spaced grids. */
+.stat-grid.comparison-row { margin-bottom: 8px; }
+/* Light green (blended toward --good, not a flat hex — same color-mix-toward-surface
+   technique this file already uses for the group headers below and the comparison row's
+   own blue tint) so this modeled row reads as its own distinct color in both light and
+   dark mode without a separate dark-mode override. */
+.stat-tile { background: color-mix(in srgb, var(--good) 14%, var(--surface-alt)); border-radius: 10px; padding: 10px 14px; }
+.stat-tile.trailing { background: color-mix(in srgb, var(--accent) 14%, var(--surface-alt)); }
 .stat-label { font-size: 11px; color: var(--ink-3); }
 .stat-value { font-size: 19px; font-weight: 500; }
 .stat-subnote { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
@@ -757,10 +848,26 @@ async function save() {
 .role-row td { padding: 10px 12px 4px; }
 .person-row td { padding: 6px 12px; border-top: 1px solid var(--hair); vertical-align: middle; }
 .role-row + .person-row td { border-top: none; }
-.note-row td { padding: 0 12px 8px; }
 .total-row td { padding: 6px 12px; border-top: 1px solid var(--hair); font-weight: 600; }
 .add-row td { padding: 2px 12px 12px; }
 .ot-row td { padding: 10px 12px; border-top: 1px solid var(--hair); vertical-align: middle; }
+
+/* Real-data comparisons (trailing avg, actual-vs-expected) sit directly under the column
+   total they explain — hrs/wk, weekly, and this-month respectively — rather than as a
+   separate full-width note line below the row, so each figure's own reference sits right
+   next to it instead of requiring a mental jump across the table. font-weight is reset to
+   normal since .total-row td bolds everything by default. */
+.cell-hint { font-size: 10.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; white-space: nowrap; }
+/* The ✓/▲ caret sits inline with its total (status-icon, deliberately smaller than the
+   total's own font-size — a small badge, not a second headline number) rather than on the
+   secondary hint line below, so the total figure itself is the thing colored/flagged at a
+   glance; status-text carries that same color onto the total's digits. Both share one
+   color set with .cell-hint.reference below (same good/warning/neutral meaning), just
+   without .cell-hint's own smaller font-size, which would shrink the total unintentionally. */
+.status-icon { font-size: 10.5px; margin-right: 3px; }
+.status-icon.good, .status-text.good { color: var(--good); }
+.status-icon.warning, .status-text.warning { color: var(--warning); }
+.status-icon.neutral, .status-text.neutral { color: var(--ink-3); }
 
 .name-input {
   font-size: 12.5px; border: 1px solid var(--hair); border-radius: 5px; padding: 4px 6px;
@@ -794,62 +901,34 @@ async function save() {
 .simple-hint { font-size: 10.5px; color: var(--ink-3); padding-top: 3px; }
 .simple-note { grid-column: 1 / -1; padding-top: 6px; }
 
-.slider-cell { display: flex; align-items: center; gap: 8px; min-width: 150px; }
-
-/* Thick, rounded, blue-filled track with a large round thumb (the user's own reference
-   screenshot) — native range inputs have no cross-engine "filled portion" pseudo-element,
-   so the fill is a background gradient split at --pct (set per-slider from sliderPct()
-   above); Firefox's own ::-moz-range-progress does this natively and just ignores the
-   gradient trick, so both engines end up looking the same without duplicating the fill
-   logic per browser. */
-.slider-cell input[type='range'] {
-  flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(to right, var(--accent) var(--pct, 0%), var(--hair) var(--pct, 0%));
-  outline: none;
-  cursor: pointer;
-}
-.slider-cell input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 3px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--accent);
-  cursor: pointer;
-}
-.slider-cell input[type='range']::-moz-range-track {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--hair);
-}
-.slider-cell input[type='range']::-moz-range-progress {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--accent);
-}
-.slider-cell input[type='range']::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 3px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--accent);
-  cursor: pointer;
-}
+/* A dedicated, narrow column for Hide/Unhide and the person-row × button — previously
+   these sat inline with the "projected this month" total, which pushed that column's own
+   alignment around depending on whether a given row happened to carry a button. Fixed
+   width (not flex/auto) so it can't grow the table just because "Unhide" is a few
+   characters wider than "Hide" or "×". */
+.actions-col { width: 56px; text-align: center; }
+/* $/hr and hrs/wk cells with no NumberStepper of their own (the header label, the Total
+   row's plain figure, OT's "—" placeholder rate) would otherwise right-align flush with
+   the cell's far edge — which, because those columns also hold a NumberStepper with its
+   own up/down arrow box, is the arrows' edge, not the input's. This offsets by exactly
+   NumberStepper's arrow-box width + gap (22px + 6px, see NumberStepper.vue) so the text
+   lines up with the input's own digits instead. */
+/* td.num-inset (not just .num-inset) to match the specificity of .col-labels td /
+   .total-row td / .ot-row td above, whose own padding shorthand would otherwise win over
+   a lower-specificity class-only rule regardless of source order. 40px, not 28px — this
+   REPLACES those rules' own 12px right padding rather than adding to it, so the offset
+   needs to be the full 12px base padding plus NumberStepper's 28px arrow-box+gap width
+   (verified against real computed positions: without the +12, the text landed 12px right
+   of the input's own right edge, not flush with it). */
+td.num-inset { padding-right: 40px; }
 .remove-slot {
-  margin-left: 8px; font-size: 14px; color: var(--ink-3); background: none; border: none; cursor: pointer;
+  font-size: 14px; color: var(--ink-3); background: none; border: none; cursor: pointer;
 }
 .remove-slot:hover { color: var(--critical); }
 .add-person { font-size: 11px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; }
 
 .hide-toggle {
-  margin-left: 8px; font-size: 10.5px; color: var(--ink-3); background: none; border: none;
+  font-size: 10.5px; color: var(--ink-3); background: none; border: none;
   cursor: pointer; text-decoration: underline; white-space: nowrap;
 }
 .hide-toggle:hover { color: var(--accent); }

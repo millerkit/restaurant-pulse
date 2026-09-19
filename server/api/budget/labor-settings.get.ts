@@ -3,11 +3,14 @@
 // labor_tax_rates (or null if never saved — the seed script normally sets a starting
 // suggestion, see scripts/seed-labor-position-settings.mjs), and trailing-actual hints
 // (including BOH/FOH OT, which used to have its own separate 6-month-window computation
-// here — aligned 2026-09 to the same shared 2-month window as every other account's hint,
+// here — aligned 2026-09 to the same shared window as every other account's hint,
 // after the user noticed the mismatch: OT's own account rows are already covered by
 // trailingActualsByAccount below since they carry a labor_position_settings row like any
 // other managed account, so a second, differently-windowed mechanism was redundant, not
-// additive). See schema.sql's labor_position_settings comment for the overall design.
+// additive). Widened from 2 to 3 months 2026-09 at the user's request, when the same
+// window became the basis for the summary cards' trailing-average comparison row (see
+// labor.vue) — 3 months smooths a bit more sampling noise than 2 without going stale.
+// See schema.sql's labor_position_settings comment for the overall design.
 type SlotRow = { id: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number }
 type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
 
@@ -36,12 +39,12 @@ function countFridaysBetween(startIso: string, endIso: string): number {
   return count
 }
 
-// Trailing 2-month reference data for wage roles (hourly), overtime (BOH/FOH OT), flat
+// Trailing 3-month reference data for wage roles (hourly), overtime (BOH/FOH OT), flat
 // accounts (Other Labor, Employee Benefits), and the tax accounts — added at the user's
 // request to help set more
-// accurate hours/amounts/rates than guessing. A single shared window (the 2 most recent
+// accurate hours/amounts/rates than guessing. A single shared window (the 3 most recent
 // months with any real labor activity at all), not each account picking its own — keeps
-// the "trailing Jun-Jul avg" label meaningful across every account it's shown next to,
+// the "trailing Jul-Sep avg" label meaningful across every account it's shown next to,
 // rather than silently comparing different months account to account.
 //
 // For hourly accounts this returns the raw trailing $ actual only — converting that into
@@ -54,7 +57,7 @@ function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
     SELECT DISTINCT strftime('%Y-%m', dli.date) AS ym
     FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
     WHERE a.category = 'labor'
-    ORDER BY ym DESC LIMIT 2
+    ORDER BY ym DESC LIMIT 3
   `).all() as { ym: string }[]).map(r => r.ym)
 }
 
