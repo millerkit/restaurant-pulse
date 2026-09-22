@@ -1,6 +1,6 @@
 // A single floating tooltip (teleported to <body>, positioned via
-// getBoundingClientRect + clamping) shared by the Revenue Calendar and
-// Nightly Margin pages' Month/Year calendar cells. Replaces an earlier
+// getBoundingClientRect + clamping) shared by the Revenue/Margin Calendar
+// page's Revenue and Margin tabs' Month/Year calendar cells. Replaces an earlier
 // per-cell `position: absolute` tooltip that clipped off-screen for cells
 // in the rightmost column — a real bug caught by hovering a real cell near
 // the viewport edge, not a hypothetical. Generic over the row-shape `T`

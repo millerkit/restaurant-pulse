@@ -1,4 +1,5 @@
-// Data for the Nightly Margin page (app/pages/nightly-margin.vue): was a
+// Data for the Margin tab of the Revenue/Margin Calendar page
+// (app/pages/pl/revenue-calendar.vue): was a
 // given operating night, on its own, worth being open for? Same
 // calendar-grid pattern as the Revenue Calendar (server/api/pl.get.ts) —
 // reuses that page's day-cell shape ({date, actual, comparison}) so the
