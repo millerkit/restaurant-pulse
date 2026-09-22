@@ -506,6 +506,48 @@ function historyTooltip(s: MonthlyDraft): string {
 // then distributed only among areas still below their own cap, so the
 // total still lands on the seasonal target without asking any one area to
 // overbook itself.
+// "Set by Actuals" — for the current (in-progress) month only, overwrites
+// each area's expected covers with that area's real actual covers/night
+// so far this month, from daily_toast_area_metrics — the same
+// actualCoversPerNight figure already shown on the Capacity Pace tab's "By
+// Area" cards (areaBreakdownForMonth in server/api/capacity.get.ts), reused
+// here rather than adding a new endpoint. Lets the assumption tighten as
+// real data comes in mid-month, the same "readjust as data arrives" role
+// Set by History plays for a month with no real data yet — a one-shot
+// button, not a live binding, for the same reason every other "Set..."
+// action on this tab is (see Set by History's own comment above).
+function currentMonthAreaBreakdown(): AreaBreakdownRow[] | null {
+  const asOfMonth = paceData.value?.asOfMonth
+  if (asOfMonth == null) return null
+  return months.value.find(m => m.month === asOfMonth)?.areaBreakdown ?? null
+}
+function canSetByActuals(s: MonthlyDraft): boolean {
+  if (paceData.value?.asOfMonth !== s.month) return false
+  const bd = currentMonthAreaBreakdown()
+  return !!bd && bd.some(a => a.actualCoversPerNight != null)
+}
+function actualsPreviewTotal(): number | null {
+  const bd = currentMonthAreaBreakdown()
+  if (!bd) return null
+  const known = bd.filter(a => a.actualCoversPerNight != null)
+  if (known.length === 0) return null
+  return known.reduce((sum, a) => sum + (a.actualCoversPerNight ?? 0), 0)
+}
+function setByActualsTooltip(s: MonthlyDraft): string {
+  if (paceData.value?.asOfMonth !== s.month) return `Only available for the current month (${paceData.value?.asOfMonth != null ? MONTH_NAMES[paceData.value.asOfMonth - 1] : '—'}).`
+  if (!canSetByActuals(s)) return `No real Toast covers data synced yet for ${MONTH_NAMES[s.month - 1]}.`
+  return `Set each area's covers to its real average covers/night so far this month (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
+}
+function applySetByActuals(s: MonthlyDraft) {
+  const bd = currentMonthAreaBreakdown()
+  if (!bd) return
+  for (const row of bd) {
+    if (row.actualCoversPerNight != null) {
+      s.areaCoversInput[row.areaId] = String(roundCovers(row.actualCoversPerNight))
+    }
+  }
+}
+
 function applySetByHistory(s: MonthlyDraft) {
   const fraction = historyTargetFraction(s)
   if (fraction == null) return
@@ -861,6 +903,7 @@ async function save() {
             <ul class="section-note note-list">
               <li>Average nightly covers per area, by month — edit these directly.</li>
               <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
+              <li>For the current month, "Set by Actuals" instead overwrites each area's covers with its real average covers/night so far this month (Toast) — use this to tighten the assumption as real data comes in.</li>
               <li>Total, Fill %, and Per-Cover $ are derived.</li>
               <li>Closures are additional nights closed beyond the standing Monday closure.</li>
             </ul>
@@ -872,6 +915,7 @@ async function save() {
                 <tr>
                   <th scope="col" class="sticky-col">Month</th>
                   <th scope="col">Set by History</th>
+                  <th scope="col">Set by Actuals</th>
                   <th v-for="a in areaDrafts" :key="a.id" scope="col" style="text-transform: capitalize;">{{ a.name }}</th>
                   <th scope="col">Total</th>
                   <th scope="col">Fill %</th>
@@ -883,18 +927,35 @@ async function save() {
               <tbody>
                 <tr v-for="s in monthlyDrafts" :key="s.month">
                   <th scope="row" class="sticky-col">{{ MONTH_NAMES[s.month - 1] }}</th>
-                  <td class="setpct-cell">
-                    <div class="setpct-row">
-                      <button
-                        type="button"
-                        class="apply-pct-btn"
-                        :disabled="historyTargetFraction(s) == null"
-                        :title="historyTooltip(s)"
-                        @click="applySetByHistory(s)"
-                      >Set by History</button>
-                      <span class="setpct-arrow" aria-hidden="true">→</span>
-                    </div>
-                    <span v-if="historyTargetFraction(s) != null" class="setpct-result">≈{{ fmtPctWhole(historyTargetFraction(s)) }}</span>
+                  <td>
+                    <span class="setpct-cell">
+                      <span class="setpct-row">
+                        <button
+                          type="button"
+                          class="apply-pct-btn"
+                          :disabled="historyTargetFraction(s) == null"
+                          :title="historyTooltip(s)"
+                          @click="applySetByHistory(s)"
+                        >Set by History</button>
+                        <span class="setpct-arrow" aria-hidden="true">→</span>
+                      </span>
+                      <span v-if="historyTargetFraction(s) != null" class="setpct-result">≈{{ fmtPctWhole(historyTargetFraction(s)) }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    <span class="setpct-cell">
+                      <span class="setpct-row">
+                        <button
+                          type="button"
+                          class="apply-pct-btn"
+                          :disabled="!canSetByActuals(s)"
+                          :title="setByActualsTooltip(s)"
+                          @click="applySetByActuals(s)"
+                        >Set by Actuals</button>
+                        <span class="setpct-arrow" aria-hidden="true">→</span>
+                      </span>
+                      <span v-if="canSetByActuals(s)" class="setpct-result">≈{{ fmtCoversPerNight(actualsPreviewTotal()) }}/night</span>
+                    </span>
                   </td>
                   <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>
                   <td class="derived">{{ monthDerived(s).totalCovers }}</td>
@@ -907,6 +968,7 @@ async function save() {
               <tfoot>
                 <tr>
                   <th scope="row" class="sticky-col">Total</th>
+                  <td class="derived">—</td>
                   <td class="derived">—</td>
                   <td v-for="a in areaDrafts" :key="a.id" class="derived">{{ Math.round(yearlyTotals.areaCoversAvg.get(a.id) ?? 0) }}</td>
                   <td class="derived">{{ Math.round(yearlyTotals.totalCoversAvg) }}</td>
