@@ -1280,15 +1280,15 @@ function exportForQuickBooks() {
             <thead v-else-if="selectedMonthClosed">
               <tr class="col-head-row">
                 <th scope="col"></th>
-                <th scope="col">Budget</th>
                 <th scope="col">Actual</th>
+                <th scope="col">Budget</th>
               </tr>
             </thead>
             <thead v-else-if="selectedMonthIsCurrent">
               <tr class="col-head-row">
                 <th scope="col"></th>
-                <th scope="col">Budget</th>
                 <th scope="col">Actual (to date)</th>
+                <th scope="col">Budget</th>
                 <th scope="col">Projected</th>
               </tr>
             </thead>
@@ -1350,11 +1350,11 @@ function exportForQuickBooks() {
                       {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
-                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                   <td v-if="selectedMonthIsCurrent">
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                     <span v-else class="amount-input readonly">${{ Math.round(categoryActualTotal(cat)).toLocaleString() }}</span>
                   </td>
+                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                   <td v-if="selectedMonthIsCurrent">
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                     <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(categoryProjectedVarianceByCat.get(cat))]">
@@ -1372,6 +1372,10 @@ function exportForQuickBooks() {
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
+                    <td v-if="selectedMonthIsCurrent">
+                      <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                    </td>
                     <td>
                       <input
                         v-if="isLeafAccount(acc) && !acc.laborManaged && acc.category !== 'revenue'" type="text" inputmode="numeric" class="amount-input"
@@ -1382,10 +1386,6 @@ function exportForQuickBooks() {
                         <NuxtLink v-if="acc.laborManaged" to="/budget/labor" class="labor-managed-note">Edit on Labor tab</NuxtLink>
                         <NuxtLink v-else-if="acc.category === 'revenue'" to="/budget/revenue" class="labor-managed-note">Edit on Revenue tab</NuxtLink>
                       </span>
-                    </td>
-                    <td v-if="selectedMonthIsCurrent">
-                      <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
-                      <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
                     </td>
                     <td v-if="selectedMonthIsCurrent">
                       <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
@@ -1435,11 +1435,11 @@ function exportForQuickBooks() {
               </template>
               <tr class="net-income-row">
                 <th scope="row">Net Income</th>
-                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                   <span v-else class="amount-input readonly"><strong :class="netIncomeClass(currentMonthActualNetIncome)">{{ formatNetIncome(currentMonthActualNetIncome) }}</strong></span>
                 </td>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                   <span v-else class="amount-input readonly"><strong :class="netIncomeClass(currentMonthProjectedNetIncome)">{{ formatNetIncome(currentMonthProjectedNetIncome) }}</strong></span>
@@ -1458,7 +1458,6 @@ function exportForQuickBooks() {
                       {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
                     </button>
                   </th>
-                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                   <td>
                     <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
                     <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(categoryVarianceByCat.get(cat))]">
@@ -1470,13 +1469,13 @@ function exportForQuickBooks() {
                       <span v-if="categoryVarianceByCat.get(cat)?.kind === 'no-budget'" class="chip warning">No budget</span>
                     </span>
                   </td>
+                  <td><span class="amount-input readonly">${{ Math.round(categoryComputedTotal(cat)).toLocaleString() }}</span></td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
                   <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
-                    <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
                     <td>
                       <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-actuals'" class="amount-input readonly muted">—</span>
                       <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(accountVarianceById.get(acc.accountId))]">
@@ -1488,16 +1487,17 @@ function exportForQuickBooks() {
                         <span v-if="accountVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
                       </span>
                     </td>
+                    <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
                   </tr>
                 </template>
               </template>
               <tr class="net-income-row">
                 <th scope="row">Net Income</th>
-                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
                 <td>
                   <span v-if="monthActualNetIncome === null" class="amount-input readonly muted">—</span>
                   <span v-else class="amount-input readonly"><strong :class="netIncomeClass(monthActualNetIncome)">{{ formatNetIncome(monthActualNetIncome) }}</strong></span>
                 </td>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(liveDraftNetIncome)">{{ formatNetIncome(liveDraftNetIncome) }}</strong></span></td>
               </tr>
             </tbody>
           </table>

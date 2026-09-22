@@ -489,7 +489,7 @@ watch(editMonth, () => {
 })
 
 // ---- Save / unsaved-changes guard -------------------------------------------
-const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'nochange' | 'error'>('idle')
 const saveMessage = ref('')
 
 function changedTargets(): { year: number, month: number, accountId: number, amount: number }[] {
@@ -530,7 +530,12 @@ async function saveRevenue() {
   try {
     const targets = changedTargets()
     if (targets.length === 0) {
-      saveStatus.value = 'idle'
+      // Real, reachable state — clicking Save after "Recompute from Capacity" or "Fill in
+      // missing" already persisted everything (both save directly, then reload), or just
+      // clicking Save twice in a row. Previously this silently reset to 'idle' with no
+      // visible change at all, which read as "the button doesn't do anything" (reported
+      // directly by the user against a real screenshot) — it was working, just mute.
+      saveStatus.value = 'nochange'
       return
     }
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
@@ -592,10 +597,13 @@ async function saveRevenue() {
             Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
             <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
             <template v-else>(no real Beer/Liquor/Wine/Non-Alcoholic sales mix yet — will split by whatever's already budgeted)</template>.
-            <button class="mini-btn" :disabled="revenueRecomputeStatus === 'running'" @click="recomputeRevenueFromCapacity">
+            <button
+              class="mini-btn" :disabled="revenueRecomputeStatus === 'running' || (!revenueNeedsRecompute && revenueRecomputeStatus !== 'done')"
+              :title="!revenueNeedsRecompute && revenueRecomputeStatus !== 'done' ? 'Already matches the Capacity projection — nothing to change' : ''"
+              @click="recomputeRevenueFromCapacity"
+            >
               Recompute {{ MONTH_NAMES[editMonth - 1] }} Revenue from Capacity
             </button>
-            <span v-if="!revenueNeedsRecompute && revenueRecomputeStatus === 'idle'" class="chip neutral">Already matches — nothing to change</span>
             <span v-if="revenueRecomputeStatus === 'done'" class="chip good">{{ revenueRecomputeMessage }}</span>
             <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
           </div>
@@ -612,6 +620,7 @@ async function saveRevenue() {
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveRevenue">Save revenue</button>
         </div>
         <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'nochange'" class="chip neutral">Nothing to save — already up to date</div>
         <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
         <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
         <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
@@ -647,8 +656,8 @@ async function saveRevenue() {
             <thead v-else-if="selectedMonthIsCurrent">
               <tr class="col-head-row">
                 <th scope="col"></th>
-                <th scope="col">Budget</th>
                 <th scope="col">Actual (to date)</th>
+                <th scope="col">Budget</th>
                 <th scope="col">Projected</th>
               </tr>
             </thead>
@@ -684,6 +693,12 @@ async function saveRevenue() {
                 <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
                   <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                 </th>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                  </span>
+                </td>
                 <td>
                   <span class="amount-cell">
                     <input
@@ -691,12 +706,6 @@ async function saveRevenue() {
                       v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
                     />
                     <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
-                  </span>
-                </td>
-                <td v-if="selectedMonthIsCurrent">
-                  <span class="amount-cell">
-                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
-                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
                   </span>
                 </td>
                 <td v-if="selectedMonthIsCurrent">
@@ -715,13 +724,13 @@ async function saveRevenue() {
               </tr>
               <tr class="net-income-row">
                 <th scope="row">Total Revenue</th>
-                <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span class="amount-cell">
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                     <span v-else class="amount-input readonly"><strong>${{ Math.round(totalRevenueActual).toLocaleString() }}</strong></span>
                   </span>
                 </td>
+                <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span class="amount-cell">
                   <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
@@ -749,6 +758,7 @@ async function saveRevenue() {
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveRevenue">Save revenue</button>
         </div>
         <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'nochange'" class="chip neutral">Nothing to save — already up to date</div>
         <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
       </section>
     </template>
