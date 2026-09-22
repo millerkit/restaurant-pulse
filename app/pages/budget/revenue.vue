@@ -1,0 +1,815 @@
+<script setup lang="ts">
+import site from '~/config/site.json'
+import { CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+
+useHead({ title: `${site.restaurantName} — Revenue` })
+
+const { monthlyData, loadError, loadYear } = useBudgetYear()
+const { monthlyActuals, loadActualsYear } = useActualsYear()
+
+// Revenue projection is forward-looking only — a past/closed month's revenue is already
+// final and shown read-only on the Edit Budget page (which still displays every category's
+// real actual vs. budget for a closed month, unaffected by this page). Same asOfMonth..Dec
+// scope as the Labor tab (app/pages/budget/labor.vue), just rendered as real month tabs per
+// the user's explicit ask, rather than Labor's single-view-with-summary-cards approach.
+const asOfMonth = currentAsOfMonth()
+const asOfDay = currentAsOfDay()
+const asOfLabel = `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
+const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i))
+
+const editMonth = ref(asOfMonth)
+const selectedMonthIsCurrent = computed(() => editMonth.value === asOfMonth)
+
+function monthHasBudget(month: number) {
+  const data = monthlyData.value[month - 1]
+  return !!data && data.accounts.some(a => a.category === 'revenue' && a.amount !== null)
+}
+
+const editMonthData = computed(() => monthlyData.value[editMonth.value - 1])
+// Every computation below reads from this, never editMonthData.value.accounts directly —
+// that array carries every category (the shared /api/budget/targets response), and this
+// page must never compute a "changed" figure for a COGS/Labor/Opex account it never
+// rendered an input for (see saveRevenue below for why that would be destructive).
+const revenueAccounts = computed(() => (editMonthData.value?.accounts || []).filter(a => a.category === 'revenue'))
+
+const editableAccountAmounts = ref<Record<number, string>>({})
+
+function parseEditableAmount(raw: string | undefined): number {
+  if (!raw) return 0
+  const n = Number(raw.replace(/,/g, ''))
+  return Number.isFinite(n) ? n : 0
+}
+function formatWholeDollars(n: number): string {
+  return Math.round(n).toLocaleString()
+}
+
+watch(revenueAccounts, (accounts) => {
+  editableAccountAmounts.value = {}
+  for (const acc of accounts) {
+    if (acc.amount !== null) editableAccountAmounts.value[acc.accountId] = formatWholeDollars(acc.amount)
+  }
+}, { immediate: true })
+
+function onAmountBlur(accountId: number) {
+  const raw = editableAccountAmounts.value[accountId]
+  if (raw === undefined || raw.trim() === '') {
+    editableAccountAmounts.value[accountId] = ''
+    return
+  }
+  editableAccountAmounts.value[accountId] = formatWholeDollars(Math.round(parseEditableAmount(raw) / 10) * 10)
+}
+
+// Real per-account actuals — only ever fetched for the current month (a future month has
+// nothing synced yet, by definition). Mirrors Edit Budget's own selectedMonthAccountActuals.
+const selectedMonthAccountActuals = ref<Record<number, number>>({})
+const selectedMonthHasActuals = ref(false)
+watch(editMonth, async (month) => {
+  if (month !== asOfMonth) {
+    selectedMonthAccountActuals.value = {}
+    selectedMonthHasActuals.value = false
+    return
+  }
+  try {
+    const result = await $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+    const map: Record<number, number> = {}
+    for (const a of result.accounts) map[a.accountId] = a.amount
+    selectedMonthAccountActuals.value = map
+    selectedMonthHasActuals.value = result.accounts.length > 0
+  } catch {
+    selectedMonthAccountActuals.value = {}
+    selectedMonthHasActuals.value = false
+  }
+}, { immediate: true })
+
+// Same chart-of-accounts-number ordering as Edit Budget's accountsForCategory.
+const sortedRevenueAccounts = computed(() => {
+  const visible = revenueAccounts.value.filter(accountVisible)
+  const all = revenueAccounts.value
+  return (visible.length > 0 ? visible : all).sort((a, b) => {
+    const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
+    const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
+    return an !== bn ? an - bn : a.name.localeCompare(b.name)
+  })
+})
+
+const revenueAccountsById = computed(() => {
+  const map = new Map<number, BudgetAccount>()
+  for (const acc of revenueAccounts.value) map.set(acc.accountId, acc)
+  return map
+})
+
+function accountDepth(acc: BudgetAccount): number {
+  let depth = 0
+  let current: BudgetAccount | undefined = acc
+  const seen = new Set<number>()
+  while (current?.parentAccountId != null && !seen.has(current.parentAccountId)) {
+    seen.add(current.parentAccountId)
+    current = revenueAccountsById.value.get(current.parentAccountId)
+    if (!current) break
+    depth++
+  }
+  return depth
+}
+
+function directChildren(accountId: number): BudgetAccount[] {
+  return revenueAccounts.value.filter(a => a.parentAccountId === accountId)
+}
+function isLeafAccount(acc: BudgetAccount): boolean {
+  return directChildren(acc.accountId).length === 0
+}
+function computedAccountAmount(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return parseEditableAmount(editableAccountAmounts.value[acc.accountId])
+  return children.reduce((sum, c) => sum + computedAccountAmount(c), 0)
+}
+const totalRevenueBudget = computed(() => {
+  const roots = revenueAccounts.value.filter(a => a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + computedAccountAmount(a), 0)
+})
+
+function computedAccountActual(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return selectedMonthAccountActuals.value[acc.accountId] || 0
+  return children.reduce((sum, c) => sum + computedAccountActual(c), 0)
+}
+const totalRevenueActual = computed(() => {
+  const roots = revenueAccounts.value.filter(a => a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + computedAccountActual(a), 0)
+})
+
+// Tue-Sun operating-day fraction of the current month elapsed so far — same definition as
+// Edit Budget's monthExpectedFraction (Urban Hearth is closed Mondays). Revenue has no
+// lump-sum-posting exception the way rent/loan interest do on the opex side, so a plain
+// operating-day fraction is the right proration here, unlike labor's payroll-cycle one.
+function isOperatingDay(date: Date): boolean {
+  return date.getDay() !== 1
+}
+function countOperatingDays(start: Date, end: Date): number {
+  let count = 0
+  const d = new Date(start)
+  while (d <= end) {
+    if (isOperatingDay(d)) count++
+    d.setDate(d.getDate() + 1)
+  }
+  return count
+}
+const monthExpectedFraction = computed(() => {
+  const monthStart = new Date(YEAR, editMonth.value - 1, 1)
+  const monthEnd = new Date(YEAR, editMonth.value, 0)
+  const today = new Date()
+  const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
+  if (totalOperatingDays === 0) return 0
+  return countOperatingDays(monthStart, today) / totalOperatingDays
+})
+function projectFromActual(actual: number): number {
+  const fraction = monthExpectedFraction.value
+  if (fraction <= 0) return actual
+  return actual / fraction
+}
+function computedAccountProjected(acc: BudgetAccount): number {
+  return projectFromActual(computedAccountActual(acc))
+}
+const totalRevenueProjected = computed(() => projectFromActual(totalRevenueActual.value))
+
+// Revenue is always "higher is better" — no direction table needed for a single-category page.
+function varianceFor(budget: number, actual: number): { kind: 'no-budget' } | { kind: 'value', delta: number, status: ReturnType<typeof paceStatus> } {
+  if (!budget) return { kind: 'no-budget' }
+  const actualPct = (actual / budget) * 100
+  const status = paceStatus(actualPct, 100, 'higher-is-better')
+  return { kind: 'value', delta: actual - budget, status }
+}
+type Variance = ReturnType<typeof varianceFor> | { kind: 'no-actuals' }
+function varianceIcon(v?: Variance): string {
+  if (!v || v.kind !== 'value') return ''
+  return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
+}
+function varianceClass(v?: Variance): string {
+  if (!v || v.kind !== 'value') return ''
+  return `v-${v.status}`
+}
+function varianceDeltaLabel(v?: Variance): string {
+  if (!v || v.kind !== 'value') return ''
+  const sign = v.delta >= 0 ? '+' : '−'
+  return `(${sign}$${Math.abs(Math.round(v.delta)).toLocaleString()})`
+}
+const totalRevenueProjectedVariance = computed<Variance>(() => {
+  if (!selectedMonthIsCurrent.value) return { kind: 'no-actuals' }
+  if (!selectedMonthHasActuals.value) return { kind: 'no-actuals' }
+  return varianceFor(totalRevenueBudget.value, totalRevenueProjected.value)
+})
+const accountProjectedVarianceById = computed(() => {
+  const map = new Map<number, Variance>()
+  if (!selectedMonthIsCurrent.value) return map
+  for (const acc of revenueAccounts.value) {
+    map.set(acc.accountId, selectedMonthHasActuals.value
+      ? varianceFor(computedAccountAmount(acc), computedAccountProjected(acc))
+      : { kind: 'no-actuals' })
+  }
+  return map
+})
+
+// ---- Row filter: hide $0 rows ---------------------------------------------
+const hideZeroRows = ref(true)
+function hasNoStoredAmount(amount: number | null): boolean {
+  return amount === null || amount === 0
+}
+function leafVisible(acc: BudgetAccount): boolean {
+  if (!hideZeroRows.value) return true
+  return !hasNoStoredAmount(acc.amount)
+}
+function accountVisible(acc: BudgetAccount): boolean {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return leafVisible(acc)
+  return children.some(accountVisible)
+}
+
+// ---- Live pace preview (current month only) --------------------------------
+const livePaceExpectedPct = computed(() => (asOfDay / daysInMonth(YEAR, asOfMonth)) * 100)
+const livePaceCard = computed(() => {
+  if (!selectedMonthHasActuals.value) return { noActuals: true as const, noBudget: false as const }
+  const budget = totalRevenueBudget.value
+  if (!budget) return { noActuals: false as const, noBudget: true as const }
+  const actualPct = (totalRevenueActual.value / budget) * 100
+  const status = paceStatus(actualPct, livePaceExpectedPct.value, 'higher-is-better')
+  return { noActuals: false as const, noBudget: false as const, actualPct, status }
+})
+
+// ---- Previous-month gap-filler ---------------------------------------------
+const previousMonthLabel = computed(() => editMonth.value > 1 ? MONTH_NAMES[editMonth.value - 2] : null)
+const actionStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const actionMessage = ref('')
+
+async function fillMissingFromLastMonth() {
+  if (!previousMonthLabel.value) return
+  actionStatus.value = 'running'
+  try {
+    const result = await $fetch<{ updated: number, source: 'actuals' | 'budget' }>('/api/budget/copy-into-month', {
+      method: 'POST',
+      body: {
+        sourceYear: YEAR, sourceMonth: editMonth.value - 1,
+        targetMonths: [{ year: YEAR, month: editMonth.value }],
+        // Scoped to this page's own revenue accounts only — this action must never touch
+        // COGS/Labor/Opex/Other budget_targets rows it never rendered an input for.
+        accountIds: revenueAccounts.value.map(a => a.accountId),
+        allowBudgetFallback: true, onlyMissing: true, roundTo: 10
+      }
+    })
+    actionMessage.value = result.updated > 0
+      ? `Filled in ${result.updated} revenue account(s) with no existing budget for ${MONTH_NAMES[editMonth.value - 1]}, from ${previousMonthLabel.value}'s ${result.source === 'actuals' ? 'actuals' : 'budget'}.`
+      : `Every revenue account already has a budget for ${MONTH_NAMES[editMonth.value - 1]} — nothing to fill in.`
+    actionStatus.value = 'done'
+    await loadYear()
+  } catch (err: any) {
+    actionStatus.value = 'error'
+    actionMessage.value = err?.data?.statusMessage || err?.message || 'No actuals or budget available yet'
+  }
+}
+
+// ---- Revenue from Capacity assumptions -----------------------------------
+// The Capacity tab's Edit Capacity view (app/pages/capacity/edit.vue) already models a real
+// bottom-up revenue projection — per-area expected covers x per-cover Food/Beverage revenue
+// (see schema.sql's capacity_areas comment and server/api/capacity.get.ts) — so rather than
+// duplicating a per-area covers editor here (a design question resolved directly with the
+// user: keep the existing one-click sync, don't fork capacity_area_seasonality editing
+// across two pages), this pulls that same month's Capacity-projected Food/Beverage revenue
+// and offers to write it into the real Food (4010)/Beverage (4022/4024/4026/4028) revenue
+// accounts. Moved here verbatim from Edit Budget's own former Revenue section.
+type CapacityAssumedMonth = { expectedRevenueFood: number, expectedRevenueBeverage: number }
+type CapacityMonth = { month: number, assumed: CapacityAssumedMonth }
+const capacityMonths = ref<CapacityMonth[] | null>(null)
+async function loadCapacityMonths() {
+  try {
+    const result = await $fetch<{ months: CapacityMonth[] }>('/api/capacity')
+    capacityMonths.value = result.months?.length ? result.months : null
+  } catch {
+    capacityMonths.value = null
+  }
+}
+onMounted(loadCapacityMonths)
+
+function capacityTargetForMonth(month: number): CapacityAssumedMonth | null {
+  return capacityMonths.value?.find(m => m.month === month)?.assumed ?? null
+}
+
+function leafRevenueAccountsForGroup(group: 'Food' | 'Beverage'): BudgetAccount[] {
+  return revenueAccounts.value.filter(a => a.subcategory === group && isLeafAccount(a))
+}
+function currentGroupRevenueBudget(group: 'Food' | 'Beverage'): number {
+  return leafRevenueAccountsForGroup(group).reduce((sum, a) => sum + (a.amount || 0), 0)
+}
+
+type BeverageMixAccount = { accountId: number, accountNumber: string | null, name: string, pct: number | null }
+const beverageRevenueMix = ref<BeverageMixAccount[] | null>(null)
+async function loadBeverageRevenueMix() {
+  try {
+    const result = await $fetch<{ hasData: boolean, accounts: BeverageMixAccount[] }>('/api/budget/beverage-revenue-mix')
+    beverageRevenueMix.value = result.hasData ? result.accounts : null
+  } catch {
+    beverageRevenueMix.value = null
+  }
+}
+onMounted(loadBeverageRevenueMix)
+
+const beverageMixLabel = computed(() => {
+  const mix = beverageRevenueMix.value
+  if (!mix) return null
+  return mix.map(m => `${m.name.replace(/^Restaurant /, '')} ${Math.round((m.pct ?? 0) * 100)}%`).join(', ')
+})
+
+const REVENUE_RECOMPUTE_THRESHOLD = 1
+function revenueComparisons() {
+  const target = capacityTargetForMonth(editMonth.value)
+  if (!target) return []
+  return (['Food', 'Beverage'] as const).map(group => ({
+    group,
+    targetAmount: group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage,
+    currentAmount: currentGroupRevenueBudget(group)
+  }))
+}
+const revenueHasCapacityData = computed(() => capacityTargetForMonth(editMonth.value) !== null)
+const revenueNeedsRecompute = computed(() =>
+  revenueComparisons().some(c => Math.abs(c.currentAmount - c.targetAmount) > REVENUE_RECOMPUTE_THRESHOLD)
+)
+
+const revenueRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const revenueRecomputeMessage = ref('')
+
+async function recomputeRevenueFromCapacity() {
+  revenueRecomputeStatus.value = 'running'
+  try {
+    const target = capacityTargetForMonth(editMonth.value)
+    if (!target) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Edit Capacity page`)
+
+    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+    const summary: string[] = []
+    for (const group of ['Food', 'Beverage'] as const) {
+      const groupTarget = group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage
+      const accounts = leafRevenueAccountsForGroup(group)
+      if (accounts.length === 0) continue
+      const mixByAccountId = group === 'Beverage'
+        ? new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
+        : null
+      const usingRealMix = !!mixByAccountId && accounts.every(a => mixByAccountId.get(a.accountId) != null)
+      const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
+      for (const a of accounts) {
+        const weight = usingRealMix
+          ? (mixByAccountId!.get(a.accountId) ?? 0)
+          : (oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length)
+        targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(groupTarget * weight * 100) / 100 })
+      }
+      summary.push(`${group} $${Math.round(groupTarget).toLocaleString()}${group === 'Beverage' ? (usingRealMix ? ' (real Beer/Liquor/Wine/N-A mix)' : ' (no sales mix data yet — used existing budget weight)') : ''}`)
+    }
+    if (targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
+
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await loadYear()
+    revenueRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} Revenue from Capacity assumptions: ${summary.join(', ')}.`
+    revenueRecomputeStatus.value = 'done'
+  } catch (err: any) {
+    revenueRecomputeStatus.value = 'error'
+    revenueRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
+  }
+}
+
+watch(editMonth, () => {
+  revenueRecomputeStatus.value = 'idle'
+  revenueRecomputeMessage.value = ''
+  actionStatus.value = 'idle'
+  actionMessage.value = ''
+  saveStatus.value = 'idle'
+  saveMessage.value = ''
+})
+
+// ---- Save / unsaved-changes guard -------------------------------------------
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const saveMessage = ref('')
+
+function changedTargets(): { year: number, month: number, accountId: number, amount: number }[] {
+  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+  for (const acc of revenueAccounts.value) {
+    if (!isLeafAccount(acc)) continue
+    const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
+    if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
+      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
+    }
+  }
+  return targets
+}
+
+const hasUnsavedChanges = computed(() => changedTargets().length > 0)
+
+const UNSAVED_CHANGES_MESSAGE = 'You have unsaved revenue edits for this month. Discard them and continue?'
+function selectMonth(month: number) {
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
+  editMonth.value = month
+}
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload))
+
+onBeforeRouteLeave(() => {
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return false
+})
+
+async function saveRevenue() {
+  saveStatus.value = 'saving'
+  try {
+    const targets = changedTargets()
+    if (targets.length === 0) {
+      saveStatus.value = 'idle'
+      return
+    }
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await loadYear()
+    saveStatus.value = 'saved'
+  } catch (err: any) {
+    saveStatus.value = 'error'
+    saveMessage.value = err?.data?.statusMessage || err?.message || 'Save failed'
+  }
+}
+</script>
+
+<template>
+  <div>
+    <PageHeader
+      page-name="Revenue"
+      :description="`Project revenue by account for ${MONTH_NAMES[asOfMonth - 1]}–Dec, fed from Capacity's covers-by-area assumptions · ${YEAR}`"
+      :as-of-label="asOfLabel"
+      @synced="loadYear(); loadActualsYear()"
+    />
+
+    <div v-if="loadError" class="drill-card">
+      <span class="chip critical">Couldn't load budget data</span>
+      <span class="quiet-note">{{ loadError }}</span>
+    </div>
+
+    <template v-else>
+      <section>
+        <div v-if="selectedMonthIsCurrent" class="live-pace-card">
+          <div class="live-pace-head">
+            <span class="chip accent">Live Preview</span>
+            <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s actual-to-date revenue paces against the budget below, including any edits you haven't saved yet.</span>
+          </div>
+          <div class="live-pace-grid">
+            <div class="live-pace-item">
+              <span class="name">{{ CATEGORY_LABEL.revenue }}</span>
+              <span v-if="livePaceCard.noActuals" class="chip warning">No actual data synced</span>
+              <span v-else-if="livePaceCard.noBudget" class="chip warning">No budget</span>
+              <span v-else :class="['chip', livePaceCard.status]">{{ livePaceCard.actualPct!.toFixed(1) }}% of budget</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span class="chip good">On / ahead of budget</span>
+          <span class="chip warning">Watch</span>
+          <span class="chip serious">Off pace</span>
+          <span class="chip critical">Under budget</span>
+        </div>
+
+        <div class="drill-card capacity-panel">
+          <div class="live-pace-head">
+            <span class="chip accent">Fed from Capacity</span>
+            <span class="quiet-note">The Capacity tab's per-area expected-covers assumptions already project Food/Beverage revenue for this month — pull that projection in instead of typing a figure in twice.</span>
+          </div>
+          <div v-if="revenueHasCapacityData" class="section-note">
+            From the <NuxtLink to="/capacity?tab=edit">Capacity tab's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
+            Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>,
+            Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
+            <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
+            <template v-else>(no real Beer/Liquor/Wine/Non-Alcoholic sales mix yet — will split by whatever's already budgeted)</template>.
+            <button class="mini-btn" :disabled="revenueRecomputeStatus === 'running'" @click="recomputeRevenueFromCapacity">
+              Recompute {{ MONTH_NAMES[editMonth - 1] }} Revenue from Capacity
+            </button>
+            <span v-if="!revenueNeedsRecompute && revenueRecomputeStatus === 'idle'" class="chip neutral">Already matches — nothing to change</span>
+            <span v-if="revenueRecomputeStatus === 'done'" class="chip good">{{ revenueRecomputeMessage }}</span>
+            <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
+          </div>
+          <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Edit Capacity page</NuxtLink>.</div>
+        </div>
+
+        <div class="action-row">
+          <button
+            class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
+            :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month available'"
+            @click="fillMissingFromLastMonth"
+          >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
+          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveRevenue">Save revenue</button>
+        </div>
+        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+        <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
+        <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
+
+        <div class="pl-table-card">
+          <div class="section-head table-head">
+            <div class="section-label">Edit Revenue</div>
+            <button
+              type="button" class="filter-tab" :class="{ active: hideZeroRows }"
+              @click="hideZeroRows = !hideZeroRows"
+            >{{ hideZeroRows ? 'Show' : 'Hide' }} $0 rows</button>
+          </div>
+          <div class="month-tabs">
+            <button
+              v-for="month in targetMonths" :key="month"
+              type="button"
+              :class="['month-tab', editMonth === month && 'active', !monthHasBudget(month) && 'unbudgeted']"
+              @click="selectMonth(month)"
+            >{{ MONTH_NAMES[month - 1] }}</button>
+          </div>
+          <table class="pl-table edit-table">
+            <thead v-if="selectedMonthIsCurrent">
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Budget</th>
+                <th scope="col">Actual (to date)</th>
+                <th scope="col">Projected</th>
+              </tr>
+            </thead>
+            <thead v-else>
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Budget</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="acc in sortedRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
+                  <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                </th>
+                <td>
+                  <span class="amount-cell">
+                    <input
+                      v-if="isLeafAccount(acc)" type="text" inputmode="numeric" class="amount-input"
+                      v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
+                    />
+                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
+                  </span>
+                </td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
+                  </span>
+                </td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(accountProjectedVarianceById.get(acc.accountId))]">
+                      <span class="variance-main">${{ Math.round(computedAccountProjected(acc)).toLocaleString() }}</span>
+                      <span v-if="varianceDeltaLabel(accountProjectedVarianceById.get(acc.accountId))" class="variance-delta">
+                        <span v-if="varianceIcon(accountProjectedVarianceById.get(acc.accountId))" class="variance-icon">{{ varianceIcon(accountProjectedVarianceById.get(acc.accountId)) }}</span>
+                        {{ varianceDeltaLabel(accountProjectedVarianceById.get(acc.accountId)) }}
+                      </span>
+                      <span v-if="accountProjectedVarianceById.get(acc.accountId)?.kind === 'no-budget'" class="chip warning">No budget</span>
+                    </span>
+                  </span>
+                </td>
+              </tr>
+              <tr class="net-income-row">
+                <th scope="row">Total Revenue</th>
+                <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly"><strong>${{ Math.round(totalRevenueActual).toLocaleString() }}</strong></span>
+                  </span>
+                </td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                  <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                  <span v-else :class="['amount-input', 'readonly', 'variance-text', varianceClass(totalRevenueProjectedVariance)]">
+                    <strong class="variance-main">${{ Math.round(totalRevenueProjected).toLocaleString() }}</strong>
+                    <span v-if="varianceDeltaLabel(totalRevenueProjectedVariance)" class="variance-delta">
+                      <span v-if="varianceIcon(totalRevenueProjectedVariance)" class="variance-icon">{{ varianceIcon(totalRevenueProjectedVariance) }}</span>
+                      {{ varianceDeltaLabel(totalRevenueProjectedVariance) }}
+                    </span>
+                  </span>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="action-row">
+          <button
+            class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
+            :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month available'"
+            @click="fillMissingFromLastMonth"
+          >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
+          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveRevenue">Save revenue</button>
+        </div>
+        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
+        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+      </section>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.drill-card {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
+  padding: 16px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.quiet-note.small { font-size: 11px; color: var(--ink-3); }
+
+.capacity-panel .section-note {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; text-align: left; font-size: 12.5px; color: var(--ink-2);
+}
+
+/* ---------- row filter toggles ---------- */
+.pl-table-card .table-head { padding: 12px 14px 8px; display: flex; align-items: center; justify-content: space-between; }
+.section-label { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.filter-tab {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  padding: 4px 11px;
+  border-radius: 100px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.filter-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+
+/* ---------- live pace preview ---------- */
+.live-pace-card {
+  background: var(--accent-wash);
+  border-radius: 16px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.live-pace-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; }
+.chip.accent { background: var(--surface); color: var(--accent); }
+.chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
+.live-pace-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.live-pace-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+
+/* ---------- edit table ---------- */
+.pl-table-card {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 18px;
+  box-shadow: var(--card-shadow);
+  padding: 4px 4px;
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+.month-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--hair);
+}
+.month-tab {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  padding: 7px 20px;
+  border: 1px solid var(--hair);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface-alt);
+  color: var(--ink-2);
+  cursor: pointer;
+  position: relative;
+  top: 1px;
+}
+.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
+.month-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--hair);
+  border-bottom: 1px solid var(--surface);
+  opacity: 1;
+}
+table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.edit-table th, .edit-table td { padding: 10px 16px; text-align: right; }
+.edit-table th:first-child, .edit-table td:first-child { text-align: left; }
+.edit-table tbody tr { border-bottom: 1px solid var(--hair); }
+.edit-table tbody tr:last-child { border-bottom: none; }
+.edit-table tr.account-row { background: var(--surface-alt); }
+.edit-table tr.account-row th { font-weight: 500; }
+.account-label { font-size: 12.5px; color: var(--ink-2); }
+.edit-table tr.account-row.group-header .account-label { font-weight: 700; color: var(--ink); }
+.edit-table tr.account-row.group-header .amount-input.readonly { color: var(--ink); }
+/* A future month's table has only one data column ("Budget"), which under
+   table auto-layout renders far wider than the 120px amount-input box — and
+   the plain `<input>` didn't reliably honor the parent td's text-align:right
+   at that width the way a `.readonly` span did (visible as editable inputs
+   sitting flush left of a wide empty column while the read-only parent
+   totals sat flush right — reported directly from a screenshot). Wrapping
+   each cell's content in its own flex container that fills the td and
+   justifies to the end fixes this regardless of the input-vs-span quirk —
+   same fix pattern as the Edit Capacity page's two adjacent money-cell
+   columns (see CLAUDE.md), applied to a *span* wrapper rather than the
+   `<td>` itself so multiple adjacent amount columns (Budget/Actual/
+   Projected) never fold into one anonymous cell the way two adjacent
+   flex-`<td>`s did there. */
+.amount-cell { display: flex; justify-content: flex-end; }
+.amount-input {
+  width: 120px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  text-align: right;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--ink);
+}
+.amount-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.amount-input.readonly {
+  display: inline-block;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 700;
+}
+.amount-input.readonly.muted { color: var(--ink-3); font-weight: 500; }
+
+.amount-input.readonly.variance-text.v-good { color: var(--good); }
+.amount-input.readonly.variance-text.v-warning { color: var(--warning); }
+.amount-input.readonly.variance-text.v-serious { color: var(--serious); }
+.amount-input.readonly.variance-text.v-critical { color: var(--critical); }
+.amount-input.readonly.variance-text {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: auto;
+}
+.variance-main { white-space: nowrap; }
+.variance-icon { display: inline-block; }
+.variance-delta { display: block; font-weight: 500; opacity: 0.8; white-space: nowrap; }
+
+.col-head-row th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 8px 16px 6px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.edit-table tr.net-income-row th, .edit-table tr.net-income-row td {
+  border-top: 2px solid var(--ink);
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.edit-table tr.net-income-row th { font-weight: 700; color: var(--ink); }
+.edit-table tr.net-income-row .amount-input.readonly { font-weight: 700; }
+
+.mini-btn {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+}
+.mini-btn:disabled { opacity: 0.5; cursor: default; }
+
+.action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; margin-bottom: 10px; }
+.action-btn {
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.action-btn.primary { background: var(--accent); color: white; border-color: transparent; }
+.action-btn:disabled { opacity: 0.5; cursor: default; }
+
+@media (max-width: 760px) {
+  .month-tabs { overflow-x: auto; }
+  .month-tab { padding: 7px 11px; }
+}
+</style>

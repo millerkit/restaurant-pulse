@@ -3628,6 +3628,76 @@ when it applies.
   confirmed via a direct read-only QBO Reports API query rather than
   waiting for the regular sync to reach that date.
 
+## Revenue tab — split out of Edit Budget, like Labor — 2026-09-21
+
+Revenue editing moved off the Edit Budget page onto its own top-level tab,
+[`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue) (route
+`/budget/revenue`, nav label "Revenue") — the same move the Labor tab made
+2026-09-18, for the same reason: revenue projection is its own distinct
+modeling task (now including the Capacity-covers feed below), not just
+another category row in a whole-budget editor.
+
+- **Scope is current month + remaining future months only, not
+  Jan-Dec + Total** — confirmed directly with the user before building,
+  since a past/closed month's revenue is already final and shown read-only
+  on the Edit Budget page (unaffected by this change — a closed month's
+  Budget/Actual comparison there already covered every category,
+  read-only, before this). This is the same `asOfMonth..Dec` scope the
+  Labor tab already uses, just rendered as real per-month tabs
+  (`app/pages/budget/revenue.vue`'s `targetMonths`) instead of Labor's
+  single-view-with-summary-cards approach — the user explicitly asked for
+  tabs. No Annual Total tab either, for the same reason: a partial-year sum
+  of only the forward months would be a confusing thing to label "Total."
+- **Edit Budget's Revenue section is now read-only**, gated simply on
+  `acc.category === 'revenue'` (no new settings table needed, unlike
+  Labor's `labor_position_settings`-backed `laborManaged` flag — every
+  revenue account moved together, so there's no per-account subset to
+  track). Each row links to the Revenue tab
+  (`<NuxtLink to="/budget/revenue">Edit on Revenue tab</NuxtLink>`), same
+  pattern as the existing "Edit on Labor tab" link. `budget_targets` stays
+  the single shared table either page writes to — the COGS trailing-average
+  recompute on Edit Budget (`groupRevenueBudget`) is unaffected, since it
+  just reads whatever revenue figure is currently stored regardless of
+  which page saved it.
+- **How Capacity's per-area expected-covers feed into this page — asked the
+  user directly rather than guessing, since there were three real options**:
+  duplicate the Capacity tab's per-area covers grid onto this page for live
+  editing, make revenue always-derived (no manual override), or keep the
+  existing one-click "Recompute Revenue from Capacity" sync (Food/Beverage
+  $ from `capacity_area_seasonality`'s covers × per-cover assumptions,
+  weighted by the real Beer/Liquor/Wine/Non-Alcoholic mix — see the Budget
+  tab's "Capacity revenue feeds the Budget tab" section above) just
+  relocated. The user chose the third — smallest change, and
+  `capacity_area_seasonality` stays edited in exactly one place (the Edit
+  Capacity page), never two. The banner (capacityMonths/
+  beverageRevenueMix/recomputeRevenueFromCapacity, moved verbatim from
+  Edit Budget) now sits prominently near the top of the page rather than
+  buried as a footnote row in a shared multi-category table, since it's a
+  primary feature here, not an aside.
+- **"Fill in missing accounts from last month" is scoped to revenue account
+  ids** (`copy-into-month.post.ts`'s existing `accountIds` filter, already
+  built for this exact purpose) — critical, not cosmetic: without it this
+  action would also copy last month's COGS/Labor/Opex figures into the
+  current month, categories this page never renders an input for and must
+  never touch.
+- **A real correctness risk avoided by design, not caught after the
+  fact**: every computation on this page (`directChildren`,
+  `isLeafAccount`, `changedTargets`, etc.) is built off a `revenueAccounts`
+  computed that filters `/api/budget/targets`' response (which returns
+  every category, unfiltered) down to `category === 'revenue'` immediately
+  — never off the raw response directly. `changedTargets` in particular
+  only ever iterates this filtered list, so it can never mistake an
+  other-category account with no rendered input (and thus no
+  `editableAccountAmounts` entry) for one that was "changed to $0" on Save.
+- Verified in the browser end-to-end: real Sep-Dec revenue accounts render
+  with correct parent/child sums; "Recompute Sep Revenue from Capacity"
+  wrote real Food $202,422/Beverage $91,716 (matching the Capacity tab's
+  own numbers) and the total updated correctly; switching to Oct showed a
+  Budget-only column (no Actual/Projected, since a future month has no
+  actuals) and its own distinct Capacity projection; Edit Budget's Revenue
+  section reflected the same recomputed figures read-only with working
+  "Edit on Revenue tab" links.
+
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model
@@ -3644,7 +3714,9 @@ when it applies.
 - [`app/pages/budget/index.vue`](app/pages/budget/index.vue) — Budget Pace + Overspending, incl. the expandable Labor/Opex subcategory "why" breakdown and its Materiality Threshold form (route `/budget`)
 - [`server/api/budget/overspending-detail.get.ts`](server/api/budget/overspending-detail.get.ts) — Labor/Opex subcategory breakdown behind Budget Pace's Overspending expand (moved from the old P&L Drill-Downs page 2026-08-20)
 - [`server/api/budget/drilldown-thresholds.post.ts`](server/api/budget/drilldown-thresholds.post.ts) — saves the Materiality Threshold form above
-- [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`)
+- [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`) — Revenue is read-only here (see below)
+- [`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue) — Revenue tab: the real editable revenue projection, incl. the "Recompute from Capacity" sync (route `/budget/revenue`)
+- [`app/pages/budget/labor.vue`](app/pages/budget/labor.vue) — Labor tab: rates/hours/salaries modeling (route `/budget/labor`)
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
 - [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
 - [`server/api/cashflow/reserve-transfer.post.ts`](server/api/cashflow/reserve-transfer.post.ts) — records a real reserve transfer (or reversal)
@@ -3673,7 +3745,7 @@ when it applies.
 - [`server/api/capacity/history.get.ts`](server/api/capacity/history.get.ts) — covers + spend-per-cover seasonality indexes, derived from real Toast covers and core-revenue QBO history, backing both "Set by History" and the Historical tab's two charts
 - [`app/components/SeasonalityChart.vue`](app/components/SeasonalityChart.vue) — the monthly grouped-bar seasonality chart used twice on the Historical tab (covers, spend-per-cover)
 - [`scripts/backfill-toast-metrics.mjs`](scripts/backfill-toast-metrics.mjs) — one-time historical Toast covers/labor-hours backfill (see "Toast POS integration" above); re-run with an extended `--since` 2026-08-12 to reach back through the Mass Ave era for the Historical tab's two indexes
-- [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue)'s "Recompute Revenue from Capacity" section — feeds Capacity's projected Food/Beverage revenue into the Budget tab's real revenue accounts (see "Capacity revenue feeds the Budget tab" above)
+- [`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue)'s "Recompute Revenue from Capacity" section (moved here 2026-09-21 — see "Revenue tab" below) — feeds Capacity's projected Food/Beverage revenue into the real revenue accounts
 - [`server/api/budget/beverage-revenue-mix.get.ts`](server/api/budget/beverage-revenue-mix.get.ts) — real Beer/Liquor/Wine/Non-Alcoholic revenue split since the location move, used by the Recompute Revenue action above
 - [`app/pages/nightly-margin.vue`](app/pages/nightly-margin.vue) — Nightly Margin: each operating night's estimated fully-loaded profit, with a distinct darkest-red/⚠ flag for a night that didn't even cover variable labor + COGS (route `/nightly-margin`)
 - [`server/api/nightly-margin.get.ts`](server/api/nightly-margin.get.ts) — Nightly Margin's data route (trailing hourly-labor rate, COGS%, and fixed-labor-per-night, applied per day)
