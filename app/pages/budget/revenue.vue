@@ -223,6 +223,114 @@ function accountVisible(acc: BudgetAccount): boolean {
   return children.some(accountVisible)
 }
 
+// ---- Year Total (read-only) ------------------------------------------------
+// Combines real YTD actuals (Jan..asOfMonth-1, from daily_line_items) with the current
+// month's actual-to-date extrapolated to a full month (same projection this page's own
+// current-month "Projected" column already uses) and every future month's own budgeted
+// figure — one read-only "where does this account end the year" total per the user's own
+// request. Fetched once on mount, independent of which month tab is selected — unlike
+// selectedMonthAccountActuals above, which is scoped to whichever month is being edited and
+// clears when you switch away from it.
+const yearActualsByMonth = ref<Record<number, Record<number, number>>>({})
+const yearActualsHasData = ref<Record<number, boolean>>({})
+const yearActualsLoaded = ref(false)
+
+async function loadYearActuals() {
+  const months = Array.from({ length: asOfMonth }, (_, i) => i + 1)
+  const results = await Promise.all(months.map(month =>
+    $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+      .catch(() => ({ accounts: [] }))
+  ))
+  const byMonth: Record<number, Record<number, number>> = {}
+  const hasData: Record<number, boolean> = {}
+  months.forEach((month, i) => {
+    const map: Record<number, number> = {}
+    for (const a of results[i].accounts) map[a.accountId] = a.amount
+    byMonth[month] = map
+    hasData[month] = results[i].accounts.length > 0
+  })
+  yearActualsByMonth.value = byMonth
+  yearActualsHasData.value = hasData
+  yearActualsLoaded.value = true
+}
+onMounted(loadYearActuals)
+
+// Same Tue-Sun operating-day fraction as monthExpectedFraction below, but always for
+// asOfMonth specifically — monthExpectedFraction tracks whichever month tab is selected,
+// which this year-round-up must not depend on.
+const asOfMonthExpectedFraction = computed(() => {
+  const monthStart = new Date(YEAR, asOfMonth - 1, 1)
+  const monthEnd = new Date(YEAR, asOfMonth, 0)
+  const today = new Date()
+  const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
+  if (totalOperatingDays === 0) return 0
+  return countOperatingDays(monthStart, today) / totalOperatingDays
+})
+
+function accountBudgetForMonth(month: number, accountId: number): number {
+  return monthlyData.value[month - 1]?.accounts.find(a => a.accountId === accountId)?.amount ?? 0
+}
+
+// Per-leaf-account hybrid year total: real actual for every closed month that's actually
+// synced (falling back to that month's budget if a closed month hasn't synced yet), the
+// current month's actual-to-date extrapolated to a full month, and every future month's
+// budget — substituting this page's own in-progress (unsaved) draft for whichever single
+// month is currently open in the editor, so an edit you haven't saved yet is reflected here
+// immediately, same as the Live Preview card's own live-draft substitution.
+function yearAccountTotal(accountId: number): number {
+  let total = 0
+  for (let m = 1; m < asOfMonth; m++) {
+    total += yearActualsHasData.value[m] ? (yearActualsByMonth.value[m]?.[accountId] ?? 0) : accountBudgetForMonth(m, accountId)
+  }
+  if (yearActualsHasData.value[asOfMonth]) {
+    const actualToDate = yearActualsByMonth.value[asOfMonth]?.[accountId] ?? 0
+    const fraction = asOfMonthExpectedFraction.value
+    total += fraction > 0 ? actualToDate / fraction : actualToDate
+  } else {
+    total += editMonth.value === asOfMonth ? parseEditableAmount(editableAccountAmounts.value[accountId]) : accountBudgetForMonth(asOfMonth, accountId)
+  }
+  for (let m = asOfMonth + 1; m <= 12; m++) {
+    total += editMonth.value === m ? parseEditableAmount(editableAccountAmounts.value[accountId]) : accountBudgetForMonth(m, accountId)
+  }
+  return total
+}
+// Parent-sums-its-children version of yearAccountTotal, mirroring computedAccountAmount —
+// directChildren/isLeafAccount are safe to reuse here even though they're built off
+// revenueAccounts.value (whichever month is currently selected): the account tree's
+// parent/child shape is identical across every month, only the per-month amounts differ.
+function yearComputedAccountAmount(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return yearAccountTotal(acc.accountId)
+  return children.reduce((sum, c) => sum + yearComputedAccountAmount(c), 0)
+}
+const yearTotalRevenue = computed(() => {
+  const roots = revenueAccounts.value.filter(a => a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + yearComputedAccountAmount(a), 0)
+})
+function yearLeafVisible(acc: BudgetAccount): boolean {
+  if (!hideZeroRows.value) return true
+  return yearAccountTotal(acc.accountId) !== 0
+}
+function yearAccountVisible(acc: BudgetAccount): boolean {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return yearLeafVisible(acc)
+  return children.some(yearAccountVisible)
+}
+const sortedYearRevenueAccounts = computed(() => {
+  const visible = revenueAccounts.value.filter(yearAccountVisible)
+  const all = revenueAccounts.value
+  return (visible.length > 0 ? visible : all).sort((a, b) => {
+    const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
+    const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
+    return an !== bn ? an - bn : a.name.localeCompare(b.name)
+  })
+})
+
+const viewingYearTotal = ref(false)
+function selectYearTotal() {
+  viewingYearTotal.value = true
+}
+
 // ---- Live pace preview (current month only) --------------------------------
 const livePaceExpectedPct = computed(() => (asOfDay / daysInMonth(YEAR, asOfMonth)) * 100)
 const livePaceCard = computed(() => {
@@ -402,6 +510,7 @@ const UNSAVED_CHANGES_MESSAGE = 'You have unsaved revenue edits for this month. 
 function selectMonth(month: number) {
   if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
   editMonth.value = month
+  viewingYearTotal.value = false
 }
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
@@ -450,7 +559,7 @@ async function saveRevenue() {
 
     <template v-else>
       <section>
-        <div v-if="selectedMonthIsCurrent" class="live-pace-card">
+        <div v-if="selectedMonthIsCurrent && !viewingYearTotal" class="live-pace-card">
           <div class="live-pace-head">
             <span class="chip accent">Live Preview</span>
             <span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s actual-to-date revenue paces against the budget below, including any edits you haven't saved yet.</span>
@@ -472,7 +581,7 @@ async function saveRevenue() {
           <span class="chip critical">Under budget</span>
         </div>
 
-        <div class="drill-card capacity-panel">
+        <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Fed from Capacity</span>
             <span class="quiet-note">The Capacity tab's per-area expected-covers assumptions already project Food/Beverage revenue for this month — pull that projection in instead of typing a figure in twice.</span>
@@ -493,7 +602,7 @@ async function saveRevenue() {
           <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Edit Capacity page</NuxtLink>.</div>
         </div>
 
-        <div class="action-row">
+        <div v-if="!viewingYearTotal" class="action-row">
           <button
             class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
             :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month available'"
@@ -509,7 +618,7 @@ async function saveRevenue() {
 
         <div class="pl-table-card">
           <div class="section-head table-head">
-            <div class="section-label">Edit Revenue</div>
+            <div class="section-label">{{ viewingYearTotal ? 'Year Total (read-only)' : 'Edit Revenue' }}</div>
             <button
               type="button" class="filter-tab" :class="{ active: hideZeroRows }"
               @click="hideZeroRows = !hideZeroRows"
@@ -519,12 +628,23 @@ async function saveRevenue() {
             <button
               v-for="month in targetMonths" :key="month"
               type="button"
-              :class="['month-tab', editMonth === month && 'active', !monthHasBudget(month) && 'unbudgeted']"
+              :class="['month-tab', (editMonth === month && !viewingYearTotal) && 'active', !monthHasBudget(month) && 'unbudgeted']"
               @click="selectMonth(month)"
             >{{ MONTH_NAMES[month - 1] }}</button>
+            <button
+              type="button"
+              :class="['month-tab', 'annual-total-tab', viewingYearTotal && 'active']"
+              @click="selectYearTotal"
+            >Total</button>
           </div>
           <table class="pl-table edit-table">
-            <thead v-if="selectedMonthIsCurrent">
+            <thead v-if="viewingYearTotal">
+              <tr class="col-head-row">
+                <th scope="col"></th>
+                <th scope="col">Total</th>
+              </tr>
+            </thead>
+            <thead v-else-if="selectedMonthIsCurrent">
               <tr class="col-head-row">
                 <th scope="col"></th>
                 <th scope="col">Budget</th>
@@ -538,7 +658,28 @@ async function saveRevenue() {
                 <th scope="col">Budget</th>
               </tr>
             </thead>
-            <tbody>
+            <!-- Year Total: a single read-only column combining real YTD actuals, the
+                 current month's actual-to-date extrapolated to a full month, and every
+                 future month's own budget — see yearAccountTotal/yearComputedAccountAmount
+                 above. Never editable — there's no single month here to save an edit into. -->
+            <tbody v-if="viewingYearTotal">
+              <tr v-if="!yearActualsLoaded">
+                <td colspan="2" class="loading-cell">Loading year totals…</td>
+              </tr>
+              <template v-else>
+                <tr v-for="acc in sortedYearRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                  <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
+                    <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                  </th>
+                  <td><span class="amount-cell"><span class="amount-input readonly">${{ Math.round(yearComputedAccountAmount(acc)).toLocaleString() }}</span></span></td>
+                </tr>
+                <tr class="net-income-row">
+                  <th scope="row">Total Revenue</th>
+                  <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(yearTotalRevenue).toLocaleString() }}</strong></span></span></td>
+                </tr>
+              </template>
+            </tbody>
+            <tbody v-else>
               <tr v-for="acc in sortedRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                 <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
                   <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
@@ -598,7 +739,7 @@ async function saveRevenue() {
           </table>
         </div>
 
-        <div class="action-row">
+        <div v-if="!viewingYearTotal" class="action-row">
           <button
             class="action-btn" :disabled="actionStatus === 'running' || !previousMonthLabel"
             :title="previousMonthLabel ? `Fills in only accounts with no budget yet, from ${previousMonthLabel}'s actuals if synced (otherwise its budget), rounded to the nearest $10` : 'No prior month available'"
@@ -698,6 +839,7 @@ async function saveRevenue() {
   top: 1px;
 }
 .month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
+.month-tab.annual-total-tab { margin-left: 8px; }
 .month-tab.active {
   background: var(--surface);
   color: var(--ink);
@@ -705,6 +847,7 @@ async function saveRevenue() {
   border-bottom: 1px solid var(--surface);
   opacity: 1;
 }
+.loading-cell { text-align: left; color: var(--ink-3); font-size: 12.5px; padding: 16px; }
 table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .edit-table th, .edit-table td { padding: 10px 16px; text-align: right; }
 .edit-table th:first-child, .edit-table td:first-child { text-align: left; }

@@ -3698,6 +3698,58 @@ another category row in a whole-budget editor.
   section reflected the same recomputed figures read-only with working
   "Edit on Revenue tab" links.
 
+## Revenue tab: read-only Year Total, and an alignment fix — 2026-09-22
+
+Two follow-ups from a real production screenshot, same day the Revenue tab
+was deployed:
+
+- **A right-alignment bug, real in production even though it never
+  reproduced in local testing.** A future month's table has only one data
+  column ("Budget"), which renders far wider under table auto-layout than
+  the 120px `.amount-input` box — and the plain `<input>` wasn't reliably
+  honoring the parent `<td>`'s `text-align: right` at that width the same
+  way the read-only `.amount-input.readonly` `<span>` did, visible as
+  editable inputs sitting flush left of a wide empty column while the bold
+  parent totals sat flush right. Fixed by wrapping each cell's content in
+  its own `.amount-cell` flex container (`display: flex; justify-content:
+  flex-end`) that fills the `<td>` and positions its child regardless of
+  the input-vs-span quirk — the same fix pattern this file already
+  documents for the Edit Capacity page's two adjacent money-cell columns
+  (see "Capacity revenue feeds the Budget tab" above), applied to a `<span>`
+  wrapper rather than the `<td>` itself so the Budget/Actual/Projected
+  columns (which sit adjacent for the current month) never fold into one
+  anonymous cell the way two adjacent flex-`<td>`s did there.
+- **A read-only "Total" tab**, at the user's request, showing where each
+  revenue account is projected to land for the full year — real YTD actual
+  (Jan through the last closed month, from `daily_line_items`, falling back
+  to that month's budget if a closed month hasn't synced yet — same hybrid
+  fallback `hybridMonthlyCategoryTargets` already uses at the category
+  level, just per-account here) plus the current month's actual-to-date
+  extrapolated to a full month (the same projection this page's own
+  current-month "Projected" column already computes) plus every future
+  month's own budget. `yearAccountTotal`/`yearComputedAccountAmount` in
+  `app/pages/budget/revenue.vue` substitute this page's own in-progress
+  (unsaved) draft for whichever single month is currently open in the
+  editor, so an unsaved edit shows up in the Total tab immediately, same as
+  the Live Preview card's own live-draft substitution. Fetches
+  actuals-by-account for every month Jan..asOfMonth once on mount,
+  independent of which month tab is selected (unlike
+  `selectedMonthAccountActuals`, which is scoped to the currently-edited
+  month and clears when you switch away from it) — reuses the existing
+  `/api/budget/actuals-by-account` endpoint per month rather than adding a
+  new bulk route, same "12 parallel per-month fetches" pattern
+  `useBudgetYear()` already uses for `budget_targets`. No Fed-from-Capacity
+  banner, Fill-in-missing/Save actions, or Live Preview card on this tab —
+  there's no single month here to act on, matching how Edit Budget's own
+  Annual Total tab hides its equivalent COGS-recompute banner and
+  Fill-in/Save row.
+- Verified in the browser: Total tab renders the full account tree
+  read-only with correct parent/child sums (e.g. Total Revenue $2,228,633
+  reconciling against Restaurant Sales + Event Sales + Catering − Contra-
+  Income), and switching back to a month tab (Sep) correctly restores the
+  Live Preview card, Capacity banner, and Fill-in/Save actions with Total
+  deselected.
+
 ## Where to look
 
 - [`schema.sql`](schema.sql) — data model
