@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, monthCategoryBudget, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import type { Category } from '~/composables/useBudgetData'
+import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Labor` })
 
@@ -331,9 +332,19 @@ const avgWagesPerMonth = computed(() => average(targetMonths.value.map(m => grou
 const avgSalariesPerMonth = computed(() => average(targetMonths.value.map(m => groupMonthlyTotal('management', m))))
 const avgLaborPerMonth = computed(() => average(targetMonths.value.map(m => modeledLaborTotal(m))))
 const totalLaborForYear = computed(() => Array.from({ length: 12 }, (_, i) => yearLaborTotal(i + 1)).reduce((sum, v) => sum + v, 0))
-const projectedAnnualRevenue = computed(() =>
-  Array.from({ length: 12 }, (_, i) => monthCategoryBudget(yearBudgetData.value[i], 'revenue') ?? 0).reduce((sum, v) => sum + v, 0)
-)
+// Real bug fixed 2026-09-22: this used to sum ONLY budget_targets for revenue
+// (monthCategoryBudget(...) ?? 0), silently treating any unbudgeted month as $0 revenue
+// instead of falling back to its real actual — exactly the gap the Revenue tab's own
+// Total column already closed for revenue itself (see "Only N of 12 months budgeted..."
+// note there). With several months genuinely unbudgeted, that understated the
+// denominator badly and inflated both labor % figures below into the 70s% (they should
+// read closer to this restaurant's real ~30-40% range). Now uses the same
+// actual-where-elapsed, budget-otherwise hybrid every other page on this app already
+// uses (hybridYearTotals, also behind Budget Pace's own category totals).
+function getMonthCategoryBudgetLive(month: number, cat: Category): number | null {
+  return monthCategoryBudget(yearBudgetData.value[month - 1], cat)
+}
+const projectedAnnualRevenue = computed(() => hybridYearTotals(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth).revenue)
 const laborPctOfRevenue = computed(() => projectedAnnualRevenue.value > 0 ? (totalLaborForYear.value / projectedAnnualRevenue.value) * 100 : null)
 
 // ---- Trailing-actual comparison row (rendered above the modeled summary cards) --------
