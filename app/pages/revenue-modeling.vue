@@ -387,11 +387,11 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                 <tr>
                   <th scope="col">Area</th>
                   <th scope="col">Covers/Night</th>
-                  <th scope="col">Sim. Covers/Night</th>
+                  <th scope="col" class="sim">Sim. Covers/Night</th>
                   <th scope="col">Per-Cover $</th>
-                  <th scope="col">Sim. Per-Cover $</th>
+                  <th scope="col" class="sim">Sim. Per-Cover $</th>
                   <th scope="col">Nightly Revenue</th>
-                  <th scope="col">Sim. Nightly Revenue</th>
+                  <th scope="col" class="sim">Sim. Nightly Revenue</th>
                   <th scope="col">Covers Δ%</th>
                   <th scope="col">Spend Δ%</th>
                 </tr>
@@ -496,6 +496,23 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .derived.sim { color: var(--accent); }
+/* Light gray backing for the three Sim. columns (Covers/Night, Per-Cover $,
+   Nightly Revenue) on the per-area table, at the user's request, so they
+   read as visually distinct from the current-value columns they sit next
+   to. Scoped to .sim-table specifically — the collapsed breakdown table
+   below also reuses .derived.sim for its own "Simulated" column, but wasn't
+   part of this request. var(--surface-alt) is the app's existing subtle
+   light/dark-aware "muted region" token, not a new hardcoded color. The
+   header row is a fixed dark navy regardless of theme, so a plain white
+   overlay (not the theme token) is what reads as "slightly lighter" there
+   in both modes. */
+.sim-table .derived.sim { background: var(--surface-alt); }
+/* A plain rgba white overlay doesn't work here — background-color fully
+   replaces the base rule's `background: #3e5c76` shorthand rather than
+   compositing on top of it, so a low-alpha white read as pure white (and
+   made the white header text invisible). color-mix against the same navy
+   keeps it a real, solid, slightly-lighter navy instead. */
+.sim-table thead th.sim { background-color: color-mix(in srgb, #3e5c76 88%, white 12%); }
 .subtotal-row th, .subtotal-row td { border-top: 1px dashed var(--hair); font-weight: 700; }
 .subtotal-row .derived { color: var(--ink); }
 .subtotal-row .derived.sim { color: var(--accent); }
