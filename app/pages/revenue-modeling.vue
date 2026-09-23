@@ -460,7 +460,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
    this page packs a lot into one screen (per the user's explicit request to
    fit a 13" laptop viewport without scrolling), so the generous default
    section rhythm used elsewhere in the app is too tall here. */
-section.rm-section { margin: 0.55rem 0; }
+section.rm-section { margin: 0.9rem 0; }
 .legend.rm-legend { padding-top: 0; margin: 0.4rem 0; }
 footer.rm-footer { padding-top: 8px; }
 
@@ -482,17 +482,17 @@ footer.rm-footer { padding-top: 8px; }
   box-shadow: var(--card-shadow);
   padding: 4px 4px;
   overflow-x: auto;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
-table.pl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
+table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
 .pl-table caption { display: none; }
-.pl-table th, .pl-table td { padding: 4px 10px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pl-table th, .pl-table td { padding: 9px 12px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pl-table th:first-child, .pl-table td:first-child { text-align: left; white-space: normal; }
-.pl-table thead th { font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; color: #ffffff; background: #3e5c76; border-bottom: 1px solid #2c4459; white-space: normal; padding-top: 6px; padding-bottom: 6px; }
-.pl-table tbody th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink); }
+.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: #ffffff; background: #3e5c76; border-bottom: 1px solid #2c4459; white-space: normal; padding-top: 11px; padding-bottom: 11px; }
+.pl-table tbody th { text-align: left; font-weight: 600; font-size: 13px; color: var(--ink); }
 .pl-table tbody tr { border-bottom: 1px solid var(--hair); }
 .pl-table tbody tr:last-child { border-bottom: none; }
-.pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 5px; padding-bottom: 5px; }
+.pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 10px; padding-bottom: 10px; }
 
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .derived.sim { color: var(--accent); }
@@ -503,16 +503,16 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-
 .pct-cell { display: inline-flex; align-items: center; gap: 3px; }
 
 /* ---------- annual impact cards ---------- */
-.quick-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 4px; }
+.quick-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px; }
 .assumption-card {
   background: var(--surface);
   border: 1px solid var(--hair);
   border-radius: 14px;
   box-shadow: var(--card-shadow);
-  padding: 8px 12px 9px;
+  padding: 12px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
 }
 .card-head { display: flex; flex-direction: column; gap: 2px; }
 .card-head .period-name { font-size: 11.5px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.02em; }
