@@ -19,6 +19,7 @@ import site from '~/config/site.json'
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
       <NuxtLink to="/capacity" exact-active-class="active">Capacity</NuxtLink>
       <NuxtLink to="/historical" exact-active-class="active">Historical</NuxtLink>
+      <NuxtLink to="/revenue-modeling" exact-active-class="active">Revenue Modeling</NuxtLink>
     </nav>
     <slot />
     <footer class="app-footer">
