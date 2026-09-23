@@ -121,8 +121,23 @@ async function syncNow() {
 </template>
 
 <style scoped>
+/* Chip, "Last synced..." text, and the Sync now button used to each sit on
+   their own stacked line — put on one row instead (at the user's request,
+   while compacting the Revenue Modeling page) to save vertical space on
+   every page's header, not just that one, since this component is shared.
+   Wraps to a second line on a narrow viewport rather than overflowing.
+   `.as-of .chip`'s global margin-bottom (main.css) is overridden below —
+   scoped styles attach a data attribute to `.chip` here, giving this rule
+   higher specificity than the plain global one regardless of source order. */
+.as-of {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.as-of .chip { margin-bottom: 0; }
 .sync-now-row {
-  margin-top: 6px;
+  margin-top: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
