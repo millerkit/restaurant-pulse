@@ -34,9 +34,18 @@ const { data, pending, error, refresh } = await useFetch<RevenueModelingData>('/
 // (actual-where-elapsed, budget-otherwise) annual totals the Labor tab and
 // Budget Pace already treat as canonical (see CLAUDE.md's 2026-09-22 Labor
 // tab fix), not a separate notion of "this year's revenue" invented here.
-const { monthlyData: yearBudgetData, loadYear } = useBudgetYear()
+const { monthlyData: yearBudgetData, loading: budgetLoading, loadYear } = useBudgetYear()
 const { monthlyActuals, loadActualsYear } = useActualsYear()
 const asOfMonth = currentAsOfMonth()
+// useActualsYear() has no loading flag of its own — monthlyActuals starts as
+// [] and only becomes a populated 12-entry array once its fetch resolves, so
+// emptiness doubles as a loading signal. Without this, the Annual Impact
+// section briefly renders its "not enough data" warning on every load (a
+// real, if minor, race — the page itself renders as soon as
+// /api/revenue-modeling resolves, well before these two composables'
+// combined 13 requests do) before flipping to the real cards a moment
+// later.
+const annualDataLoading = computed(() => budgetLoading.value || monthlyActuals.value.length === 0)
 function getMonthCategoryBudgetLive(month: number, cat: Category): number | null {
   return monthCategoryBudget(yearBudgetData.value[month - 1], cat)
 }
@@ -60,6 +69,12 @@ watch(() => data.value?.areas, (areas) => {
 function resetSimulation() {
   areaDrafts.value = areaDrafts.value.map(d => ({ ...d, coversDeltaPct: 0, spendDeltaPct: 0 }))
 }
+
+// The full dollar-by-dollar breakdown is supplementary detail (the three
+// headline cards above already answer "so what") — collapsed by default so
+// the page's primary content (headline cards + the per-area sim table)
+// fits within a laptop-height viewport without scrolling; expand on demand.
+const showBreakdown = ref(false)
 
 function baselineFor(areaId: number): AreaTrailing | null {
   return data.value?.areas.find(a => a.areaId === areaId) ?? null
@@ -220,7 +235,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
     <template v-else>
       <PageHeader
         page-name="Revenue Modeling"
-        description="If covers or per-cover spend changed in a given seating area, what would that do to this year's labor % of revenue and profit margin?"
+        description="What would a covers or spend change do to this year's labor % of revenue and profit margin?"
         :as-of-label="data?.asOfAreaDate ? fmtDate(data.asOfAreaDate) : undefined"
         @synced="handleSynced()"
       />
@@ -231,12 +246,136 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
       </div>
 
       <template v-else>
-        <section>
+        <section v-if="annualDataLoading" class="rm-section">
+          <div class="quiet-note">Loading this year's revenue/COGS/labor/opex…</div>
+        </section>
+
+        <section v-else-if="!canModelAnnualImpact" class="rm-section">
+          <div class="drill-card">
+            <span class="chip warning">Not enough data yet for the annual impact</span>
+            <span class="quiet-note">
+              Needs a real current-year revenue figure (budget or synced actuals) and a real fixed/variable cost split from
+              <template v-if="data?.sinceDate">the {{ fmtDate(data.sinceDate) }}–{{ data?.asOfLineItemDate ? fmtDate(data.asOfLineItemDate) : 'today' }} window</template>
+              <template v-else>synced QuickBooks data</template> of daily_line_items.
+            </span>
+          </div>
+        </section>
+
+        <section v-else class="rm-section">
+          <div class="section-head">
+            <div class="section-label">Annual Impact — {{ data!.modelYear }}</div>
+            <div class="section-note">Scaled by {{ fmtCoversPerNight(totals.simCoversPerNight - totals.baseCoversPerNight) }} covers/night ({{ ((annualImpact!.coversMultiplier - 1) * 100).toFixed(1) }}%) &middot; {{ data!.operatingNightsPerYear }} operating nights/year</div>
+          </div>
+
+          <div class="quick-row">
+            <div class="assumption-card">
+              <div class="card-head"><span class="period-name">Annual Revenue</span></div>
+              <div class="metric primary">
+                <div class="metric-figure">{{ fmtMoneyFull(annualImpact!.revenue.sim) }}</div>
+                <div class="metric-sub">vs. {{ fmtMoneyFull(annualImpact!.revenue.base) }} current ({{ fmtDeltaMoney(annualImpact!.revenue.base, annualImpact!.revenue.sim) }})</div>
+              </div>
+            </div>
+            <div class="assumption-card">
+              <div class="card-head"><span class="period-name">Labor % of Revenue</span></div>
+              <div class="metric primary">
+                <div class="metric-top">
+                  <div class="metric-figure">{{ fmtPct(annualImpact!.laborPct.sim) }}</div>
+                  <span v-if="laborPctChip(annualImpact!.laborPct.base, annualImpact!.laborPct.sim)" :class="['chip', laborPctChip(annualImpact!.laborPct.base, annualImpact!.laborPct.sim)]">{{ fmtDeltaPts(annualImpact!.laborPct.base, annualImpact!.laborPct.sim) }}</span>
+                </div>
+                <div class="metric-sub">vs. {{ fmtPct(annualImpact!.laborPct.base) }} current</div>
+              </div>
+            </div>
+            <div class="assumption-card">
+              <div class="card-head"><span class="period-name">Profit Margin</span></div>
+              <div class="metric primary">
+                <div class="metric-top">
+                  <div class="metric-figure">{{ fmtPct(annualImpact!.profitMargin.sim) }}</div>
+                  <span v-if="marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)" :class="['chip', marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)]">{{ fmtDeltaPts(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim) }}</span>
+                </div>
+                <div class="metric-sub">vs. {{ fmtPct(annualImpact!.profitMargin.base) }} current &middot; {{ fmtMoneyFull(annualImpact!.netIncome.sim) }} net income</div>
+              </div>
+            </div>
+          </div>
+
+          <button type="button" class="link-btn breakdown-toggle" @click="showBreakdown = !showBreakdown">{{ showBreakdown ? '▾ Hide' : '▸ Show' }} full revenue/COGS/labor/opex breakdown</button>
+
+          <div v-if="showBreakdown" class="pl-table-card">
+            <table class="pl-table breakdown-table">
+              <caption>Current versus simulated annual dollar totals for revenue, COGS, labor split into fixed and variable, operating expenses split into fixed and variable, and net income</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Line</th>
+                  <th scope="col">Current</th>
+                  <th scope="col">Simulated</th>
+                  <th scope="col">Δ</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Revenue</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.revenue.base) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.revenue.sim) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.revenue.base, annualImpact!.revenue.sim) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">COGS</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.cogs.base) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.cogs.sim) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.cogs.base, annualImpact!.cogs.sim) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Labor — fixed (salaries, benefits, taxes)</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.baseFixed) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.simFixed) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.baseFixed, annualImpact!.labor.simFixed) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Labor — variable (hourly BOH/FOH)</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.baseVariable) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.simVariable) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.baseVariable, annualImpact!.labor.simVariable) }}</td>
+                </tr>
+                <tr class="subtotal-row">
+                  <th scope="row">Labor — total</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.base) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.sim) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.base, annualImpact!.labor.sim) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Opex — fixed</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseFixed) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simFixed) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseFixed, annualImpact!.opex.simFixed) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Opex — variable</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseVariable) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simVariable) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseVariable, annualImpact!.opex.simVariable) }}</td>
+                </tr>
+                <tr class="subtotal-row">
+                  <th scope="row">Opex — total</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.base) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.sim) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.base, annualImpact!.opex.sim) }}</td>
+                </tr>
+                <tr class="subtotal-row">
+                  <th scope="row">Net Income</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.netIncome.base) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.netIncome.sim) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(annualImpact!.netIncome.base, annualImpact!.netIncome.sim) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="rm-section">
           <div class="section-head">
             <div class="section-label">Trailing 3-Month Averages, By Area</div>
             <div class="section-note">
-              <template v-if="data?.trailingWindow">Real Toast covers/revenue, {{ fmtDate(data.trailingWindow.start) }}–{{ fmtDate(data.trailingWindow.end) }}. </template>
-              Type a hypothetical Covers Δ% and/or Spend Δ% per area to simulate a change — everything below updates live.
+              <template v-if="data?.trailingWindow">Real Toast covers/revenue, {{ fmtDate(data.trailingWindow.start) }}–{{ fmtDate(data.trailingWindow.end) }}.</template>
+              Type a Δ% to simulate a change.
               <button type="button" class="link-btn" @click="resetSimulation">Reset simulation</button>
             </div>
           </div>
@@ -248,180 +387,52 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                 <tr>
                   <th scope="col">Area</th>
                   <th scope="col">Covers/Night</th>
+                  <th scope="col">Sim. Covers/Night</th>
                   <th scope="col">Per-Cover $</th>
+                  <th scope="col">Sim. Per-Cover $</th>
                   <th scope="col">Nightly Revenue</th>
+                  <th scope="col">Sim. Nightly Revenue</th>
                   <th scope="col">Covers Δ%</th>
                   <th scope="col">Spend Δ%</th>
-                  <th scope="col">Sim. Covers/Night</th>
-                  <th scope="col">Sim. Per-Cover $</th>
-                  <th scope="col">Sim. Nightly Revenue</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="row in simRows" :key="row.areaId">
                   <th scope="row" style="text-transform: capitalize;">{{ row.areaName }}</th>
                   <td class="derived">{{ fmtCoversPerNight(row.baseCoversPerNight) }}</td>
+                  <td class="derived sim">{{ fmtCoversPerNight(row.simCoversPerNight) }}</td>
                   <td class="derived">{{ fmtMoney(row.basePerCover) }}</td>
+                  <td class="derived sim">{{ fmtMoney(row.simPerCover) }}</td>
                   <td class="derived">{{ fmtMoneyFull(row.baseNightlyRevenue) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(row.simNightlyRevenue) }}</td>
                   <td><span class="pct-cell"><NumberStepper v-model="draftFor(row.areaId).coversDeltaPct" :min="null" :step="1" width="50px" />%</span></td>
                   <td><span class="pct-cell"><NumberStepper v-model="draftFor(row.areaId).spendDeltaPct" :min="null" :step="1" width="50px" />%</span></td>
-                  <td class="derived sim">{{ fmtCoversPerNight(row.simCoversPerNight) }}</td>
-                  <td class="derived sim">{{ fmtMoney(row.simPerCover) }}</td>
-                  <td class="derived sim">{{ fmtMoneyFull(row.simNightlyRevenue) }}</td>
                 </tr>
               </tbody>
               <tfoot>
                 <tr>
                   <th scope="row">Total</th>
                   <td class="derived">{{ fmtCoversPerNight(totals.baseCoversPerNight) }}</td>
-                  <td class="derived">—</td>
-                  <td class="derived">{{ fmtMoneyFull(totals.baseNightlyRevenue) }}</td>
-                  <td class="derived">—</td>
-                  <td class="derived">—</td>
                   <td class="derived sim">{{ fmtCoversPerNight(totals.simCoversPerNight) }}</td>
+                  <td class="derived">—</td>
                   <td class="derived sim">—</td>
+                  <td class="derived">{{ fmtMoneyFull(totals.baseNightlyRevenue) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(totals.simNightlyRevenue) }}</td>
+                  <td class="derived">—</td>
+                  <td class="derived">—</td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </section>
 
-        <section v-if="!canModelAnnualImpact">
-          <div class="drill-card">
-            <span class="chip warning">Not enough data yet for the annual impact</span>
-            <span class="quiet-note">
-              Needs a real current-year revenue figure (budget or synced actuals) and a real fixed/variable cost split from
-              <template v-if="data?.sinceDate">the {{ fmtDate(data.sinceDate) }}–{{ data?.asOfLineItemDate ? fmtDate(data.asOfLineItemDate) : 'today' }} window</template>
-              <template v-else>synced QuickBooks data</template> of daily_line_items.
-            </span>
-          </div>
-        </section>
-
-        <template v-else>
-          <section>
-            <div class="section-head">
-              <div class="section-label">Annual Impact — {{ data!.modelYear }}</div>
-              <div class="section-note">Current (real, budget-where-not-yet-actual) vs. simulated, scaled by {{ fmtCoversPerNight(totals.simCoversPerNight - totals.baseCoversPerNight) }} covers/night ({{ ((annualImpact!.coversMultiplier - 1) * 100).toFixed(1) }}%) and {{ data!.operatingNightsPerYear }} operating nights/year.</div>
-            </div>
-
-            <div class="quick-row">
-              <div class="assumption-card">
-                <div class="card-head"><span class="period-name">Annual Revenue</span></div>
-                <div class="metric primary">
-                  <div class="metric-figure">{{ fmtMoneyFull(annualImpact!.revenue.sim) }}</div>
-                  <div class="metric-sub">vs. {{ fmtMoneyFull(annualImpact!.revenue.base) }} current ({{ fmtDeltaMoney(annualImpact!.revenue.base, annualImpact!.revenue.sim) }})</div>
-                </div>
-              </div>
-              <div class="assumption-card">
-                <div class="card-head"><span class="period-name">Labor % of Revenue</span></div>
-                <div class="metric primary">
-                  <div class="metric-top">
-                    <div class="metric-figure">{{ fmtPct(annualImpact!.laborPct.sim) }}</div>
-                    <span v-if="laborPctChip(annualImpact!.laborPct.base, annualImpact!.laborPct.sim)" :class="['chip', laborPctChip(annualImpact!.laborPct.base, annualImpact!.laborPct.sim)]">{{ fmtDeltaPts(annualImpact!.laborPct.base, annualImpact!.laborPct.sim) }}</span>
-                  </div>
-                  <div class="metric-sub">vs. {{ fmtPct(annualImpact!.laborPct.base) }} current</div>
-                </div>
-              </div>
-              <div class="assumption-card">
-                <div class="card-head"><span class="period-name">Profit Margin</span></div>
-                <div class="metric primary">
-                  <div class="metric-top">
-                    <div class="metric-figure">{{ fmtPct(annualImpact!.profitMargin.sim) }}</div>
-                    <span v-if="marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)" :class="['chip', marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)]">{{ fmtDeltaPts(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim) }}</span>
-                  </div>
-                  <div class="metric-sub">vs. {{ fmtPct(annualImpact!.profitMargin.base) }} current &middot; {{ fmtMoneyFull(annualImpact!.netIncome.sim) }} net income</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <div class="section-head">
-              <div class="section-label">How That Breaks Down</div>
-              <div class="section-note">Labor's variable share (hourly BOH/FOH wages) and Opex's variable share both come from real {{ data?.sinceDate ? fmtDate(data.sinceDate) : '' }}–{{ data?.asOfLineItemDate ? fmtDate(data.asOfLineItemDate) : '' }} actuals, applied to this year's real revenue/COGS/labor/opex.</div>
-            </div>
-            <div class="pl-table-card">
-              <table class="pl-table breakdown-table">
-                <caption>Current versus simulated annual dollar totals for revenue, COGS, labor split into fixed and variable, operating expenses split into fixed and variable, and net income</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Line</th>
-                    <th scope="col">Current</th>
-                    <th scope="col">Simulated</th>
-                    <th scope="col">Δ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <th scope="row">Revenue</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.revenue.base) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.revenue.sim) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.revenue.base, annualImpact!.revenue.sim) }}</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">COGS</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.cogs.base) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.cogs.sim) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.cogs.base, annualImpact!.cogs.sim) }}</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Labor — fixed (salaries, benefits, taxes)</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.baseFixed) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.simFixed) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.baseFixed, annualImpact!.labor.simFixed) }}</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Labor — variable (hourly BOH/FOH)</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.baseVariable) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.simVariable) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.baseVariable, annualImpact!.labor.simVariable) }}</td>
-                  </tr>
-                  <tr class="subtotal-row">
-                    <th scope="row">Labor — total</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.labor.base) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.labor.sim) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.base, annualImpact!.labor.sim) }}</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Opex — fixed</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseFixed) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simFixed) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseFixed, annualImpact!.opex.simFixed) }}</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Opex — variable</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseVariable) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simVariable) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseVariable, annualImpact!.opex.simVariable) }}</td>
-                  </tr>
-                  <tr class="subtotal-row">
-                    <th scope="row">Opex — total</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.base) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.sim) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.base, annualImpact!.opex.sim) }}</td>
-                  </tr>
-                  <tr class="subtotal-row">
-                    <th scope="row">Net Income</th>
-                    <td class="derived">{{ fmtMoneyFull(annualImpact!.netIncome.base) }}</td>
-                    <td class="derived sim">{{ fmtMoneyFull(annualImpact!.netIncome.sim) }}</td>
-                    <td class="derived">{{ fmtDeltaMoney(annualImpact!.netIncome.base, annualImpact!.netIncome.sim) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </template>
-
-        <div class="legend">
+        <div class="legend rm-legend">
           <span class="chip good">Improves vs. current</span>
           <span class="chip critical">Worsens vs. current</span>
         </div>
 
-        <footer>
-          <span>
-            Baseline: real trailing 3-month Toast per-area covers/revenue. Annual figures: this year's real budget/actual revenue, COGS, labor, and opex, scaled by the simulated per-area change and each cost's own real fixed/variable share.
-          </span>
+        <footer class="rm-footer">
+          <span>Baseline: real trailing 3-month Toast per-area covers/revenue, annualized against this year's real budget/actual revenue, COGS, labor, and opex.</span>
         </footer>
       </template>
     </template>
@@ -442,16 +453,26 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
   cursor: pointer;
   text-decoration: underline;
 }
+.breakdown-toggle { margin: 2px 0 0; display: inline-block; font-size: 12px; }
+
+/* Overrides main.css's global `section { margin: 2rem 0 }` (a compound
+   selector beats a bare element selector regardless of stylesheet order) —
+   this page packs a lot into one screen (per the user's explicit request to
+   fit a 13" laptop viewport without scrolling), so the generous default
+   section rhythm used elsewhere in the app is too tall here. */
+section.rm-section { margin: 0.55rem 0; }
+.legend.rm-legend { padding-top: 0; margin: 0.4rem 0; }
+footer.rm-footer { padding-top: 8px; }
 
 .drill-card {
   background: var(--surface);
   border: 1px solid var(--hair);
   border-radius: 18px;
   box-shadow: var(--card-shadow);
-  padding: 16px 18px 18px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .pl-table-card {
@@ -461,17 +482,17 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
   box-shadow: var(--card-shadow);
   padding: 4px 4px;
   overflow-x: auto;
-  margin-bottom: 14px;
+  margin-bottom: 6px;
 }
-table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+table.pl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
 .pl-table caption { display: none; }
-.pl-table th, .pl-table td { padding: 10px 12px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pl-table th, .pl-table td { padding: 4px 10px; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pl-table th:first-child, .pl-table td:first-child { text-align: left; white-space: normal; }
-.pl-table thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: #ffffff; background: #3e5c76; border-bottom: 1px solid #2c4459; white-space: normal; padding-top: 16px; padding-bottom: 16px; }
-.pl-table tbody th { text-align: left; font-weight: 600; font-size: 13px; color: var(--ink); }
+.pl-table thead th { font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; color: #ffffff; background: #3e5c76; border-bottom: 1px solid #2c4459; white-space: normal; padding-top: 6px; padding-bottom: 6px; }
+.pl-table tbody th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink); }
 .pl-table tbody tr { border-bottom: 1px solid var(--hair); }
 .pl-table tbody tr:last-child { border-bottom: none; }
-.pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 12px; }
+.pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 5px; padding-bottom: 5px; }
 
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .derived.sim { color: var(--accent); }
@@ -482,24 +503,24 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .pct-cell { display: inline-flex; align-items: center; gap: 3px; }
 
 /* ---------- annual impact cards ---------- */
-.quick-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.quick-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 4px; }
 .assumption-card {
   background: var(--surface);
   border: 1px solid var(--hair);
-  border-radius: 18px;
+  border-radius: 14px;
   box-shadow: var(--card-shadow);
-  padding: 16px 18px 18px;
+  padding: 8px 12px 9px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
 }
 .card-head { display: flex; flex-direction: column; gap: 2px; }
-.card-head .period-name { font-size: 13px; font-weight: 700; color: var(--ink); }
-.metric { display: flex; flex-direction: column; gap: 4px; }
+.card-head .period-name { font-size: 11.5px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.02em; }
+.metric { display: flex; flex-direction: column; gap: 2px; }
 .metric-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.metric-figure { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--ink); }
-.metric.primary .metric-figure { font-size: 30px; }
-.metric-sub { font-size: 11.5px; color: var(--ink-3); }
+.metric-figure { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--ink); }
+.metric.primary .metric-figure { font-size: 22px; }
+.metric-sub { font-size: 11px; color: var(--ink-3); }
 
 @media (max-width: 900px) {
   .quick-row { grid-template-columns: 1fr; }
