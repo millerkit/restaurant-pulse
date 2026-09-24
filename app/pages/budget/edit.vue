@@ -69,7 +69,7 @@ const editableAccountAmounts = ref<Record<number, string>>({})
 // so these are text inputs with their own parse/format handling instead.
 function parseEditableAmount(raw: string | undefined): number {
   if (!raw) return 0
-  const n = Number(raw.replace(/,/g, ''))
+  const n = Number(raw.replace(/[,$\s]/g, ''))
   return Number.isFinite(n) ? n : 0
 }
 function formatWholeDollars(n: number): string {
