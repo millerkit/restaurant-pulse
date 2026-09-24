@@ -1270,6 +1270,7 @@ function exportForQuickBooks() {
               @click="selectAnnualTotal"
             >Total</button>
           </div>
+          <div class="edit-table-scroll">
           <table class="pl-table edit-table">
             <thead v-if="viewingAnnualTotal">
               <tr class="col-head-row">
@@ -1501,6 +1502,7 @@ function exportForQuickBooks() {
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
 
         <div v-if="!selectedMonthClosed && !viewingAnnualTotal" class="action-row">
@@ -1584,8 +1586,17 @@ function exportForQuickBooks() {
   border-radius: 18px;
   box-shadow: var(--card-shadow);
   padding: 4px 4px;
-  overflow-x: auto;
 }
+/* Bounded height + its own scroll (not the plain `overflow-x: auto` the
+   card itself used to have) is what the sticky header row below actually
+   sticks within — a plain `overflow-x: auto` box with no height cap
+   technically becomes its own scroll container too, per the CSS overflow
+   spec, but since it never overflows vertically on its own, position:sticky
+   has nothing to stick against and the header just scrolls away with the
+   page. Same fix already used on the Edit Capacity page's covers table
+   (`.covers-table-card`) — see that page's own comment for the same
+   confirmed-by-testing finding. */
+.edit-table-scroll { overflow: auto; max-height: 70vh; }
 .month-tabs {
   display: flex;
   gap: 2px;
@@ -1615,11 +1626,18 @@ function exportForQuickBooks() {
   border-bottom: 1px solid var(--surface);
   opacity: 1;
 }
-table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* `border-collapse: separate` (not `collapse`, `.pl-table`'s own default) —
+   `position: sticky` on a <th> is a no-op in every major browser when the
+   table uses `border-collapse: collapse`, confirmed by testing (same
+   finding already documented on the Edit Capacity page's covers table).
+   `separate` doesn't paint a border set on <tr> at all, so the row-divider
+   line moves from tr to the cells themselves below. */
+table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
 .edit-table th, .edit-table td { padding: 10px 16px; text-align: right; }
 .edit-table th:first-child, .edit-table td:first-child { text-align: left; }
-.edit-table tbody tr { border-bottom: 1px solid var(--hair); }
-.edit-table tbody tr:last-child { border-bottom: none; }
+.edit-table tbody tr { border-bottom: none; }
+.edit-table tbody td, .edit-table tbody th { border-bottom: 1px solid var(--hair); }
+.edit-table tbody tr:last-child td, .edit-table tbody tr:last-child th { border-bottom: none; }
 .edit-table tr.account-row { background: var(--surface-alt); }
 .edit-table tr.account-row th { font-weight: 500; }
 .account-label { font-size: 12.5px; color: var(--ink-2); }
@@ -1688,6 +1706,10 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   color: var(--ink-3);
   padding: 8px 16px 6px;
   border-bottom: 1px solid var(--hair);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
 }
 .chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
 
