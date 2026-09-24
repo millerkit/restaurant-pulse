@@ -95,11 +95,13 @@ watch(editMonth, async (month) => {
 const sortedRevenueAccounts = computed(() => {
   const visible = revenueAccounts.value.filter(accountVisible)
   const all = revenueAccounts.value
-  return (visible.length > 0 ? visible : all).sort((a, b) => {
-    const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
-    const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
-    return an !== bn ? an - bn : a.name.localeCompare(b.name)
-  })
+  return (visible.length > 0 ? visible : all)
+    .filter(a => !isHiddenByCollapsedAncestor(a))
+    .sort((a, b) => {
+      const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
+      const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
+      return an !== bn ? an - bn : a.name.localeCompare(b.name)
+    })
 })
 
 const revenueAccountsById = computed(() => {
@@ -126,6 +128,43 @@ function directChildren(accountId: number): BudgetAccount[] {
 }
 function isLeafAccount(acc: BudgetAccount): boolean {
   return directChildren(acc.accountId).length === 0
+}
+
+// ---- Collapsible parent accounts ------------------------------------------
+// Mirrors Edit Budget's expand/collapse control (same ▸/▾ button, same Set-of-ids-with-
+// add/delete reactivity pattern), but per parent account rather than per whole category —
+// Revenue is already a single category on this page, so a category-level toggle wouldn't do
+// anything here. A Set of collapsed account ids, shared across the month tabs and the Year
+// Total tab (the account tree's parent/child shape is identical across every month, only the
+// amounts differ — same reasoning yearComputedAccountAmount already documents for reusing
+// directChildren/isLeafAccount that way).
+const collapsedAccountIds = ref<Set<number>>(new Set())
+function toggleAccountCollapsed(accountId: number) {
+  if (collapsedAccountIds.value.has(accountId)) collapsedAccountIds.value.delete(accountId)
+  else collapsedAccountIds.value.add(accountId)
+}
+// Defaults every parent account to collapsed on first load — the account tree is dozens of
+// rows deep (see the screenshot that prompted this control), so starting collapsed gives an
+// at-a-glance Food/Beverage/Event/etc. summary instead of a wall of line items. Applied once,
+// the first time the account tree becomes available (revenueAccounts is empty until
+// monthlyData's initial fetch resolves) — a `collapseDefaultsApplied` guard keeps a later
+// reload (e.g. after Save) from silently re-collapsing rows the user already expanded.
+const collapseDefaultsApplied = ref(false)
+watch(revenueAccounts, (accounts) => {
+  if (collapseDefaultsApplied.value || accounts.length === 0) return
+  const parentIds = new Set(accounts.filter(acc => accounts.some(a => a.parentAccountId === acc.accountId)).map(acc => acc.accountId))
+  collapsedAccountIds.value = parentIds
+  collapseDefaultsApplied.value = true
+}, { immediate: true })
+function isHiddenByCollapsedAncestor(acc: BudgetAccount): boolean {
+  let current: BudgetAccount | undefined = acc
+  const seen = new Set<number>()
+  while (current?.parentAccountId != null && !seen.has(current.parentAccountId)) {
+    seen.add(current.parentAccountId)
+    if (collapsedAccountIds.value.has(current.parentAccountId)) return true
+    current = revenueAccountsById.value.get(current.parentAccountId)
+  }
+  return false
 }
 function computedAccountAmount(acc: BudgetAccount): number {
   const children = directChildren(acc.accountId)
@@ -369,11 +408,13 @@ function yearAccountVisible(acc: BudgetAccount): boolean {
 const sortedYearRevenueAccounts = computed(() => {
   const visible = revenueAccounts.value.filter(yearAccountVisible)
   const all = revenueAccounts.value
-  return (visible.length > 0 ? visible : all).sort((a, b) => {
-    const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
-    const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
-    return an !== bn ? an - bn : a.name.localeCompare(b.name)
-  })
+  return (visible.length > 0 ? visible : all)
+    .filter(a => !isHiddenByCollapsedAncestor(a))
+    .sort((a, b) => {
+      const an = a.accountNumber !== null ? Number(a.accountNumber) : Infinity
+      const bn = b.accountNumber !== null ? Number(b.accountNumber) : Infinity
+      return an !== bn ? an - bn : a.name.localeCompare(b.name)
+    })
 })
 
 const viewingYearTotal = ref(false)
@@ -931,7 +972,10 @@ async function saveRevenue() {
               <template v-else>
                 <tr v-for="acc in sortedYearRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                   <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
-                    <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                    <button v-if="!isLeafAccount(acc)" type="button" class="expand-toggle account-label" @click="toggleAccountCollapsed(acc.accountId)">
+                      {{ collapsedAccountIds.has(acc.accountId) ? '▸' : '▾' }} {{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}
+                    </button>
+                    <span v-else class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                   </th>
                   <td><span class="amount-cell"><span class="amount-input readonly">${{ Math.round(yearComputedAccountAmount(acc)).toLocaleString() }}</span></span></td>
                 </tr>
@@ -944,7 +988,10 @@ async function saveRevenue() {
             <tbody v-else>
               <tr v-for="acc in sortedRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
                 <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
-                  <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
+                  <button v-if="!isLeafAccount(acc)" type="button" class="expand-toggle account-label" @click="toggleAccountCollapsed(acc.accountId)">
+                    {{ collapsedAccountIds.has(acc.accountId) ? '▸' : '▾' }} {{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}
+                  </button>
+                  <span v-else class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                 </th>
                 <td v-if="selectedMonthIsCurrent">
                   <span class="amount-cell">
@@ -1121,6 +1168,7 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .edit-table tr.account-row th { font-weight: 500; }
 .account-label { font-size: 12.5px; color: var(--ink-2); }
 .edit-table tr.account-row.group-header .account-label { font-weight: 700; color: var(--ink); }
+.expand-toggle { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
 .edit-table tr.account-row.group-header .amount-input.readonly { color: var(--ink); }
 /* A future month's table has only one data column ("Budget"), which under
    table auto-layout renders far wider than the 120px amount-input box — and
