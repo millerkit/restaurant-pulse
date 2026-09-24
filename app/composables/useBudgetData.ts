@@ -209,6 +209,39 @@ export function hybridYearExpectedToDate(
   return result
 }
 
+// A different question from hybridYearTotals above: "what will the year actually total,"
+// not "what did we plan for the year." Already-closed months use the real actual whenever
+// one has synced — a stale/inaccurate past budget shouldn't get carried into this figure
+// just because a budget_targets row happens to exist for that month — falling back to that
+// month's budget only where nothing has synced yet. The current month still counts its full
+// budget, unprorated (there's no "actual for the rest of this month" to substitute), same as
+// every future month — identical to hybridYearTotals for both of those. Requested by the user
+// 2026-09-24, specifically for the Edit Budget page's Total tab display — deliberately NOT
+// used anywhere hybridYearTotals serves as a pacing *target* (Budget Pace's % cards, Edit
+// Budget's own Live Preview pace cards, Cash Flow, the Labor tab's projected revenue, Revenue
+// Modeling), since a target should stay what was actually budgeted, not quietly become the
+// actual for a month that's already over.
+export function hybridYearTotalsPastActual(
+  getMonthCategoryBudget: (month: number, cat: Category) => number | null,
+  monthlyActuals: MonthActuals[],
+  asOfMonth: number
+): Record<Category, number> {
+  const totals = {} as Record<Category, number>
+  for (const cat of CATEGORIES) {
+    let sum = 0
+    for (let m = 1; m <= 12; m++) {
+      if (m < asOfMonth) {
+        const actualsData = monthlyActuals[m - 1]
+        sum += actualsData?.hasData ? (actualsData.totals[cat] ?? 0) : (getMonthCategoryBudget(m, cat) ?? 0)
+      } else {
+        sum += getMonthCategoryBudget(m, cat) ?? 0
+      }
+    }
+    totals[cat] = sum
+  }
+  return totals
+}
+
 export function useBudgetYear() {
   const monthlyData = ref<MonthData[]>([])
   const loadError = ref<string | null>(null)

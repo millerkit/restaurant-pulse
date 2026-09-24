@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -223,22 +223,36 @@ function categoryComputedTotal(cat: Category): number {
   return roots.reduce((sum, a) => sum + computedAccountAmount(a), 0)
 }
 
-// Total tab's category subtotal — the hybrid full-year figure (budget
-// where one's set, real actuals as a fallback for a month that's already
-// closed with no budget), not categoryComputedTotal's plain sum of
-// budget_targets rows. Requested directly by the user after the Total
-// tab's pure-budget figure and Budget Pace's year total disagreed for any
-// category with unbudgeted past months — "Total" now reads as this year's
-// actual P&L trajectory (real results so far + planned results for the
-// rest of the year) on both pages, using the same yearHybridTotals this
-// page's own Live Preview card (below) already computes. The per-account
-// rows underneath still show the plain budget figure (there's no cheap way
-// to get real per-account actuals for every past unbudgeted month here),
-// so an expanded category's visible line items won't always sum to this
-// number when a fallback is in effect — the Live Preview card's "X/12 mo
-// budgeted" note is what surfaces that.
+// Total tab's category subtotal — real actuals for every already-closed,
+// already-synced month, this month's full budget, and budget for every
+// future month (hybridYearTotalsPastActual), not yearHybridTotals' own
+// budget-first figure (that one stays reserved for the Live Preview pace
+// cards above, where "budget" needs to mean the literal committed target,
+// not get quietly replaced by what actually happened). Requested by the
+// user 2026-09-24: a past month's budget inaccuracy shouldn't get carried
+// forward into "what will this year total" once the real number is known.
+// The per-account rows underneath still show the plain budget figure
+// (there's no cheap way to get real per-account actuals for every past
+// month here), so an expanded category's visible line items won't always
+// sum to this number — the note below flags when a remaining month has no
+// budget at all, and the Live Preview card's "X/Y mo of actuals synced"
+// note flags when a past month is still leaning on its budget because
+// nothing's synced for it yet.
 function yearDisplayCategoryTotal(cat: Category): number {
-  return yearHybridTotals.value[cat]
+  return yearDisplayTotals.value[cat]
+}
+// Months from now through December with no budget entered for this
+// category — those months contribute $0 to yearDisplayCategoryTotal above,
+// same gap the old "months budgeted" note flagged, recomputed here since a
+// *past* month having no budget no longer says anything about this total
+// (see hybridYearTotalsPastActual — a past month always prefers its real
+// actual when synced, budgeted or not).
+function yearFutureMonthsUnbudgeted(cat: Category): number {
+  let count = 0
+  for (let m = asOfMonth; m <= 12; m++) {
+    if (getMonthCategoryBudgetLive(m, cat) == null) count++
+  }
+  return count
 }
 
 // Actual-side mirror of computedAccountAmount/categoryComputedTotal above —
@@ -675,6 +689,15 @@ const yearHybridTotals = computed(() => hybridYearTotals(getMonthCategoryBudgetL
 // this card used previously, bringing it in line with the Budget Pace
 // page's own year view and the Dashboard.
 const yearHybridExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth, asOfDay))
+
+// The Total tab's own displayed figures — real actuals for already-synced past months,
+// full budget for this month and every future one (see hybridYearTotalsPastActual). Kept
+// separate from yearHybridTotals above, which stays budget-first and backs every pacing
+// card on this page/section (the "% of budget" chips, Budget Pace, Cash Flow, Labor,
+// Revenue Modeling) — those need "budget" to mean the literal committed target, not
+// quietly become the actual once a month is over.
+const yearDisplayTotals = computed(() => hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+const yearDisplayNetIncome = computed(() => netIncome(yearDisplayTotals.value))
 
 const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = realYearCategoryTotal(cat)
@@ -1293,21 +1316,19 @@ function exportForQuickBooks() {
                 <th scope="col">Projected</th>
               </tr>
             </thead>
-            <!-- Annual total: the hybrid full-year figure per category —
-                 budget where one's set, real actuals as a fallback for a
-                 month that's already closed with no budget — same
-                 yearHybridTotals this page's own Live Preview card above
-                 already computes, so "Total" reads as this year's actual
-                 P&L trajectory (real results so far + planned results for
-                 the rest of the year) instead of just a sum of whatever's
-                 typed into budget_targets. Read-only either way (there's
-                 nothing to edit or compare against for an aggregate) — no
-                 Actual/Variance columns, no COGS-recompute banner (that's
-                 for planning one month, not reviewing a year). Per-account
-                 rows underneath still show the plain budget figure (see
-                 yearDisplayCategoryTotal's own comment), so a category note
-                 flags it when its subtotal is leaning on actuals for any
-                 already-elapsed month. -->
+            <!-- Annual total: real actuals for already-synced past months, this month's
+                 full budget, and budget for every future month
+                 (hybridYearTotalsPastActual — see yearDisplayCategoryTotal's own comment),
+                 so "Total" reads as this year's actual P&L trajectory (real results so far
+                 + planned results for the rest of the year), not a stale past budget mixed
+                 with real recent results. Read-only either way (there's nothing to edit or
+                 compare against for an aggregate) — no Actual/Variance columns, no
+                 COGS-recompute banner (that's for planning one month, not reviewing a
+                 year). Per-account rows underneath still show the plain budget figure, so
+                 an expanded category's visible line items won't always sum to this number —
+                 a category note below flags a remaining month with no budget at all; the
+                 Live Preview card above flags a past month still leaning on its budget
+                 because nothing's synced for it yet. -->
             <tbody v-if="viewingAnnualTotal">
               <template v-for="cat in CATEGORIES" :key="cat">
                 <tr>
@@ -1318,10 +1339,10 @@ function exportForQuickBooks() {
                   </th>
                   <td><span class="amount-input readonly">${{ Math.round(yearDisplayCategoryTotal(cat)).toLocaleString() }}</span></td>
                 </tr>
-                <tr v-if="yearMonthsBudgeted(cat) < 12" class="cogs-avg-row">
+                <tr v-if="yearFutureMonthsUnbudgeted(cat) > 0" class="cogs-avg-row">
                   <td colspan="2">
                     <div class="section-note">
-                      Only {{ yearMonthsBudgeted(cat) }} of 12 months budgeted — the rest of this total uses real actuals for already-elapsed months, planned budget for the rest.
+                      {{ yearFutureMonthsUnbudgeted(cat) }} of the remaining months ({{ MONTH_NAMES[asOfMonth - 1] }}–Dec) have no budget entered — this total counts $0 for those.
                     </div>
                   </td>
                 </tr>
@@ -1335,8 +1356,8 @@ function exportForQuickBooks() {
                 </template>
               </template>
               <tr class="net-income-row">
-                <th scope="row">Net Income (Projected)</th>
-                <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearLiveNetIncome)">{{ formatNetIncome(yearLiveNetIncome) }}</strong></span></td>
+                <th scope="row">Net Income (Total)</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearDisplayNetIncome)">{{ formatNetIncome(yearDisplayNetIncome) }}</strong></span></td>
               </tr>
               <tr v-if="yearActualNetIncome !== null" class="net-income-row">
                 <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
