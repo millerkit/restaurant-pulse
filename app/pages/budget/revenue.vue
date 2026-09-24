@@ -519,9 +519,18 @@ async function loadBuyoutPlan() {
 onMounted(loadBuyoutPlan)
 watch(editMonth, loadBuyoutPlan)
 
+// Decimal counts are intentional, not just tolerated — a buyout priced
+// above/below the standard rate for its weekday (e.g. a negotiated $11,000
+// Thursday instead of the usual $10,000) is genuinely "1 buyout," so it's
+// represented as a fractional multiple of the standard rate (here, 1.4645)
+// rather than forcing the manual Food/Beverage adjustment this replaced.
+// Rounded to 4 decimal places purely to avoid float noise accumulating
+// across repeated edits — not a meaningful precision limit for a dollar
+// figure this size.
 function parseCount(raw: string | undefined): number {
-  const n = Math.round(Number((raw ?? '').replace(/[^0-9-]/g, '')))
-  return Number.isFinite(n) && n > 0 ? n : 0
+  const n = Number((raw ?? '').replace(/[^0-9.-]/g, ''))
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.round(n * 10000) / 10000
 }
 
 // Rate editor — a separate, deliberately global save (not per-month): the
@@ -777,8 +786,9 @@ async function saveRevenue() {
               <span class="buyout-weekday-label">{{ w.short }}</span>
               <span class="buyout-weekday-target">{{ w.dollarTarget != null ? `normal night ~$${Math.round(w.dollarTarget).toLocaleString()}` : 'not enough data yet' }}</span>
               <input
-                type="text" inputmode="numeric" class="buyout-count-input"
+                type="text" inputmode="decimal" class="buyout-count-input"
                 v-model="buyoutCountInputs[w.dow]" :disabled="w.dollarTarget == null" placeholder="0"
+                title="Decimals are fine — a buyout priced above/below this weekday's standard rate is a fractional count (e.g. 1.4645 for a $11,000 Thursday against a $10,000 standard rate)"
               />
             </div>
           </div>

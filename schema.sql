@@ -409,18 +409,24 @@ CREATE TABLE buyout_rates (
 
 -- Planned/assumed buyout counts, one row per (year, month, weekday) — the
 -- Revenue tab's input for projecting buyout revenue before it's actually
--- booked (a specific already-negotiated buyout, like a custom-priced one,
--- is still just entered by hand as a one-off budget adjustment — this
--- table models the generic "how many Friday buyouts do I expect this
--- month" planning assumption, not real individual events). dow follows the
--- same 0=Sun..6=Sat convention as every other weekday-keyed concept in this
--- app (server/utils/weekly-targets.ts); Monday (1) is never populated,
--- since the restaurant doesn't operate Mondays.
+-- booked. dow follows the same 0=Sun..6=Sat convention as every other
+-- weekday-keyed concept in this app (server/utils/weekly-targets.ts);
+-- Monday (1) is never populated, since the restaurant doesn't operate
+-- Mondays. count is a REAL, not an integer count of buyouts — a buyout
+-- actually priced above or below the standard rate for its weekday (e.g. a
+-- negotiated $11,000 Thursday against a $10,000 standard rate) is entered
+-- as a fractional multiple of a standard buyout (1.4645, here), so it's
+-- still visible as a tracked buyout rather than folded invisibly into
+-- Restaurant Sales. This only works for a real, full-restaurant buyout at
+-- a different price — a *partial* buyout (e.g. just the dining room) isn't
+-- a fraction of a full buyout at all (it displaces that one area's normal
+-- revenue, not the whole restaurant's), so it's still entered by hand as a
+-- one-off Food/Beverage budget adjustment instead.
 CREATE TABLE revenue_buyout_plan (
   year   INTEGER NOT NULL,
   month  INTEGER NOT NULL,
   dow    INTEGER NOT NULL CHECK (dow BETWEEN 0 AND 6 AND dow != 1),
-  count  INTEGER NOT NULL DEFAULT 0,
+  count  REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (year, month, dow)
 );
 

@@ -31,7 +31,10 @@ export default defineEventHandler(async (event) => {
     if (!VALID_DOWS.has(dow)) {
       throw createError({ statusCode: 400, statusMessage: `Invalid day-of-week: ${dowStr}` })
     }
-    if (!Number.isInteger(count) || count < 0) {
+    // Decimals are intentional (see the buyout-count-input comment in
+    // revenue.vue) — a buyout priced above/below its weekday's standard
+    // rate is a fractional multiple of a "standard" buyout, not a whole count.
+    if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) {
       throw createError({ statusCode: 400, statusMessage: `Invalid count for day-of-week ${dowStr}: ${count}` })
     }
     countEntries.push([dow, count])
