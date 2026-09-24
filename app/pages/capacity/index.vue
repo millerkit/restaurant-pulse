@@ -1210,23 +1210,18 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .apply-pct-btn:disabled { opacity: 0.4; cursor: default; }
 .apply-pct-btn:not(:disabled):hover { background: var(--accent); color: white; border-color: var(--accent); }
 
-/* Expected Nightly Covers table: sticky header row + sticky Month column
-   (added at the user's request, 2026-09-14) so both stay visible while
-   scrolling a 12-month, 5-area grid — the column headers when scrolling
-   down, and which month a row belongs to when scrolling right on a narrow
-   screen. Both need an explicit opaque background (not transparent, the
-   table default) since content scrolls underneath them. Tighter
-   padding/input widths than the table above make room for the new
-   Projected Revenue column without the table growing much wider. */
-/* Bounded height + its own scroll, rather than relying on the page's own
-   scroll — needed for the sticky header/column below to actually have
-   something to stick within. (A plain `overflow-x: auto` card with no
-   height cap technically becomes its own scroll container too, per the
-   CSS overflow spec, but since it never actually overflows vertically on
-   its own, position:sticky has nothing to stick against and the header
-   just scrolls away with the page — confirmed by testing before landing
-   on this fix.) */
-.covers-table-card { overflow: auto; max-height: 70vh; }
+/* Expected Nightly Covers table: sticky Month column (left) so it stays
+   visible while scrolling right on a narrow screen. Tighter padding/input
+   widths than the table above make room for the new Projected Revenue
+   column without the table growing much wider. No vertical height cap
+   here (removed 2026-09-24, at the user's request) — this section already
+   sits below a page scroll, and the previous 70vh-capped inner scroll
+   meant scrolling twice (the page, then the table) to see all 12 months.
+   The table now just grows to its natural height, relying on
+   `.pl-table-card`'s own `overflow-x: auto` for horizontal scroll only;
+   the header/footer rows lost their sticky-top/bottom behavior as a
+   result (nothing left for them to stick within), so they render as plain
+   rows now — only the Month column stays sticky. */
 /* `position: sticky` on a <th>/<td> is a no-op in every major browser when
    the table uses `border-collapse: collapse` (this.pl-table's default) —
    confirmed by testing (the sticky computed style showed up correctly but
@@ -1249,9 +1244,6 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
    its own. */
 .covers-table .sticky-col { position: sticky; left: 0; }
 .covers-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   /* .covers-table th, .covers-table td above sets the table's tighter 8px
      7px padding, which would otherwise win over .pl-table thead th's own
      padding-top/bottom (same specificity, but that rule comes first in the
@@ -1260,7 +1252,6 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
   padding-top: 16px;
   padding-bottom: 16px;
 }
-.covers-table thead th.sticky-col { z-index: 3; }
 .covers-table tbody th.sticky-col {
   z-index: 1;
   background: var(--surface);
@@ -1268,13 +1259,8 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 
 /* Year-total footer row (added at the user's request, 2026-09-14; restyled
    to match the header — slate blue background, white text, same extra
-   vertical padding — 2026-09-14), sticky to the bottom of the same scroll
-   container the header sticks to the top of, so both ends of the table
-   stay visible while scrolling through 12 months. */
+   vertical padding — 2026-09-14). */
 .covers-table tfoot th, .covers-table tfoot td {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
   background: #3e5c76;
   font-weight: 700;
   color: #ffffff;
@@ -1282,7 +1268,6 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
   padding-top: 16px;
   padding-bottom: 16px;
 }
-.covers-table tfoot th.sticky-col { z-index: 3; }
 
 .save-bar { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; }
 .save-btn {
