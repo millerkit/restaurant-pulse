@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
-import { hybridYearTotals, monthCategoryBudget, currentAsOfMonth, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { hybridYearTotals, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Revenue Modeling` })
 
@@ -146,6 +146,8 @@ const annualImpact = computed(() => {
   const baseCogs = currentAnnual.value.cogs
   const baseLabor = currentAnnual.value.labor
   const baseOpex = currentAnnual.value.opex
+  const otherIncome = currentAnnual.value.other_income
+  const otherExpense = currentAnnual.value.other_expense
   const simRevenue = baseRevenue + annualRevenueDelta
 
   const laborVariableShare = data.value!.laborVariableShare!
@@ -164,8 +166,13 @@ const annualImpact = computed(() => {
   const simOpexVariable = opexVariablePct * simRevenue
   const simOpex = simOpexVariable + opexFixed
 
-  const baseNetIncome = baseRevenue - baseCogs - baseLabor - baseOpex
-  const simNetIncome = simRevenue - simCogs - simLabor - simOpex
+  // other_income/other_expense aren't modeled by the covers/spend simulation
+  // (they're not driven by nightly covers or per-cover spend), so both base
+  // and simulated net income carry the same real current-year other total —
+  // matching the canonical netIncome() formula used by Edit Budget's Total
+  // tab and Budget Pace, rather than silently omitting Other Income/Expense.
+  const baseNetIncome = netIncome({ revenue: baseRevenue, cogs: baseCogs, labor: baseLabor, opex: baseOpex, other_income: otherIncome, other_expense: otherExpense })
+  const simNetIncome = netIncome({ revenue: simRevenue, cogs: simCogs, labor: simLabor, opex: simOpex, other_income: otherIncome, other_expense: otherExpense })
 
   return {
     coversMultiplier,
@@ -174,6 +181,7 @@ const annualImpact = computed(() => {
     labor: { base: baseLabor, sim: simLabor, baseFixed: laborFixed, baseVariable: laborVariable, simFixed: laborFixed, simVariable: simLaborVariable },
     opex: { base: baseOpex, sim: simOpex, baseFixed: opexFixed, baseVariable: opexVariable, simFixed: opexFixed, simVariable: simOpexVariable },
     netIncome: { base: baseNetIncome, sim: simNetIncome },
+    otherIncome, otherExpense,
     laborPct: { base: baseRevenue > 0 ? baseLabor / baseRevenue : null, sim: simRevenue > 0 ? simLabor / simRevenue : null },
     profitMargin: { base: baseRevenue > 0 ? baseNetIncome / baseRevenue : null, sim: simRevenue > 0 ? simNetIncome / simRevenue : null }
   }
@@ -358,6 +366,18 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.base) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.sim) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.base, annualImpact!.opex.sim) }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Other Income (not modeled by the simulation)</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.otherIncome) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.otherIncome) }}</td>
+                  <td class="derived">$0</td>
+                </tr>
+                <tr>
+                  <th scope="row">Other Expense (not modeled by the simulation)</th>
+                  <td class="derived">{{ fmtMoneyFull(annualImpact!.otherExpense) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.otherExpense) }}</td>
+                  <td class="derived">$0</td>
                 </tr>
                 <tr class="subtotal-row">
                   <th scope="row">Net Income</th>
