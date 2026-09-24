@@ -2,6 +2,16 @@
 import site from '~/config/site.json'
 import { CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
+// Mirrors server/utils/core-revenue.ts's CORE_REVENUE_ACCOUNT_NUMBERS — duplicated rather
+// than imported since server/utils isn't part of the client bundle (see this file's other
+// duplicated-across-the-boundary constants throughout the codebase, e.g. Toast's
+// MAX_PLAUSIBLE_GUESTS_PER_ORDER). Deliberately excludes Event Sales (4100s), Catering
+// (4200s), Retail (4300s), and Other Service Income (4400) — those land in large, sporadic
+// amounts (a booked event or a private buyout) rather than a steady daily trickle, so a
+// straight-line actual-to-date extrapolation over- or understates the month wildly depending
+// on whether that booking has posted yet (see computedAccountProjected below).
+const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4026', '4028']
+
 useHead({ title: `${site.restaurantName} — Revenue` })
 
 const { monthlyData, loadError, loadYear } = useBudgetYear()
@@ -166,10 +176,40 @@ function projectFromActual(actual: number): number {
   if (fraction <= 0) return actual
   return actual / fraction
 }
-function computedAccountProjected(acc: BudgetAccount): number {
-  return projectFromActual(computedAccountActual(acc))
+function isCoreRevenueAccount(acc: BudgetAccount): boolean {
+  return acc.accountNumber !== null && CORE_REVENUE_ACCOUNT_NUMBERS.includes(acc.accountNumber)
 }
-const totalRevenueProjected = computed(() => projectFromActual(totalRevenueActual.value))
+// The "floor at actual-to-date" fallback below (used for Event/Catering/Retail-style
+// accounts) has to be sign-aware: most revenue accounts are budgeted positive, where "actual
+// already exceeds budget" should win via Math.max. But a contra-revenue account (e.g. 4900
+// Contra-Income/4910 Discounts & Comps) is budgeted *negative*, where Math.max(0, -2200)
+// would wrongly resolve to $0 — silently dropping the expected discount from the projected
+// total — instead of the intended $-2,200. Math.min is the correct floor once budget is
+// negative (bigger real discount than planned should still win over the budgeted estimate).
+function budgetFloor(actual: number, budget: number): number {
+  return budget >= 0 ? Math.max(actual, budget) : Math.min(actual, budget)
+}
+// Leaf accounts decide their own projection method (core dine-in gets the day-fraction
+// extrapolation; Event/Catering/Retail-style accounts fall back to their own budget — the
+// best available estimate of what's actually booked this month — floored at actual-to-date
+// so a bigger-than-planned event already received isn't hidden); a parent/group/total figure
+// is always the sum of its children's own projected figures, same rollup pattern as
+// computedAccountAmount/computedAccountActual above, never a second independent calculation
+// over the aggregate (that would let one child's overage get masked by another child's
+// shortfall — see this function's own history for why that was rejected).
+function computedAccountProjected(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) {
+    const actual = computedAccountActual(acc)
+    if (isCoreRevenueAccount(acc)) return projectFromActual(actual)
+    return budgetFloor(actual, computedAccountAmount(acc))
+  }
+  return children.reduce((sum, c) => sum + computedAccountProjected(c), 0)
+}
+const totalRevenueProjected = computed(() => {
+  const roots = revenueAccounts.value.filter(a => a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + computedAccountProjected(a), 0)
+})
 
 // Revenue is always "higher is better" — no direction table needed for a single-category page.
 function varianceFor(budget: number, actual: number): { kind: 'no-budget' } | { kind: 'value', delta: number, status: ReturnType<typeof paceStatus> } {
@@ -284,8 +324,18 @@ function yearAccountTotal(accountId: number): number {
   }
   if (yearActualsHasData.value[asOfMonth]) {
     const actualToDate = yearActualsByMonth.value[asOfMonth]?.[accountId] ?? 0
-    const fraction = asOfMonthExpectedFraction.value
-    total += fraction > 0 ? actualToDate / fraction : actualToDate
+    const acc = revenueAccountsById.value.get(accountId)
+    if (acc && isCoreRevenueAccount(acc)) {
+      const fraction = asOfMonthExpectedFraction.value
+      total += fraction > 0 ? actualToDate / fraction : actualToDate
+    } else {
+      // Same budget-floor fallback as computedAccountProjected above, for the same reason
+      // (Event/Catering/Retail-style accounts don't trickle in steadily) — uses the live
+      // unsaved draft when asOfMonth is the month currently open in the editor, matching the
+      // else-branch below's own draft-vs-stored-budget distinction.
+      const monthBudget = editMonth.value === asOfMonth ? parseEditableAmount(editableAccountAmounts.value[accountId]) : accountBudgetForMonth(asOfMonth, accountId)
+      total += budgetFloor(actualToDate, monthBudget)
+    }
   } else {
     total += editMonth.value === asOfMonth ? parseEditableAmount(editableAccountAmounts.value[accountId]) : accountBudgetForMonth(asOfMonth, accountId)
   }
@@ -833,6 +883,9 @@ async function saveRevenue() {
               @click="hideZeroRows = !hideZeroRows"
             >{{ hideZeroRows ? 'Show' : 'Hide' }} $0 rows</button>
           </div>
+          <div v-if="!viewingYearTotal && selectedMonthIsCurrent" class="quiet-note projected-note">
+            Projected for Event Sales, Catering, Retail, and Other Service Income uses that account's own budget (floored at actual-to-date) instead of a straight-line extrapolation — those land in large, sporadic amounts rather than a steady daily trickle.
+          </div>
           <div class="month-tabs">
             <button
               v-for="month in targetMonths" :key="month"
@@ -986,6 +1039,7 @@ async function saveRevenue() {
 
 /* ---------- row filter toggles ---------- */
 .pl-table-card .table-head { padding: 12px 14px 8px; display: flex; align-items: center; justify-content: space-between; }
+.projected-note { padding: 0 14px 8px; }
 .section-label { font-size: 12px; font-weight: 700; color: var(--ink-2); }
 .filter-tab {
   font-size: 11px;
