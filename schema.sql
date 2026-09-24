@@ -391,6 +391,58 @@ CREATE TABLE weekly_revenue_benchmark (
   updated_at     TEXT NOT NULL
 );
 
+-- Editable buyout guaranteed-minimum pricing, added 2026-09-24 to back the
+-- Revenue tab's buyout-planning section. Two tiers matching the real pricing
+-- structure (Tue/Wed/Thu vs. Fri/Sat/Sun) — editable because the user
+-- expects to revise these rates over time, unlike the weekday grouping
+-- itself. Single-row (id is always 1), same shape as reserve_plan/
+-- weekly_revenue_benchmark above. Starts empty rather than needing a seed
+-- insert, same reasoning as drilldown_thresholds — server/api/budget/
+-- buyout-plan.get.ts falls back to the current real-world rates ($10,000/
+-- $12,000) in code until the user saves one here.
+CREATE TABLE buyout_rates (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  weekday_rate  REAL NOT NULL,  -- Tue/Wed/Thu guaranteed F&B minimum
+  weekend_rate  REAL NOT NULL,  -- Fri/Sat/Sun guaranteed F&B minimum
+  updated_at    TEXT NOT NULL
+);
+
+-- Planned/assumed buyout counts, one row per (year, month, weekday) — the
+-- Revenue tab's input for projecting buyout revenue before it's actually
+-- booked (a specific already-negotiated buyout, like a custom-priced one,
+-- is still just entered by hand as a one-off budget adjustment — this
+-- table models the generic "how many Friday buyouts do I expect this
+-- month" planning assumption, not real individual events). dow follows the
+-- same 0=Sun..6=Sat convention as every other weekday-keyed concept in this
+-- app (server/utils/weekly-targets.ts); Monday (1) is never populated,
+-- since the restaurant doesn't operate Mondays.
+CREATE TABLE revenue_buyout_plan (
+  year   INTEGER NOT NULL,
+  month  INTEGER NOT NULL,
+  dow    INTEGER NOT NULL CHECK (dow BETWEEN 0 AND 6 AND dow != 1),
+  count  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (year, month, dow)
+);
+
+-- What the Revenue tab's "Apply buyout revenue" action most recently wrote
+-- into a real revenue account's budget_targets row, per (year, month,
+-- account) — the only thing that lets a re-apply (after changing counts or
+-- rates) correctly net against its own prior contribution instead of
+-- stacking a second addition on top of a manually-typed Food/Beverage
+-- figure that has nowhere else to live (4010 Restaurant Food is already a
+-- leaf account with no child to hold a separate "buyout revenue" line —
+-- considered and rejected adding a pseudo-account for this specifically to
+-- avoid it, since a pseudo-account would need special-casing everywhere
+-- that assumes every accounts row is a real QBO account: the export
+-- template, actuals-by-account matching, the account tree itself).
+CREATE TABLE revenue_buyout_applied (
+  year        INTEGER NOT NULL,
+  month       INTEGER NOT NULL,
+  account_id  INTEGER NOT NULL REFERENCES accounts(id),
+  amount      REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (year, month, account_id)
+);
+
 -- Editable materiality thresholds for the Budget Pace page's Overspending
 -- section's Labor/Opex subcategory "why" breakdown (originally built into
 -- a standalone P&L Drill-Downs page, added 2026-08-20 the same day that

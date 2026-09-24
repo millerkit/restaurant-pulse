@@ -36,7 +36,7 @@ const editableAccountAmounts = ref<Record<number, string>>({})
 
 function parseEditableAmount(raw: string | undefined): number {
   if (!raw) return 0
-  const n = Number(raw.replace(/,/g, ''))
+  const n = Number(raw.replace(/[,$\s]/g, ''))
   return Number.isFinite(n) ? n : 0
 }
 function formatWholeDollars(n: number): string {
@@ -479,6 +479,151 @@ async function recomputeRevenueFromCapacity() {
   }
 }
 
+// ---- Buyout revenue planning -------------------------------------------
+// A buyout doesn't add its full guaranteed minimum to the month — it swaps
+// out whatever that night would have made anyway, so the real incremental
+// revenue is (buyout rate − that weekday's normal-night target). Reuses the
+// same real per-weekday targets the Dashboard's This Week's Targets section
+// already computes (server/utils/weekly-targets.ts), so "a normal Thursday"
+// means the same thing here as it does there.
+type BuyoutWeekday = { dow: number, label: string, short: string, dollarTarget: number | null, rate: number }
+const buyoutRates = ref<{ weekdayRate: number, weekendRate: number } | null>(null)
+const buyoutWeekdays = ref<BuyoutWeekday[]>([])
+const buyoutAppliedByAccountId = ref<Record<number, number>>({})
+const buyoutFoodBeverageMix = ref<{ foodPct: number | null, beveragePct: number | null, hasData: boolean }>({ foodPct: null, beveragePct: null, hasData: false })
+const buyoutCountInputs = ref<Record<number, string>>({})
+
+async function loadBuyoutPlan() {
+  try {
+    const result = await $fetch<{
+      rates: { weekdayRate: number, weekendRate: number }
+      weekdays: BuyoutWeekday[]
+      countByDow: Record<string, number>
+      appliedByAccountId: Record<string, number>
+      foodBeverageMix: { foodPct: number | null, beveragePct: number | null, hasData: boolean }
+    }>('/api/budget/buyout-plan', { query: { year: YEAR, month: editMonth.value } })
+    buyoutRates.value = result.rates
+    buyoutWeekdays.value = result.weekdays
+    buyoutAppliedByAccountId.value = result.appliedByAccountId
+    buyoutFoodBeverageMix.value = result.foodBeverageMix
+    const inputs: Record<number, string> = {}
+    for (const w of result.weekdays) inputs[w.dow] = String(result.countByDow[w.dow] ?? 0)
+    buyoutCountInputs.value = inputs
+  } catch {
+    buyoutRates.value = null
+    buyoutWeekdays.value = []
+    buyoutAppliedByAccountId.value = {}
+    buyoutCountInputs.value = {}
+  }
+}
+onMounted(loadBuyoutPlan)
+watch(editMonth, loadBuyoutPlan)
+
+function parseCount(raw: string | undefined): number {
+  const n = Math.round(Number((raw ?? '').replace(/[^0-9-]/g, '')))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+// Rate editor — a separate, deliberately global save (not per-month): the
+// $10K/$12K tiers are the restaurant's current pricing, not a monthly
+// assumption, so editing them here updates every month's preview at once.
+const weekdayRateInput = ref('')
+const weekendRateInput = ref('')
+watch(buyoutRates, (rates) => {
+  if (!rates) return
+  weekdayRateInput.value = String(rates.weekdayRate)
+  weekendRateInput.value = String(rates.weekendRate)
+}, { immediate: true })
+const rateSaveStatus = ref<'idle' | 'saving' | 'done' | 'error'>('idle')
+async function saveBuyoutRates() {
+  rateSaveStatus.value = 'saving'
+  try {
+    const weekdayRate = Number(weekdayRateInput.value.replace(/[,$\s]/g, ''))
+    const weekendRate = Number(weekendRateInput.value.replace(/[,$\s]/g, ''))
+    if (!Number.isFinite(weekdayRate) || weekdayRate <= 0 || !Number.isFinite(weekendRate) || weekendRate <= 0) {
+      throw new Error('Both rates must be positive numbers')
+    }
+    await $fetch('/api/budget/buyout-rates', { method: 'POST', body: { weekdayRate, weekendRate } })
+    await loadBuyoutPlan()
+    rateSaveStatus.value = 'done'
+  } catch (err: any) {
+    rateSaveStatus.value = 'error'
+    // eslint-disable-next-line no-console
+    console.error(err)
+  }
+}
+
+// The planned incremental revenue for the selected month — sum across every
+// weekday of count x (rate − normal-night target). A weekday with no target
+// yet (not enough real history) contributes nothing rather than guessing.
+const buyoutIncrementTotal = computed(() => {
+  return buyoutWeekdays.value.reduce((sum, w) => {
+    const count = parseCount(buyoutCountInputs.value[w.dow])
+    if (count === 0 || w.dollarTarget == null) return sum
+    return sum + count * (w.rate - w.dollarTarget)
+  }, 0)
+})
+const FOOD_PCT_FALLBACK = 0.65 // matches import-capacity-projections.mjs's own fallback for the same split, before any real revenue data exists
+const buyoutIncrementFood = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.foodPct ?? FOOD_PCT_FALLBACK))
+const buyoutIncrementBeverage = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.beveragePct ?? (1 - FOOD_PCT_FALLBACK)))
+
+const buyoutHasAnyCount = computed(() => buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) > 0))
+// Disabled once a fresh Apply would be a no-op — same "nothing changed"
+// disable pattern as the Capacity recompute button.
+const buyoutNeedsApply = computed(() => {
+  const totalApplied = Object.values(buyoutAppliedByAccountId.value).reduce((s, v) => s + v, 0)
+  return Math.abs(buyoutIncrementTotal.value - totalApplied) > 1
+})
+
+const buyoutApplyStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const buyoutApplyMessage = ref('')
+
+async function applyBuyoutRevenue() {
+  buyoutApplyStatus.value = 'running'
+  try {
+    const foodAccount = revenueAccounts.value.find(a => a.accountNumber === '4010')
+    const beverageAccounts = leafRevenueAccountsForGroup('Beverage')
+    if (!foodAccount || beverageAccounts.length === 0) throw new Error('Could not find Food/Beverage accounts to apply to')
+
+    const mixByAccountId = new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
+    const usingRealMix = beverageAccounts.every(a => mixByAccountId.get(a.accountId) != null)
+    const oldBeverageTotal = beverageAccounts.reduce((sum, a) => sum + (a.amount || 0), 0)
+
+    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+    const applied: { accountId: number, amount: number }[] = []
+
+    const foodPreviouslyApplied = buyoutAppliedByAccountId.value[foodAccount.accountId] ?? 0
+    const foodIncrement = Math.round(buyoutIncrementFood.value * 100) / 100
+    const newFoodAmount = (foodAccount.amount || 0) - foodPreviouslyApplied + foodIncrement
+    targets.push({ year: YEAR, month: editMonth.value, accountId: foodAccount.accountId, amount: Math.round(newFoodAmount * 100) / 100 })
+    applied.push({ accountId: foodAccount.accountId, amount: foodIncrement })
+
+    for (const a of beverageAccounts) {
+      const weight = usingRealMix
+        ? (mixByAccountId.get(a.accountId) ?? 0)
+        : (oldBeverageTotal > 0 ? (a.amount || 0) / oldBeverageTotal : 1 / beverageAccounts.length)
+      const leafIncrement = Math.round(buyoutIncrementBeverage.value * weight * 100) / 100
+      const previouslyApplied = buyoutAppliedByAccountId.value[a.accountId] ?? 0
+      const newAmount = (a.amount || 0) - previouslyApplied + leafIncrement
+      targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(newAmount * 100) / 100 })
+      applied.push({ accountId: a.accountId, amount: leafIncrement })
+    }
+
+    const counts: Record<number, number> = {}
+    for (const w of buyoutWeekdays.value) counts[w.dow] = parseCount(buyoutCountInputs.value[w.dow])
+
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await $fetch('/api/budget/buyout-plan', { method: 'POST', body: { year: YEAR, month: editMonth.value, counts, applied } })
+    await Promise.all([loadYear(), loadBuyoutPlan()])
+
+    buyoutApplyMessage.value = `Applied ${MONTH_NAMES[editMonth.value - 1]}'s planned buyout revenue: +$${Math.round(buyoutIncrementFood.value + buyoutIncrementBeverage.value).toLocaleString()} (Food $${Math.round(buyoutIncrementFood.value).toLocaleString()} / Beverage $${Math.round(buyoutIncrementBeverage.value).toLocaleString()}).`
+    buyoutApplyStatus.value = 'done'
+  } catch (err: any) {
+    buyoutApplyStatus.value = 'error'
+    buyoutApplyMessage.value = err?.data?.statusMessage || err?.message || 'Apply failed'
+  }
+}
+
 watch(editMonth, () => {
   revenueRecomputeStatus.value = 'idle'
   revenueRecomputeMessage.value = ''
@@ -486,6 +631,8 @@ watch(editMonth, () => {
   actionMessage.value = ''
   saveStatus.value = 'idle'
   saveMessage.value = ''
+  buyoutApplyStatus.value = 'idle'
+  buyoutApplyMessage.value = ''
 })
 
 // ---- Save / unsaved-changes guard -------------------------------------------
@@ -608,6 +755,49 @@ async function saveRevenue() {
             <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
           </div>
           <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Edit Capacity page</NuxtLink>.</div>
+        </div>
+
+        <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
+          <div class="live-pace-head">
+            <span class="chip accent">Buyout Revenue</span>
+            <span class="quiet-note">A buyout swaps a normal night for a guaranteed minimum — only the difference over what that weekday normally makes is new revenue.</span>
+          </div>
+
+          <div class="section-note buyout-rates-row">
+            <span>Guaranteed minimum: Tue–Thu $</span>
+            <input type="text" inputmode="numeric" class="rate-input" v-model="weekdayRateInput" />
+            <span>· Fri–Sun $</span>
+            <input type="text" inputmode="numeric" class="rate-input" v-model="weekendRateInput" />
+            <button class="mini-btn" :disabled="rateSaveStatus === 'saving'" @click="saveBuyoutRates">Update rates</button>
+            <span v-if="rateSaveStatus === 'error'" class="chip warning">Couldn't save rates</span>
+          </div>
+
+          <div class="buyout-weekday-grid">
+            <div v-for="w in buyoutWeekdays" :key="w.dow" class="buyout-weekday-cell">
+              <span class="buyout-weekday-label">{{ w.short }}</span>
+              <span class="buyout-weekday-target">{{ w.dollarTarget != null ? `normal night ~$${Math.round(w.dollarTarget).toLocaleString()}` : 'not enough data yet' }}</span>
+              <input
+                type="text" inputmode="numeric" class="buyout-count-input"
+                v-model="buyoutCountInputs[w.dow]" :disabled="w.dollarTarget == null" placeholder="0"
+              />
+            </div>
+          </div>
+
+          <div class="section-note">
+            <template v-if="buyoutHasAnyCount">
+              Planned buyout revenue for {{ MONTH_NAMES[editMonth - 1] }}:
+              <strong>+${{ Math.round(buyoutIncrementTotal).toLocaleString() }}</strong>
+              (Food ${{ Math.round(buyoutIncrementFood).toLocaleString() }} / Beverage ${{ Math.round(buyoutIncrementBeverage).toLocaleString() }}<template v-if="!buyoutFoodBeverageMix.hasData"> — no real sales data yet, used a 65/35 fallback split</template>).
+            </template>
+            <template v-else>No buyouts planned for {{ MONTH_NAMES[editMonth - 1] }} yet.</template>
+            <button
+              class="mini-btn" :disabled="buyoutApplyStatus === 'running' || !buyoutNeedsApply"
+              :title="!buyoutNeedsApply ? 'Already matches the current plan — nothing to change' : ''"
+              @click="applyBuyoutRevenue"
+            >Apply to {{ MONTH_NAMES[editMonth - 1] }}'s budget</button>
+            <span v-if="buyoutApplyStatus === 'done'" class="chip good">{{ buyoutApplyMessage }}</span>
+            <span v-if="buyoutApplyStatus === 'error'" class="chip warning">{{ buyoutApplyMessage }}</span>
+          </div>
         </div>
 
         <div v-if="!viewingYearTotal" class="action-row">
@@ -934,6 +1124,51 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .edit-table tr.net-income-row th { font-weight: 700; color: var(--ink); }
 .edit-table tr.net-income-row .amount-input.readonly { font-weight: 700; }
+
+.buyout-rates-row { align-items: center; margin-bottom: 4px; }
+.rate-input {
+  width: 70px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--ink);
+}
+.buyout-weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+.buyout-weekday-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: var(--surface-alt);
+}
+.buyout-weekday-label { font-size: 12px; font-weight: 700; color: var(--ink); }
+.buyout-weekday-target { font-size: 10.5px; color: var(--ink-3); text-align: center; }
+.buyout-count-input {
+  width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--hair);
+  background: var(--surface);
+  color: var(--ink);
+}
+.buyout-count-input:disabled { opacity: 0.5; }
+
+@media (max-width: 760px) {
+  .buyout-weekday-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 .mini-btn {
   font-size: 11px;
