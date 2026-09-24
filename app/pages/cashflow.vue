@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { YEAR, useBudgetYear, useActualsYear, hybridYearTotals, monthCategoryBudget, netIncome, currentAsOfMonth } from '~/composables/useBudgetData'
+import { YEAR, useBudgetYear, useActualsYear, hybridYearTotalsPastActual, monthCategoryBudget, netIncome, currentAsOfMonth } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Cash Flow` })
 
@@ -35,15 +35,21 @@ async function load() {
 }
 onMounted(load)
 
-// Projected full-year Net Income, "budget as-is" — reuses the exact same
-// hybrid (budget-preferred, actual-fallback-for-elapsed-unbudgeted-months)
-// annual total the Budget Pace page's Year view is built from, so this
-// number can't drift from what that page already calls "the budget."
+// Projected full-year Net Income — real actuals for any already-closed,
+// already-synced month, this month's and every future month's budget
+// (hybridYearTotalsPastActual). Matches Edit Budget's Total tab exactly
+// (app/pages/budget/edit.vue's yearDisplayNetIncome uses the same
+// function), so a past month's stale/inaccurate budget doesn't get carried
+// into "will we cover the loans this year" once the real number is known —
+// same reasoning, and same user request (2026-09-24), as that page's Total
+// tab. Deliberately NOT hybridYearTotals (the budget-first version Budget
+// Pace's year view and this page's own debt-service targets still use) —
+// this is a "what will actually happen" projection, not a pacing target.
 const { monthlyData: budgetMonthlyData } = useBudgetYear()
 const { monthlyActuals } = useActualsYear()
 const projectedNetIncomeForYear = computed<number | null>(() => {
   if (!budgetMonthlyData.value.length) return null
-  const totals = hybridYearTotals(
+  const totals = hybridYearTotalsPastActual(
     (m, cat) => monthCategoryBudget(budgetMonthlyData.value[m - 1], cat),
     monthlyActuals.value,
     currentAsOfMonth()
@@ -168,13 +174,13 @@ async function submitPlan() {
         </div>
       </section>
 
-      <!-- Year-end projection (budget as-is) — how much profit is needed to
-           actually service the loans (not just interest, which is already
-           inside Net Income) vs. how much profit the current budget
-           projects for the full year. -->
+      <!-- Year-end projection — how much profit is needed to actually
+           service the loans (not just interest, which is already inside Net
+           Income) vs. how much profit the year is on track for: real
+           actuals for already-elapsed months, budget for the rest. -->
       <section v-if="data.yearProjection">
         <div class="section-head">
-          <div class="section-label">Year-End Projection — Budget As-Is</div>
+          <div class="section-label">Year-End Projection</div>
           <div class="section-note">{{ YEAR }} full year</div>
         </div>
         <div class="hero-row two-up">
@@ -193,7 +199,7 @@ async function submitPlan() {
               </span>
             </div>
             <div class="figure">{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</div>
-            <div class="caption">Full year of currently entered budget (falls back to actuals for any already-elapsed month with no budget entered).</div>
+            <div class="caption">Real actuals for already-elapsed, already-synced months; this month's and every future month's budget.</div>
           </div>
         </div>
         <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
