@@ -23,29 +23,67 @@ function monthHasBudget(month: number) {
 const editMonth = ref(asOfMonth)
 const viewingAnnualTotal = ref(false)
 
-// Synthesizes a MonthData-shaped object summing each account's budget
-// across all 12 months, so it can stand in for a real month's data and let
-// every existing piece of account-tree machinery below (directChildren,
-// accountDepth, accountsForCategory, categoryComputedTotal, the $0-row
-// filter...) work on the annual total for free, unchanged — none of that
-// logic actually cares which month it's looking at, only at `.accounts`
-// and each account's `.amount`. An account stays `amount: null` only if
-// every month was null (never budgeted at all); otherwise null months
-// contribute $0 to the sum, same as categoryTotals()/yearCategoryTotal()
-// elsewhere already treat them.
+// Real per-account actuals for every already-elapsed past month (1..asOfMonth-1), fetched
+// once on mount — the account-tree mirror of hybridYearTotalsPastActual's category-level
+// actual-for-a-closed-month preference below. Without this, annualMonthData's per-account
+// rows summed pure budget_targets for all 12 months regardless of what actually happened,
+// which is exactly why the Total tab's account rows could show a very different (usually
+// higher, since budgets tend to be optimistic) figure than the Revenue tab's own per-account
+// Total column (yearAccountTotal in revenue.vue, which already substitutes real actuals) —
+// a real user-reported mismatch, not just a display nuance. Mirrors revenue.vue's own
+// loadYearActuals, minus that page's current-month extrapolation (this stays consistent with
+// hybridYearTotalsPastActual's own choice to leave the current month on its plain budget
+// figure, so account rows keep summing to the category header total above).
+const yearActualsByMonth = ref<Record<number, Record<number, number>>>({})
+const yearActualsHasData = ref<Record<number, boolean>>({})
+async function loadYearAccountActuals() {
+  const months = Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
+  if (months.length === 0) return
+  const results = await Promise.all(months.map(month =>
+    $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+      .catch(() => ({ accounts: [] }))
+  ))
+  const byMonth: Record<number, Record<number, number>> = {}
+  const hasData: Record<number, boolean> = {}
+  months.forEach((month, i) => {
+    const map: Record<number, number> = {}
+    for (const a of results[i].accounts) map[a.accountId] = a.amount
+    byMonth[month] = map
+    hasData[month] = results[i].accounts.length > 0
+  })
+  yearActualsByMonth.value = byMonth
+  yearActualsHasData.value = hasData
+}
+onMounted(loadYearAccountActuals)
+
+// Synthesizes a MonthData-shaped object summing each account's amount across all 12
+// months, so it can stand in for a real month's data and let every existing piece of
+// account-tree machinery below (directChildren, accountDepth, accountsForCategory,
+// categoryComputedTotal, the $0-row filter...) work on the annual total for free,
+// unchanged — none of that logic actually cares which month it's looking at, only at
+// `.accounts` and each account's `.amount`. Each past month (1..asOfMonth-1) prefers its
+// real per-account actual when synced (see loadYearAccountActuals above), falling back to
+// that month's budget_targets figure only where nothing's synced yet; the current and every
+// future month always use budget. An account stays `amount: null` only if every month
+// contributed nothing (never budgeted and no synced actual); otherwise a month with no value
+// contributes $0 to the sum, same as categoryTotals()/yearCategoryTotal() elsewhere already
+// treat them.
 const annualMonthData = computed<MonthData | null>(() => {
   const first = monthlyData.value.find(m => m)
   if (!first || monthlyData.value.some(m => !m)) return null
   const totals = new Map<number, number>()
   const everBudgeted = new Set<number>()
-  for (const data of monthlyData.value) {
-    if (!data) continue
+  monthlyData.value.forEach((data, idx) => {
+    if (!data) return
+    const month = idx + 1
+    const actualsForMonth = month < asOfMonth && yearActualsHasData.value[month] ? yearActualsByMonth.value[month] : null
     for (const acc of data.accounts) {
-      if (acc.amount === null) continue
+      const amount = actualsForMonth ? (actualsForMonth[acc.accountId] ?? 0) : acc.amount
+      if (amount === null) continue
       everBudgeted.add(acc.accountId)
-      totals.set(acc.accountId, (totals.get(acc.accountId) ?? 0) + acc.amount)
+      totals.set(acc.accountId, (totals.get(acc.accountId) ?? 0) + amount)
     }
-  }
+  })
   return {
     year: YEAR,
     month: 0,
@@ -231,12 +269,12 @@ function categoryComputedTotal(cat: Category): number {
 // not get quietly replaced by what actually happened). Requested by the
 // user 2026-09-24: a past month's budget inaccuracy shouldn't get carried
 // forward into "what will this year total" once the real number is known.
-// The per-account rows underneath still show the plain budget figure
-// (there's no cheap way to get real per-account actuals for every past
-// month here), so an expanded category's visible line items won't always
-// sum to this number — the note below flags when a remaining month has no
-// budget at all, and the Live Preview card's "X/Y mo of actuals synced"
-// note flags when a past month is still leaning on its budget because
+// The per-account rows underneath now prefer the same real per-account actuals for a past
+// month (see annualMonthData/loadYearAccountActuals above — this stopped being "no cheap way
+// to get real per-account actuals" once the Revenue tab already needed exactly that fetch),
+// so an expanded category's visible line items sum to this number again — the note below
+// flags when a remaining month has no budget at all, and the Live Preview card's "X/Y mo of
+// actuals synced" note flags when a past month is still leaning on its budget because
 // nothing's synced for it yet.
 function yearDisplayCategoryTotal(cat: Category): number {
   return yearDisplayTotals.value[cat]
