@@ -16,6 +16,7 @@ type AreaTrailing = {
   areaId: number, areaName: string, covers: number, revenue: number, nights: number,
   coversPerNight: number | null, perCover: number | null
 }
+type BuyoutWeekday = { dow: number, label: string, short: string, dollarTarget: number | null, rate: number }
 type RevenueModelingData = {
   asOfAreaDate: string | null
   trailingWindow: { start: string, end: string } | null
@@ -26,6 +27,9 @@ type RevenueModelingData = {
   asOfLineItemDate: string | null
   laborVariableShare: number | null
   opexVariableShare: number | null
+  buyoutRates: { weekdayRate: number, weekendRate: number, updatedAt: string | null }
+  buyoutWeekdays: BuyoutWeekday[]
+  buyoutBookedByDow: Record<number, number>
 }
 
 const { data, pending, error, refresh } = await useFetch<RevenueModelingData>('/api/revenue-modeling')
@@ -51,24 +55,87 @@ function getMonthCategoryBudgetLive(month: number, cat: Category): number | null
 }
 const currentAnnual = computed(() => hybridYearTotals(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
 
-// ---- per-area simulation drafts (Covers Δ% / Spend Δ%, both default 0) ----
-// Numbers, not strings — bound via NumberStepper (app/components/
-// NumberStepper.vue, already used the same way on the Labor tab) so each
-// delta gets its own up/down bump arrows rather than relying on cramped
-// native spin-button arrows or plain typing alone.
-type AreaDraft = { areaId: number, areaName: string, coversDeltaPct: number, spendDeltaPct: number }
+// ---- per-area simulation drafts (Covers Δ / Spend Δ, both default 0) ----
+// Whole-number deltas — a whole extra cover/night and a whole extra dollar
+// of per-cover spend, not a percentage — per the user's own request:
+// covers are inherently discrete (no such thing as 45.3 covers/night), and
+// typing a direct $ delta is more concrete than a % that gets multiplied
+// against a varying per-area baseline. Bound via NumberStepper
+// (app/components/NumberStepper.vue, already used the same way on the
+// Labor tab) so each delta gets its own up/down bump arrows rather than
+// relying on cramped native spin-button arrows or plain typing alone.
+type AreaDraft = { areaId: number, areaName: string, coversDelta: number, spendDelta: number }
 const areaDrafts = ref<AreaDraft[]>([])
 watch(() => data.value?.areas, (areas) => {
   if (!areas) return
   // Preserve any in-progress typed deltas across a refresh (e.g. after a
   // sync) by keying off areaId rather than blindly overwriting the array.
   const prior = new Map(areaDrafts.value.map(d => [d.areaId, d]))
-  areaDrafts.value = areas.map(a => prior.get(a.areaId) ?? { areaId: a.areaId, areaName: a.areaName, coversDeltaPct: 0, spendDeltaPct: 0 })
+  areaDrafts.value = areas.map(a => prior.get(a.areaId) ?? { areaId: a.areaId, areaName: a.areaName, coversDelta: 0, spendDelta: 0 })
+}, { immediate: true })
+
+// ---- buyout events (annual count per weekday, default 0) ----
+// A buyout swaps a normal night for a guaranteed minimum — only the
+// difference over what that weekday would have made anyway is new revenue
+// (buyoutIncrementFor below), the same math the Revenue tab's persisted
+// buyout planner uses (server/utils/buyout-rates.ts), just consumed here as
+// a per-weekday annual count instead of one month's count. Deliberately
+// NOT persisted — this is scratch what-if state, reset the same way the
+// per-area covers/spend deltas are, never written to revenue_buyout_plan.
+const buyoutCounts = ref<Record<number, number>>({})
+watch(() => data.value?.buyoutWeekdays, (weekdays) => {
+  if (!weekdays) return
+  const prior = buyoutCounts.value
+  const next: Record<number, number> = {}
+  for (const w of weekdays) next[w.dow] = prior[w.dow] ?? 0
+  buyoutCounts.value = next
 }, { immediate: true })
 
 function resetSimulation() {
-  areaDrafts.value = areaDrafts.value.map(d => ({ ...d, coversDeltaPct: 0, spendDeltaPct: 0 }))
+  areaDrafts.value = areaDrafts.value.map(d => ({ ...d, coversDelta: 0, spendDelta: 0 }))
+  const resetCounts: Record<number, number> = {}
+  for (const dow of Object.keys(buyoutCounts.value)) resetCounts[Number(dow)] = 0
+  buyoutCounts.value = resetCounts
 }
+
+// Incremental revenue from one buyout on this weekday — null when there's
+// not enough real data yet to know what a normal night on this weekday
+// makes (same "not enough data" gate the Revenue tab's grid already uses).
+function buyoutIncrementFor(w: BuyoutWeekday): number | null {
+  return w.dollarTarget != null ? w.rate - w.dollarTarget : null
+}
+// Real counts already booked on the Revenue tab this year (context only —
+// see server/api/revenue-modeling.get.ts's buyoutBookedByDow comment for
+// why this is never added into buyoutAnnualRevenueDelta: it's already
+// baked into currentAnnual.revenue via the Revenue tab's own Apply action).
+function bookedCountFor(dow: number): number {
+  return data.value?.buyoutBookedByDow?.[dow] ?? 0
+}
+function bookedRevenueFor(w: BuyoutWeekday): number {
+  const inc = buyoutIncrementFor(w)
+  return inc != null ? bookedCountFor(w.dow) * inc : 0
+}
+// The stepper is always a pure delta on top of what's already booked, per
+// the user's own instruction — never pre-filled with the booked count —
+// so "Sim." here means "booked + this simulation's additional buyouts."
+function simCountFor(w: BuyoutWeekday): number {
+  return bookedCountFor(w.dow) + (buyoutCounts.value[w.dow] ?? 0)
+}
+function simRevenueFor(w: BuyoutWeekday): number {
+  const inc = buyoutIncrementFor(w)
+  return inc != null ? simCountFor(w) * inc : 0
+}
+const buyoutAnnualRevenueDelta = computed(() => {
+  return (data.value?.buyoutWeekdays ?? []).reduce((sum, w) => {
+    const inc = buyoutIncrementFor(w)
+    const count = buyoutCounts.value[w.dow] ?? 0
+    return sum + (inc != null ? inc * count : 0)
+  }, 0)
+})
+const buyoutBookedRevenueTotal = computed(() => {
+  return (data.value?.buyoutWeekdays ?? []).reduce((sum, w) => sum + bookedRevenueFor(w), 0)
+})
+const buyoutHasAnyCount = computed(() => Object.values(buyoutCounts.value).some(c => c > 0))
 
 // The full dollar-by-dollar breakdown is supplementary detail (the three
 // headline cards above already answer "so what") — collapsed by default so
@@ -94,8 +161,8 @@ const simRows = computed<SimRow[]>(() => {
     const baseCovers = b?.coversPerNight ?? null
     const basePerCover = b?.perCover ?? null
     const baseRevenue = baseCovers != null && basePerCover != null ? baseCovers * basePerCover : null
-    const simCovers = baseCovers != null ? baseCovers * (1 + d.coversDeltaPct / 100) : null
-    const simPerCover = basePerCover != null ? basePerCover * (1 + d.spendDeltaPct / 100) : null
+    const simCovers = baseCovers != null ? baseCovers + d.coversDelta : null
+    const simPerCover = basePerCover != null ? basePerCover + d.spendDelta : null
     const simRevenue = simCovers != null && simPerCover != null ? simCovers * simPerCover : null
     return {
       areaId: d.areaId, areaName: d.areaName,
@@ -139,7 +206,14 @@ const annualImpact = computed(() => {
   if (!canModelAnnualImpact.value) return null
   const nights = data.value!.operatingNightsPerYear
   const revenueDeltaPerNight = totals.value.simNightlyRevenue - totals.value.baseNightlyRevenue
-  const annualRevenueDelta = revenueDeltaPerNight * nights
+  // Buyout revenue is already net of the normal night it displaces (see
+  // buyoutIncrementFor above), so it's safely additive on top of the
+  // per-area covers/spend delta rather than double-counting that night.
+  // It flows through the same COGS%/labor-variable/opex-variable treatment
+  // as any other revenue delta below — consistent with how the Revenue
+  // tab's buyout planner treats it as plain incremental revenue, with no
+  // separate cost model of its own.
+  const annualRevenueDelta = revenueDeltaPerNight * nights + buyoutAnnualRevenueDelta.value
   const coversMultiplier = totals.value.baseCoversPerNight > 0 ? totals.value.simCoversPerNight / totals.value.baseCoversPerNight : 1
 
   const baseRevenue = currentAnnual.value.revenue
@@ -203,6 +277,14 @@ function fmtCoversPerNight(n: number | null | undefined): string {
 }
 function fmtPct(n: number | null | undefined): string {
   return n == null ? '—' : `${(n * 100).toFixed(1)}%`
+}
+// Buyout counts can be fractional (see revenue.vue's buyoutCountInputs
+// comment — a buyout priced off its weekday's standard rate is entered as
+// a fractional multiple, e.g. 1.4645) — round to 2 decimals and trim
+// trailing zeros so a whole count still reads as a plain "1", not "1.00".
+function fmtBuyoutCount(n: number): string {
+  const rounded = Math.round(n * 100) / 100
+  return `${rounded} ${rounded === 1 ? 'buyout' : 'buyouts'}`
 }
 function fmtDeltaMoney(base: number, sim: number): string {
   const d = sim - base
@@ -272,7 +354,10 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
         <section v-else class="rm-section">
           <div class="section-head">
             <div class="section-label">Annual Impact — {{ data!.modelYear }}</div>
-            <div class="section-note">Scaled by {{ fmtCoversPerNight(totals.simCoversPerNight - totals.baseCoversPerNight) }} covers/night ({{ ((annualImpact!.coversMultiplier - 1) * 100).toFixed(1) }}%) &middot; {{ data!.operatingNightsPerYear }} operating nights/year</div>
+            <div class="section-note">
+              Scaled by {{ fmtCoversPerNight(totals.simCoversPerNight - totals.baseCoversPerNight) }} covers/night ({{ ((annualImpact!.coversMultiplier - 1) * 100).toFixed(1) }}%) &middot; {{ data!.operatingNightsPerYear }} operating nights/year
+              <template v-if="buyoutHasAnyCount"> &middot; {{ fmtDeltaMoney(0, buyoutAnnualRevenueDelta) }} from planned buyouts</template>
+            </div>
           </div>
 
           <div class="quick-row">
@@ -395,14 +480,14 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
             <div class="section-label">Trailing 3-Month Averages, By Area</div>
             <div class="section-note">
               <template v-if="data?.trailingWindow">Real Toast covers/revenue, {{ fmtDate(data.trailingWindow.start) }}–{{ fmtDate(data.trailingWindow.end) }}.</template>
-              Type a Δ% to simulate a change.
+              Type a covers or $ delta to simulate a change.
               <button type="button" class="link-btn" @click="resetSimulation">Reset simulation</button>
             </div>
           </div>
 
           <div class="pl-table-card">
             <table class="pl-table sim-table">
-              <caption>Trailing three-month average covers per night and per-cover spend by seating area, with editable simulated percentage changes and the resulting simulated covers, spend, and nightly revenue</caption>
+              <caption>Trailing three-month average covers per night and per-cover spend by seating area, with editable simulated covers and spend deltas and the resulting simulated covers, spend, and nightly revenue</caption>
               <thead>
                 <tr>
                   <th scope="col">Area</th>
@@ -412,8 +497,8 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <th scope="col" class="sim">Sim. Per-Cover $</th>
                   <th scope="col">Nightly Revenue</th>
                   <th scope="col" class="sim">Sim. Nightly Revenue</th>
-                  <th scope="col">Covers Δ%</th>
-                  <th scope="col">Spend Δ%</th>
+                  <th scope="col">Covers Δ</th>
+                  <th scope="col">Spend Δ</th>
                 </tr>
               </thead>
               <tbody>
@@ -425,8 +510,8 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="derived sim">{{ fmtMoney(row.simPerCover) }}</td>
                   <td class="derived">{{ fmtMoneyFull(row.baseNightlyRevenue) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(row.simNightlyRevenue) }}</td>
-                  <td><span class="pct-cell"><NumberStepper v-model="draftFor(row.areaId).coversDeltaPct" :min="null" :step="1" width="50px" />%</span></td>
-                  <td><span class="pct-cell"><NumberStepper v-model="draftFor(row.areaId).spendDeltaPct" :min="null" :step="1" width="50px" />%</span></td>
+                  <td><span class="pct-cell"><NumberStepper v-model="draftFor(row.areaId).coversDelta" :min="null" :step="1" width="50px" /></span></td>
+                  <td><span class="pct-cell">$<NumberStepper v-model="draftFor(row.areaId).spendDelta" :min="null" :step="1" width="50px" /></span></td>
                 </tr>
               </tbody>
               <tfoot>
@@ -443,6 +528,44 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                 </tr>
               </tfoot>
             </table>
+          </div>
+        </section>
+
+        <section class="rm-section">
+          <div class="section-head">
+            <div class="section-label">Buyout Events</div>
+            <div class="section-note">
+              A buyout swaps a normal night for a guaranteed minimum — only the difference over what that weekday normally makes is new revenue. Annual count per weekday.
+              <button type="button" class="link-btn" @click="resetSimulation">Reset simulation</button>
+            </div>
+          </div>
+
+          <div class="buyout-weekday-grid">
+            <div v-for="w in data!.buyoutWeekdays" :key="w.dow" class="buyout-weekday-cell">
+              <span class="buyout-weekday-label">{{ w.short }}</span>
+              <span class="buyout-weekday-target">
+                <template v-if="w.dollarTarget != null">normal ~{{ fmtMoneyFull(w.dollarTarget) }}, rate {{ fmtMoneyFull(w.rate) }}</template>
+                <template v-else>not enough data yet</template>
+              </span>
+              <div class="buyout-compare">
+                <div class="buyout-compare-stat">
+                  <span class="buyout-compare-label">Booked</span>
+                  <span class="derived">{{ fmtMoneyFull(bookedRevenueFor(w)) }}</span>
+                  <span class="buyout-compare-count">{{ fmtBuyoutCount(bookedCountFor(w.dow)) }}</span>
+                </div>
+                <div class="buyout-compare-stat sim">
+                  <span class="buyout-compare-label">Sim.</span>
+                  <span class="derived sim">{{ fmtMoneyFull(simRevenueFor(w)) }}</span>
+                  <span class="buyout-compare-count">{{ fmtBuyoutCount(simCountFor(w)) }}</span>
+                </div>
+              </div>
+              <span class="pct-cell">+<NumberStepper v-model="buyoutCounts[w.dow]" :min="0" :step="1" width="44px" :disabled="w.dollarTarget == null" /></span>
+            </div>
+          </div>
+
+          <div class="section-note">
+            Already booked for {{ data!.modelYear }} (from the <NuxtLink to="/budget/revenue">Revenue tab</NuxtLink>): <strong>{{ fmtMoneyFull(buyoutBookedRevenueTotal) }}</strong>
+            <template v-if="buyoutHasAnyCount"> &middot; plus <strong>{{ fmtDeltaMoney(0, buyoutAnnualRevenueDelta) }}</strong> from this simulation</template>
           </div>
         </section>
 
@@ -561,5 +684,49 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 
 @media (max-width: 900px) {
   .quick-row { grid-template-columns: 1fr; }
+}
+
+/* ---------- buyout events ---------- */
+.buyout-weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+.buyout-weekday-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  box-shadow: var(--card-shadow);
+}
+.buyout-weekday-label { font-size: 12px; font-weight: 700; color: var(--ink); }
+.buyout-weekday-target { font-size: 10px; color: var(--ink-3); text-align: center; }
+
+/* Booked (real, already on the Revenue tab) vs. Sim. (booked + this page's
+   typed delta) — same base/sim visual convention as the per-area table
+   above: plain ink for the real figure, the accent color + var(--surface-alt)
+   shading for the simulated one (.sim-table .derived.sim, reused verbatim). */
+.buyout-compare { display: flex; gap: 4px; width: 100%; }
+.buyout-compare-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 2px;
+  border-radius: 6px;
+}
+.buyout-compare-stat.sim { background: var(--surface-alt); }
+.buyout-compare-label { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--ink-3); }
+.buyout-compare-stat .derived { font-size: 12px; }
+.buyout-compare-count { font-size: 8.5px; color: var(--ink-3); }
+
+@media (max-width: 760px) {
+  .buyout-weekday-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 </style>

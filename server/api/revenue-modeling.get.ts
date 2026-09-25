@@ -25,6 +25,17 @@
 // CLAUDE.md's 2026-09-22 Labor tab fix) — rather than this route deriving
 // its own separate notion of "this year's revenue."
 //
+// Buyout events (added 2026-09-24, after the user asked to model buyouts on
+// this page too — see CLAUDE.md's "Urban Hearth catering buyout budget
+// review" session, which built the Revenue tab's persisted, per-month
+// buyout planner this reuses): the same real buyout_rates and weekday
+// normal-night targets (server/utils/buyout-rates.ts) that back that
+// planner, but consumed here as a per-weekday *annual* count instead of a
+// monthly one, since this whole page already thinks in annualized terms.
+// Unlike the Revenue tab, this page's buyout counts are never persisted —
+// they're scratch what-if state, reset the same way the per-area covers/
+// spend deltas already are, not a real plan written to budget_targets.
+//
 // Fixed vs. variable shares are both computed over the same "since the
 // location move" window nightly-margin.get.ts/weekly-targets.ts already use
 // (NEW_LOCATION_START through asOfDate) — the only stretch of real data at
@@ -155,6 +166,21 @@ export default defineEventHandler(() => {
     if (opexRow.totalOpex) opexVariableShare = (opexRow.variableOpex ?? 0) / opexRow.totalOpex
   }
 
+  // ---- buyout weekday rates/targets (see comment above) ----
+  const buyoutRates = loadBuyoutRates(db)
+  const buyoutWeekdays = buyoutWeekdaysFor(buyoutRates)
+
+  // Real counts already booked on the Revenue tab (revenue_buyout_plan),
+  // summed across every month of modelYear per weekday — these are already
+  // reflected in currentAnnual.revenue client-side (the Revenue tab's Apply
+  // action writes them into real revenue accounts' budget_targets), so
+  // they're shown for context only, never added into the simulation's own
+  // revenue delta. The client's buyout count input stays a pure delta on
+  // top of this — "how many *more* buyouts than what's already booked."
+  const bookedRows = db.prepare('SELECT dow, SUM(count) AS totalCount FROM revenue_buyout_plan WHERE year = ? GROUP BY dow').all(modelYear) as { dow: number, totalCount: number }[]
+  const buyoutBookedByDow: Record<number, number> = {}
+  for (const r of bookedRows) buyoutBookedByDow[r.dow] = r.totalCount
+
   return {
     asOfAreaDate,
     trailingWindow,
@@ -164,6 +190,9 @@ export default defineEventHandler(() => {
     sinceDate,
     asOfLineItemDate,
     laborVariableShare,
-    opexVariableShare
+    opexVariableShare,
+    buyoutRates,
+    buyoutWeekdays,
+    buyoutBookedByDow
   }
 })

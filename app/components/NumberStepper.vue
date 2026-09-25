@@ -11,7 +11,8 @@ const props = withDefaults(defineProps<{
   max?: number | null
   decimals?: number
   width?: string
-}>(), { step: 1, min: 0, max: null, decimals: 0, width: '68px' })
+  disabled?: boolean
+}>(), { step: 1, min: 0, max: null, decimals: 0, width: '68px', disabled: false })
 
 const emit = defineEmits<{ 'update:modelValue': [value: number] }>()
 
@@ -36,15 +37,16 @@ function bump(dir: 1 | -1) {
 </script>
 
 <template>
-  <div class="number-stepper">
+  <div class="number-stepper" :class="{ 'number-stepper-disabled': disabled }">
     <input
       type="number" :step="step" :min="min ?? undefined" :max="max ?? undefined"
       :value="decimals ? modelValue.toFixed(decimals) : modelValue"
+      :disabled="disabled"
       @input="onInput" class="number-stepper-input" :style="{ width }"
     />
     <div class="number-stepper-arrows">
-      <button type="button" tabindex="-1" aria-label="Increase" @click="bump(1)">&#9650;</button>
-      <button type="button" tabindex="-1" aria-label="Decrease" @click="bump(-1)">&#9660;</button>
+      <button type="button" tabindex="-1" aria-label="Increase" :disabled="disabled" @click="bump(1)">&#9650;</button>
+      <button type="button" tabindex="-1" aria-label="Decrease" :disabled="disabled" @click="bump(-1)">&#9660;</button>
     </div>
   </div>
 </template>
@@ -69,4 +71,9 @@ function bump(dir: 1 | -1) {
 .number-stepper-arrows button:first-child { border-radius: 5px 5px 0 0; border-bottom: none; }
 .number-stepper-arrows button:last-child { border-radius: 0 0 5px 5px; }
 .number-stepper-arrows button:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.number-stepper-disabled { opacity: 0.5; }
+.number-stepper-input:disabled { cursor: not-allowed; }
+.number-stepper-arrows button:disabled { cursor: not-allowed; }
+.number-stepper-arrows button:disabled:hover { background: var(--surface-alt); color: var(--ink-3); border-color: var(--hair); }
 </style>

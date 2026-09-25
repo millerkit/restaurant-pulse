@@ -5,9 +5,9 @@
 // whatever this feature last applied to each revenue account's budget —
 // the client needs all four to render the preview and to compute a correct
 // re-apply delta. See schema.sql's revenue_buyout_applied comment for why
-// that last piece exists.
-const DEFAULT_WEEKDAY_RATE = 10000
-const DEFAULT_WEEKEND_RATE = 12000
+// that last piece exists. The rates/weekday-target computation itself lives
+// in server/utils/buyout-rates.ts, shared with revenue-modeling.get.ts's
+// own (unpersisted, annual-count) buyout what-if.
 
 export default defineEventHandler((event) => {
   const query = getQuery(event)
@@ -19,22 +19,8 @@ export default defineEventHandler((event) => {
 
   const db = useDb()
 
-  const ratesRow = db.prepare('SELECT weekday_rate AS weekdayRate, weekend_rate AS weekendRate, updated_at AS updatedAt FROM buyout_rates WHERE id = 1')
-    .get() as { weekdayRate: number, weekendRate: number, updatedAt: string } | undefined
-  const rates = {
-    weekdayRate: ratesRow?.weekdayRate ?? DEFAULT_WEEKDAY_RATE,
-    weekendRate: ratesRow?.weekendRate ?? DEFAULT_WEEKEND_RATE,
-    updatedAt: ratesRow?.updatedAt ?? null
-  }
-
-  const weeklyTargets = computeWeeklyRevenueTargets()
-  const weekdays = weeklyTargets.days.map(d => ({
-    dow: d.dow,
-    label: d.label,
-    short: d.short,
-    dollarTarget: d.dollarTarget,
-    rate: (d.dow === 5 || d.dow === 6 || d.dow === 0) ? rates.weekendRate : rates.weekdayRate
-  }))
+  const rates = loadBuyoutRates(db)
+  const weekdays = buyoutWeekdaysFor(rates)
 
   const countRows = db.prepare('SELECT dow, count FROM revenue_buyout_plan WHERE year = ? AND month = ?').all(year, month) as { dow: number, count: number }[]
   const countByDow: Record<number, number> = {}
