@@ -1671,7 +1671,7 @@ function exportForQuickBooks() {
    page. Same fix already used on the Edit Capacity page's covers table
    (`.covers-table-card`) — see that page's own comment for the same
    confirmed-by-testing finding. */
-.edit-table-scroll { overflow: auto; max-height: 70vh; }
+.edit-table-scroll { overflow: auto; max-height: 85vh; }
 .month-tabs {
   display: flex;
   gap: 2px;
