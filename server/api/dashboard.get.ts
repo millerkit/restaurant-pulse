@@ -78,6 +78,28 @@ export default defineEventHandler((event) => {
     return totals
   }
 
+  // Owner-operator compensation (Executive Chef, Business Manager — see
+  // accounts.is_owner_compensation in schema.sql) actual $, real per-account
+  // data now that the nightly P&L sync populates daily_line_items — this is
+  // the same carve-out the Budget Pace page already shows for the *budget*
+  // side (see its ownerCompNote), just computed from real actuals here since
+  // the Cost Pace meters judge actuals directly, not a budget. Kept as a
+  // separate context line rather than folded into the meter's own pct/status
+  // — the blended figure (including owner comp) is still what's judged
+  // against category_benchmarks, since that's real cash cost against
+  // revenue; excluding it is just additional context for reading the number.
+  function ownerCompLaborForRange(start: string, end: string) {
+    const row = db.prepare(`
+      SELECT SUM(dli.amount) AS total
+      FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+      WHERE a.category = 'labor' AND a.is_owner_compensation = 1 AND dli.date BETWEEN ? AND ?
+    `).get(start, end) as { total: number | null }
+    return row.total ?? 0
+  }
+  const ownerCompAccountNames = (db.prepare(`
+    SELECT name FROM accounts WHERE category = 'labor' AND is_owner_compensation = 1 ORDER BY name
+  `).all() as { name: string }[]).map(r => r.name)
+
   // Full-period budget (whole month, or every month of the year that has
   // one) — proration against elapsed time happens client-side, matching
   // how the Budget Pace page already treats budget_targets.
@@ -316,7 +338,9 @@ export default defineEventHandler((event) => {
     },
     month: {
       actuals: categoryTotalsForRange(monthStart, asOfDate),
-      budget: budgetTotalsForMonths(asOfYear, [asOfMonth])
+      budget: budgetTotalsForMonths(asOfYear, [asOfMonth]),
+      ownerCompLabor: ownerCompLaborForRange(monthStart, asOfDate),
+      ownerCompAccountNames
     },
     yearToDate: {
       actuals: categoryTotalsForRange(yearStart, asOfDate),

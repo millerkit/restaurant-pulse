@@ -189,6 +189,23 @@ const COST_METERS = [
   { key: 'labor', label: 'Labor', benchmarkKey: 'labor', scaleMax: 40 },
   { key: 'prime', label: 'Prime Cost', hint: 'COGS + labor', benchmarkKey: 'prime_cost', scaleMax: 80 }
 ] as const
+// Owner-operator compensation (Executive Chef, Business Manager) is real
+// cash cost, so the Labor meter's judged figure still includes it — but a
+// hired-staff/industry benchmark was never built assuming the owners draw a
+// salary, so a second, unjudged line shows labor % with it backed out too,
+// same "show both ways rather than picking one silently" pattern the Budget
+// Pace page already uses for its own owner-comp carve-out.
+const laborExOwnerComp = computed(() => {
+  const revenue = data.value?.month.actuals.revenue
+  const ownerComp = data.value?.month.ownerCompLabor
+  if (!data.value || !revenue || !ownerComp) return null
+  const { labor } = data.value.month.actuals
+  return {
+    ownerComp,
+    pct: ((labor - ownerComp) / revenue) * 100,
+    names: data.value.month.ownerCompAccountNames
+  }
+})
 const costPaceMeters = computed(() => {
   const revenue = data.value?.month.actuals.revenue
   if (!data.value || !revenue) return []
@@ -308,6 +325,10 @@ function meterStatusLabel(status: string | null) {
           </div>
         </div>
         <div v-else class="quiet-note">No revenue recorded this month yet.</div>
+        <div v-if="laborExOwnerComp" class="section-note">
+          Labor includes ${{ Math.round(laborExOwnerComp.ownerComp).toLocaleString() }} owner compensation ({{ laborExOwnerComp.names.join(', ') }}).
+          Excluding it: {{ laborExOwnerComp.pct.toFixed(1) }}% of revenue.
+        </div>
       </section>
 
       <!-- Are we on target to meet budget? -->
