@@ -25,15 +25,17 @@ const viewingAnnualTotal = ref(false)
 
 // Real per-account actuals for every already-elapsed past month (1..asOfMonth-1), fetched
 // once on mount — the account-tree mirror of hybridYearTotalsPastActual's category-level
-// actual-for-a-closed-month preference below. Without this, annualMonthData's per-account
-// rows summed pure budget_targets for all 12 months regardless of what actually happened,
-// which is exactly why the Total tab's account rows could show a very different (usually
-// higher, since budgets tend to be optimistic) figure than the Revenue tab's own per-account
-// Total column (yearAccountTotal in revenue.vue, which already substitutes real actuals) —
-// a real user-reported mismatch, not just a display nuance. Mirrors revenue.vue's own
-// loadYearActuals, minus that page's current-month extrapolation (this stays consistent with
-// hybridYearTotalsPastActual's own choice to leave the current month on its plain budget
-// figure, so account rows keep summing to the category header total above).
+// actual-for-a-closed-month preference (yearDisplayTotals below), which this file's own Total
+// tab category headers and Cash Flow's Year-End Projection both already rely on. Without this,
+// annualMonthData's per-account rows summed pure budget_targets for all 12 months regardless
+// of what actually happened, which is exactly why the Total tab's account rows could show a
+// very different (usually higher, since budgets tend to be optimistic) figure than the Revenue
+// tab's own per-account Total column (yearAccountTotal in revenue.vue, which already
+// substitutes real actuals) — a real user-reported mismatch, not just a display nuance.
+// Deliberately stops at asOfMonth-1, matching hybridYearTotalsPastActual's own choice to leave
+// the current month on its plain budget figure for every category, revenue included — see
+// annualMonthData's own comment below for why the current month still isn't a perfect match
+// with revenue.vue's Total column, and why that's being left alone here rather than widened.
 const yearActualsByMonth = ref<Record<number, Record<number, number>>>({})
 const yearActualsHasData = ref<Record<number, boolean>>({})
 async function loadYearAccountActuals() {
@@ -56,18 +58,32 @@ async function loadYearAccountActuals() {
 }
 onMounted(loadYearAccountActuals)
 
-// Synthesizes a MonthData-shaped object summing each account's amount across all 12
-// months, so it can stand in for a real month's data and let every existing piece of
-// account-tree machinery below (directChildren, accountDepth, accountsForCategory,
-// categoryComputedTotal, the $0-row filter...) work on the annual total for free,
-// unchanged — none of that logic actually cares which month it's looking at, only at
-// `.accounts` and each account's `.amount`. Each past month (1..asOfMonth-1) prefers its
-// real per-account actual when synced (see loadYearAccountActuals above), falling back to
-// that month's budget_targets figure only where nothing's synced yet; the current and every
-// future month always use budget. An account stays `amount: null` only if every month
+// Synthesizes a MonthData-shaped object summing each account's amount across all 12 months, so
+// it can stand in for a real month's data and let every existing piece of account-tree
+// machinery below (directChildren, accountDepth, accountsForCategory, categoryComputedTotal,
+// the $0-row filter...) work on the annual total for free, unchanged — none of that logic
+// actually cares which month it's looking at, only at `.accounts` and each account's `.amount`.
+// Each already-closed past month (1..asOfMonth-1) prefers its real per-account actual when
+// synced (see loadYearAccountActuals above), falling back to that month's budget_targets figure
+// only where nothing's synced yet; the current and every future month always use budget — this
+// is what keeps an expanded category's line items summing to yearDisplayCategoryTotal below
+// (hybridYearTotalsPastActual, which makes the identical past-actual/current-and-future-budget
+// choice at the category level). An account stays `amount: null` only if every month
 // contributed nothing (never budgeted and no synced actual); otherwise a month with no value
 // contributes $0 to the sum, same as categoryTotals()/yearCategoryTotal() elsewhere already
 // treat them.
+//
+// Known remaining gap vs. the Revenue tab's own Total column (yearAccountTotal in
+// revenue.vue): that page also projects the *current* month from its actual-to-date for core
+// dine-in revenue accounts (and floors non-core ones at their actual), rather than leaving it
+// on plain budget the way this file and hybridYearTotalsPastActual both do. Matching that here
+// was tried and reverted 2026-09-25 — it closed the gap against revenue.vue but reopened a
+// worse one against this file's own category header, since hybridYearTotalsPastActual (shared
+// with Cash Flow's Year-End Projection) would still need widening too to stay consistent, a
+// larger, cross-page change not made without the user's own sign-off. The remaining gap is
+// bounded to whatever the current month's actual-to-date and its budget disagree on — small
+// next to the many-month gap this fix already closes, and shrinks to zero once the month
+// closes and its real actual is known.
 const annualMonthData = computed<MonthData | null>(() => {
   const first = monthlyData.value.find(m => m)
   if (!first || monthlyData.value.some(m => !m)) return null
