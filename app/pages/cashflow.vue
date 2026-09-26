@@ -7,7 +7,7 @@ useHead({ title: `${site.restaurantName} — Cash Flow` })
 type Payment = { loanKey: string, lender: string, date: string, type: 'catch_up' | 'regular', interest: number, principal: number, total: number }
 type PeriodFigures = {
   debtService: { principal: number, interest: number, catchUpInterest: number, totalCashOut: number, payments: Payment[] }
-  freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
+  freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, preOpeningNonCashAddBack: number, nonCashAdjustments: { label: string, amount: number }[], reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
 type ReserveTransfer = { date: string, amount: number, note: string | null }
 type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
@@ -165,12 +165,16 @@ async function submitPlan() {
         <div class="fcf-breakdown">
           <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
+          <div v-for="adj in data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0)" :key="adj.label" class="fcf-row"><span>+ {{ adj.label }} (non-cash add-back)</span><span>{{ fmt(adj.amount) }}</span></div>
           <div class="fcf-row"><span>− SBA principal payments (paid directly from operating cash)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
           <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
           <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
         </div>
         <div class="section-note">
           The other 9 loans' principal ({{ fmt(data.thisYear.freeCashFlow.reserveFundedPrincipal) }}) and catch-up interest ({{ fmt(data.thisYear.freeCashFlow.reserveFundedCatchUpInterest) }}) are paid out of the loan reserve account, not directly from operating cash — already covered by the reserve transfers above, so they aren't subtracted a second time.
+        </div>
+        <div v-if="data.thisYear.freeCashFlow.preOpeningNonCashAddBack !== 0" class="section-note">
+          Includes a total {{ fmt(data.thisYear.freeCashFlow.preOpeningNonCashAddBack) }} add-back for pre-opening reclassification/catch-up entries booked well after the fact ({{ data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0).map(a => `${a.label}: ${fmt(a.amount)}`).join('; ') }}) — real P&amp;L expenses, but not current-period cash: that spending was already paid out of loan proceeds before the restaurant opened at its current location, well before this reserve-tracking period began, so it's excluded here to avoid counting the same cash outflow twice.
         </div>
       </section>
 

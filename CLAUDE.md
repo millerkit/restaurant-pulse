@@ -3520,6 +3520,135 @@ above the usual fully-loaded shortfall callout names these nights by date
 explicitly, and the per-day hover tooltip adds an explicit warning line
 when it applies.
 
+## Pre-opening rent reclass excluded from Free Cash Flow — 2026-09-26
+
+The user explained a real September 2026 QBO entry: a $60,000 "Pre-opening
+Rent Payments" asset was reclassified to expense (debit 6505 Pre-opening
+Rent Expense, credit the asset account) — a non-cash journal entry, no cash
+moved. This is a real, GAAP-correct new expense on the P&L, but the rent it
+represents was actually paid back when the loans were drawn, using loan
+proceeds, not out of ongoing operating cash — so letting it reduce Net
+Income inside the Cash Flow tab's reserve-building metrics would
+double-penalize that one historical cash outflow: once for real, when it
+left as part of the loan draw, and again here if left inside Net Income
+unadjusted.
+
+Investigated before changing anything, per this file's own standing
+discipline: confirmed the real account live against production (`fly ssh
+console`, same disposable-script pattern used throughout this file) — id
+232, account_number `6505`, category `opex`/`Occupancy Costs`,
+`cost_behavior='fixed'` — and found it had no `daily_line_items` rows
+posted yet as of this writing, despite the nightly sync being current
+through 2026-09-25. So the entry evidently hadn't been booked in QBO at the
+time of this session; the fix is built to apply automatically once it
+posts, not backfilled by hand.
+
+- **Scoped to exactly one place**: `reserveProgress()`
+  (`server/api/cashflow.get.ts`) is untouched — it's driven entirely by
+  real `reserve_transfers` bank-transfer rows, never by Net Income, so it
+  was never at risk from this entry. The Year-End Projection section's
+  client-side `projectedNetIncomeForYear` (`app/pages/cashflow.vue`) was
+  also confirmed unaffected: `hybridYearTotalsPastActual` always uses that
+  month's *budget*, not actual, for the current in-progress month (see
+  `useBudgetData.ts`), and this unbudgeted one-time reclass has no budget
+  line — so it only reaches `actualsFor()`'s year-to-date actual query
+  inside `freeCashFlow()`, the one spot in this file where Free Cash Flow
+  is actually derived from real, already-posted Net Income.
+- **Fixed** with a `PRE_OPENING_NONCASH_ADJUSTMENTS` list (generalized the
+  same session — see below), matched by `account_number` (not id), per this
+  file's own cross-environment discipline. `actualsFor()` returns
+  `preOpeningNonCashAddBack` (the real posted amount, summed across the
+  list, for the requested range — not a hardcoded dollar figure, so it
+  stays correct as the real posted amount comes in), and `freeCashFlow()`'s
+  formula adds it back: `netIncome + depreciation +
+  preOpeningNonCashAddBack − SBA principal − reserve transfers`.
+- **Left inside Net Income everywhere else in the app, on purpose** — the
+  Budget Pace/P&L/Edit Budget pages should keep showing the real,
+  GAAP-correct $60,000 hit; only this page's cash-flow-specific derived
+  metric excludes it.
+- **Shown transparently, not silently folded in** — `app/pages/cashflow.vue`'s
+  Free Cash Flow breakdown gets a new `+ {label} (non-cash add-back)` line
+  per adjustment (only rendered once nonzero, i.e. once the real entry has
+  actually synced), plus a note explaining why, matching this file's
+  established "show the real number and explain it" pattern (e.g. the
+  Depreciation add-back row, or the P&L-vs-schedule loan interest
+  side-by-side).
+- **A real sync gap discovered while investigating why the entry hadn't
+  shown up an hour after the user created it in QBO**: `runNightlySync()`
+  only ever moves forward from whatever's already in `daily_line_items`,
+  plus a 30-day floor behind yesterday (see `qbo-sync-runner.ts`'s
+  `MIN_QBO_LOOKBACK_DAYS`) — it never rescans further back into
+  already-synced history. This JE was dated 2026-06-20 (the location-move
+  day, ~98 days before this session), so no amount of clicking "Sync now"
+  would ever reach it. Not a bug in that sync logic (its whole design is a
+  forward-moving catch-up, not a general rescan), but a real operational
+  gotcha worth remembering: **a backdated JE into an already-synced
+  historical date needs a manual, targeted re-sync** —
+  `scripts/backfill-qbo-pl.mjs --since=<date> --until=<date>
+  --accounts=<qboAccountId>` via `fly ssh console`, same targeted-account
+  pattern already used elsewhere in this file (see the net income mismatch
+  investigation above) — not the regular nightly/manual sync path. Applied
+  here to re-sync account 6505 for 2026-06-20, confirmed via direct query
+  before trusting the fix.
+- **Verified end-to-end against real production data**, not just local dev:
+  after the targeted re-sync above and deploying this fix, `/api/cashflow`
+  and the live `/cashflow` page both correctly showed the $60,000 add-back
+  and the corrected Free Cash Flow figure.
+
+## Pre-opening insurance catch-up and serviceware reclass — 2026-09-26
+
+Same day, two more real entries the user flagged for the same treatment —
+generalized the single hardcoded rent-reclass field above into a
+`PRE_OPENING_NONCASH_ADJUSTMENTS` list
+(`server/api/cashflow.get.ts`), each entry an `{ accountNumber, label,
+fromDate?, throughDate? }`. The two new entries needed real judgment calls,
+not just a copy-paste of the rent reclass:
+
+- **Insurance catch-up (account 6752, "Business insurance")**: a SaasAnt
+  import recognizing 2026's annual prepaid insurance policy month by month
+  (Feb–Sep JEs, $24,661.50 total), catching up entries the user had
+  neglected to create as they came due. The user explicitly scoped this
+  themselves: only the **January–May** coverage (the pre-opening months, at
+  the old location) should be treated as loan-financed; June onward is real
+  ongoing operating expense at the new location and must stay inside Net
+  Income/Free Cash Flow unadjusted. Unlike the dedicated rent-reclass
+  account, 6752 also carries other real, ongoing insurance premium activity
+  in the same window (confirmed live: e.g. a small charge alongside each
+  catch-up entry) — a blanket account-wide add-back would have been
+  imprecise but was judged acceptable given `daily_line_items`' daily-rollup
+  grain (no per-transaction detail to separate them further). Scoped with
+  `fromDate: '2026-01-01', throughDate: '2026-05-31'`. Real add-back:
+  $13,724.84 (Feb+Jan combined $5,480.33, plus March/April/May at
+  ~$2,748.17 each, including the small co-mingled charge).
+- **Serviceware reclass (account 6785, "Serviceware (Durable)")**: a
+  $15,732.50 "Preopening Smallwares" asset reclassified to expense
+  (plates/bowls/misc. FOH serviceware bought before opening), same
+  mechanism as the rent reclass. **Checked live before assuming the same
+  no-date-window treatment as rent would be safe — and it wasn't**: 6785 is
+  an ordinary variable-opex account with real, substantial *ongoing*
+  restocking purchases continuing well past opening (confirmed against
+  production: e.g. $3,709.34 on Jul 27, $2,204.43 on Jul 18 — thousands of
+  dollars/month through at least August 2026). A blanket account-wide
+  add-back here would have wrongly excluded real current operating cash
+  spend on new serviceware for the larger space, the opposite of what this
+  feature is for. Scoped to the JE's own single date,
+  `fromDate`/`throughDate` both `'2026-06-20'` — the tightest window
+  `daily_line_items`' daily grain allows, same imprecision trade-off as the
+  insurance entry (a small amount of that day's ordinary spend, $68.90,
+  gets folded in too).
+- **Same sync gap as the rent reclass, for both entries** — both JEs
+  (dated Feb–Sep 2026 for insurance, 2026-06-20 for serviceware) had
+  already been created in QBO but hadn't synced, for the identical
+  forward-only-sync reason documented above. Fixed with the same targeted
+  `scripts/backfill-qbo-pl.mjs --accounts=<id>` re-syncs (account 93 for
+  insurance across Jan–Sep; account 196 for serviceware on just 06-20),
+  confirmed via direct query before trusting each fix.
+- **Verified end-to-end against real production data**: after both
+  targeted re-syncs and deploying, `/api/cashflow`'s `nonCashAdjustments`
+  array and the live `/cashflow` page both showed all three entries
+  correctly (rent $60,000 + insurance $13,724.84 + serviceware $15,801.40 =
+  $89,526.24 total add-back), with the section note listing each by name.
+
 ## Not yet done
 
 - Running the production Toast covers backfill (`npm run db:backfill-toast`

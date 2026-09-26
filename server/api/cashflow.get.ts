@@ -12,6 +12,74 @@
 type LoanRow = { loan_key: string, lender: string, payment_date: string, payment_type: 'catch_up' | 'regular', interest: number, principal: number, total_payment: number }
 type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null }
 
+// Pre-opening, non-cash reclassification/catch-up entries — real P&L
+// expenses recognized well after the fact, for costs originally paid using
+// loan proceeds before this restaurant opened at its current (Cambridge
+// St) location. Left inside Net Income everywhere else in the app (each is
+// a real, GAAP-correct expense — the Budget/P&L tabs should keep showing
+// it), but added back specifically here for Free Cash Flow /
+// reserve-building purposes, so a historical cash outflow that already
+// happened — via a loan draw, well before this reserve-tracking period
+// began — doesn't get counted against the reserve a second time. Matched
+// by account_number, not id, per this file's own cross-environment
+// discipline (see CLAUDE.md's "never key a script touching accounts... on
+// raw id" rule). An optional [fromDate, throughDate] window (inclusive)
+// scopes the add-back to only the pre-opening-period activity on that
+// account — needed because an account can carry both a one-time pre-opening
+// catch-up AND real, ongoing operating activity outside that window (e.g.
+// the insurance account below), where a blanket account-wide add-back would
+// wrongly exclude real current expense too.
+const PRE_OPENING_NONCASH_ADJUSTMENTS: { accountNumber: string, label: string, fromDate?: string, throughDate?: string }[] = [
+  {
+    // 2026-09: a $60,000 "Pre-opening Rent Payments" asset reclassified to
+    // expense (debit 6505 Pre-opening Rent Expense, credit the asset
+    // account) — see CLAUDE.md's "Pre-opening rent reclass excluded from
+    // Free Cash Flow" section. A dedicated account created solely for this
+    // one-time entry, so no date window is needed.
+    accountNumber: '6505',
+    label: 'Pre-opening rent reclass'
+  },
+  {
+    // 2026-09: a SaasAnt journal-entry import recognizing 2026's annual
+    // prepaid insurance policy month by month, catching up entries the user
+    // had neglected to create as they came due. Only the Jan–May coverage
+    // (the pre-opening months, before the location move) is treated as
+    // loan-financed, per the user's own scoping (2026-09-26) — June onward
+    // is real ongoing operating expense at the new location and stays
+    // inside Net Income/Free Cash Flow unadjusted. account_number 6752
+    // ("Business insurance") also carries other real, unrelated insurance
+    // activity in this window (a small recurring charge alongside each
+    // catch-up entry) — folded into the add-back rather than singled out,
+    // since it's real spend within the same pre-opening period covered by
+    // the same reasoning, not something to carve out further.
+    accountNumber: '6752',
+    label: 'Pre-opening insurance catch-up (Jan–May)',
+    fromDate: '2026-01-01',
+    throughDate: '2026-05-31'
+  },
+  {
+    // 2026-09: a $15,732.50 "Preopening Smallwares" asset reclassified to
+    // expense (debit 6785 FOH Equipment:Serviceware (Durable), credit the
+    // asset account) — plates/bowls/misc. serviceware bought before opening,
+    // same reasoning as the rent reclass above. Unlike that dedicated
+    // account, 6785 ("Serviceware (Durable)") is an ordinary variable-opex
+    // account with real, substantial ongoing restocking purchases that
+    // continue well past opening (confirmed against production: thousands
+    // of dollars/month through at least August 2026) — a blanket
+    // account-wide add-back would wrongly exclude that real current
+    // spending. Scoped to the JE's own single date (2026-06-20, the
+    // location-move day) rather than a wider window, same precision as the
+    // day itself; a small amount of that day's real ordinary spend gets
+    // folded in too (same acceptable imprecision as the insurance
+    // catch-up's co-mingled charge above), since daily_line_items has no
+    // finer, per-transaction grain to separate them.
+    accountNumber: '6785',
+    label: 'Pre-opening serviceware reclass',
+    fromDate: '2026-06-20',
+    throughDate: '2026-06-20'
+  }
+]
+
 // Next Monday on/after asOfIso (asOfIso itself if it's already a Monday) —
 // used to project a completion date from the current pace, since real
 // transfers land on Mondays (see CLAUDE.md's reserve_transfers note).
@@ -216,7 +284,27 @@ export default defineEventHandler((event) => {
     `).get(startIso, endIso) as { total: number | null }
     const actualLoanInterest = interestRow.total ?? 0
 
-    return { hasData, netIncome, depreciation, actualLoanInterest, totals }
+    // Each adjustment's own window intersected with the requested range —
+    // e.g. requesting a range that starts after an adjustment's throughDate
+    // (or ends before its fromDate) correctly contributes $0 rather than
+    // querying an inverted date range.
+    const nonCashAdjustments = PRE_OPENING_NONCASH_ADJUSTMENTS.map(adj => {
+      const rangeStart = adj.fromDate && adj.fromDate > startIso ? adj.fromDate : startIso
+      const rangeEnd = adj.throughDate && adj.throughDate < endIso ? adj.throughDate : endIso
+      let amount = 0
+      if (rangeStart <= rangeEnd) {
+        const row = db.prepare(`
+          SELECT SUM(dli.amount) AS total
+          FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+          WHERE a.account_number = ? AND dli.date BETWEEN ? AND ?
+        `).get(adj.accountNumber, rangeStart, rangeEnd) as { total: number | null }
+        amount = row.total ?? 0
+      }
+      return { label: adj.label, amount }
+    })
+    const preOpeningNonCashAddBack = nonCashAdjustments.reduce((s, a) => s + a.amount, 0)
+
+    return { hasData, netIncome, depreciation, actualLoanInterest, preOpeningNonCashAddBack, nonCashAdjustments, totals }
   }
 
   // Only SBA's debt service is paid directly from operating cash — every
@@ -239,7 +327,7 @@ export default defineEventHandler((event) => {
     const reserveTransfers = reserveTransferredInRange(startIso, endIso)
     const direct = summarizeDebtService(rows.filter(r => r.loan_key === 'sba'))
     const reserveFunded = summarizeDebtService(rows.filter(r => r.loan_key !== 'sba'))
-    const freeCashFlow = actuals.netIncome + actuals.depreciation - direct.principal - direct.catchUpInterest - reserveTransfers
+    const freeCashFlow = actuals.netIncome + actuals.depreciation + actuals.preOpeningNonCashAddBack - direct.principal - direct.catchUpInterest - reserveTransfers
     return {
       ...actuals,
       reserveTransfers,
