@@ -3649,8 +3649,93 @@ not just a copy-paste of the rent reclass:
   correctly (rent $60,000 + insurance $13,724.84 + serviceware $15,801.40 =
   $89,526.24 total add-back), with the section note listing each by name.
 
+## Debt Service Coverage Ratio covenant tracking — 2026-09-26
+
+Prompted by the user needing to send a P&L/balance sheet to Eastern Bank for
+a periodic review and asking whether the recent pre-opening reclass entries
+(above) could cause a problem. Investigated by reading Eastern Bank's real
+closing documents (`Eastern Bank SBA - Turing Tavern Purchase Closing
+Agenda 12-12-2025.pdf`, not checked into this repo) rather than guessing at
+loan terms — the Loan Agreement's Covenants section (§5.24, matching the
+original commitment letter word for word):
+
+> 1.25x Minimum Debt Service Coverage, tested annually, beginning Fiscal
+> Year End 2026, measured as Earnings Before Interest, Depreciation, and
+> Amortization (EBITDA) divided by the sum of all annual principal and
+> interest payments.
+
+Two real findings from reading the actual document, not just the user's
+paraphrase:
+- **The "quarterly review" the user assumed doesn't exist in this
+  document.** §5.23's actual reporting requirement is annual, due April
+  30th (Business Tax Returns + Erin Miller's Personal Financial Statement)
+  — the periodic request driving this conversation is either informal
+  relationship monitoring or the section's own catch-all ("such other
+  information... as the Bank may request from time to time"), not a
+  documented quarterly covenant deadline.
+- **EBITDA's own definition doesn't add back the three pre-opening reclass
+  entries.** It only adds back Interest/Depreciation/Amortization — not
+  rent, insurance, or serviceware expense. So unlike this app's internal
+  Free Cash Flow metric (which already excludes all three as a judgment
+  call), a standard bank-computed EBITDA off the raw P&L will show the full
+  $89,526.24 hit, landing right in the covenant's first-ever test year.
+
+Built as a new **Debt Service Coverage Ratio (Eastern Bank Covenant)**
+section on the Cash Flow tab
+([`app/pages/cashflow.vue`](app/pages/cashflow.vue), data from a new
+`covenant` object in
+[`server/api/cashflow.get.ts`](server/api/cashflow.get.ts)) — informational
+tracking only, not a live compliance check, since the real test doesn't
+happen until FY2026 actual year-end financials are in.
+
+- **Two real ambiguities the loan documents don't resolve, both shown to
+  the user rather than silently assumed**: (1) whether "the sum of all
+  annual principal and interest payments" means just the $500K Eastern Bank
+  SBA loan or all 10 loans including the 9 subordinated investor notes —
+  **built against all 10** (`fullYearAllLoans = summarizeDebtService(fullYearRows)`,
+  unfiltered by `loan_key`), the more conservative reading, per the user's
+  own explicit choice; (2) whether Eastern Bank will actually accept the
+  pre-opening reclasses as non-recurring add-backs — so **both a raw and a
+  reclass-adjusted ratio are shown side by side** (two hero cards, each
+  with its own pass/fail chip against the 1.25x floor), never picked for
+  the user.
+- **Projected EBITDA = this year's already-established Net Income
+  projection** (`projectedNetIncomeForYear`, the same actual-for-elapsed-
+  months + budget-for-the-rest figure the Year-End Projection section above
+  already computes) **+ Interest, sourced from the loan amortization
+  schedule for these 10 loans specifically (not account 7020's real
+  postings)** — deliberately, so the interest add-back and the debt-service
+  denominator can't drift apart by coming from two different sources (7020
+  is already documented elsewhere in this file as carrying interest from
+  debt outside these 10 loans) **+ budgeted Depreciation for the year**
+  (`budgetedDepreciationForYear`, already computed server-side for the
+  existing "profit needed to cover the loans" figure).
+- **A real gap surfaced while building this, not previously flagged**:
+  Depreciation is showing **$0** both YTD and budgeted for the full year —
+  unusual for a restaurant with real leasehold improvements/equipment, and
+  a real EBITDA add-back the covenant explicitly allows. Flagged to the
+  user directly rather than silently treated as correct; worth confirming
+  with the accountant whether depreciation is actually being posted to QBO
+  before relying on this ratio for a real conversation with the bank.
+- **Verified end-to-end against real production data**: raw DSCR came back
+  1.53x (meets the 1.25x floor even before any reclass adjustment), and the
+  reclass-adjusted figure came back 2.23x — both rendered correctly with
+  their own pass/fail chips on the live `/cashflow` page, and the EBITDA
+  breakdown reconciled by hand against `/api/cashflow`'s raw JSON
+  (`covenant.annualDebtService.total` = $128,439.96; `covenant.ytd.ebitda`
+  = −$66,299.73 YTD, before the full-year budget projection).
+
 ## Not yet done
 
+- Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
+  "all annual principal and interest payments" counts only the SBA loan or
+  all 10 loans (built against all 10 — see the DSCR covenant tracking
+  section above), (b) whether "EBITA" in the loan documents is a typo for
+  EBITDA, and (c) whether the pre-opening reclass entries will be accepted
+  as non-recurring add-backs. Also confirming with the accountant whether
+  Depreciation is actually being posted to QBO — it's showing $0 YTD and
+  budgeted, which understates the real EBITDA add-back if leasehold
+  improvements/equipment exist but aren't being depreciated.
 - Running the production Toast covers backfill (`npm run db:backfill-toast`
   extended further back, via `fly ssh console`) so the Historical page's
   two indexes show a real multi-year comparison in production the way

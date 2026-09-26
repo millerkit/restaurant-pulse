@@ -11,10 +11,19 @@ type PeriodFigures = {
 }
 type ReserveTransfer = { date: string, amount: number, note: string | null }
 type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
+type Covenant = {
+  minimumRatio: number
+  testYear: number
+  debtScopeAssumption: string
+  annualDebtService: { principal: number, interest: number, catchUpInterest: number, total: number }
+  ytd: { netIncome: number, interest: number, depreciation: number, preOpeningNonCashAddBack: number, ebitda: number }
+  fullYearProjectionInputs: { scheduledInterestForYear: number, budgetedDepreciationForYear: number }
+}
 type CashFlowResponse = {
   year: number
   thisYear: PeriodFigures
   yearProjection: YearProjection
+  covenant: Covenant
   reserve: {
     target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
     catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
@@ -60,6 +69,44 @@ const projectedFreeCashFlowForYear = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
   return projectedNetIncomeForYear.value - data.value.yearProjection.breakevenNetIncome
 })
+
+// ---- Eastern Bank DSCR covenant (informational only) -------------------
+// EBITDA = projected full-year Net Income (the same actual-for-elapsed-
+// months + budget-for-the-rest projection used above) + the loan
+// amortization schedule's own full-year interest for these 10 loans (not
+// account 7020's real postings, which may include interest from debt
+// outside this brief's scope) + budgeted Depreciation for the year. See
+// server/api/cashflow.get.ts's covenant.fullYearProjectionInputs comment
+// for why interest comes from the schedule rather than actuals here.
+const projectedEbitdaForYear = computed<number | null>(() => {
+  if (projectedNetIncomeForYear.value === null || !data.value) return null
+  const { scheduledInterestForYear, budgetedDepreciationForYear } = data.value.covenant.fullYearProjectionInputs
+  return projectedNetIncomeForYear.value + scheduledInterestForYear + budgetedDepreciationForYear
+})
+// "Adjusted" adds back the pre-opening reclass entries too, on the
+// assumption they're fully recognized already (all landed within Jan–Sep)
+// and Eastern Bank accepts them as one-time, non-recurring add-backs —
+// which EBITDA's own definition (Interest/Depreciation/Amortization only)
+// does not do automatically. Shown side by side with the raw ratio rather
+// than picked for the user, since whether the bank will actually accept
+// this is a real open question, not something this app can decide.
+const projectedEbitdaForYearAdjusted = computed<number | null>(() => {
+  if (projectedEbitdaForYear.value === null || !data.value) return null
+  return projectedEbitdaForYear.value + data.value.covenant.ytd.preOpeningNonCashAddBack
+})
+const dscrRaw = computed<number | null>(() => {
+  if (projectedEbitdaForYear.value === null || !data.value) return null
+  const denom = data.value.covenant.annualDebtService.total
+  return denom > 0 ? projectedEbitdaForYear.value / denom : null
+})
+const dscrAdjusted = computed<number | null>(() => {
+  if (projectedEbitdaForYearAdjusted.value === null || !data.value) return null
+  const denom = data.value.covenant.annualDebtService.total
+  return denom > 0 ? projectedEbitdaForYearAdjusted.value / denom : null
+})
+function fmtRatio(n: number) {
+  return `${n.toFixed(2)}x`
+}
 
 function fmt(n: number) {
   return `${n < 0 ? '−' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
@@ -208,6 +255,55 @@ async function submitPlan() {
         </div>
         <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
           Projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
+        </div>
+      </section>
+
+      <!-- Eastern Bank's Debt Service Coverage Ratio covenant (Loan
+           Agreement §5.24) — informational tracking only, not a live
+           covenant test. First tested at FY{{ data.covenant.testYear }}
+           year-end, not quarterly, despite Eastern Bank's periodic
+           financial requests. -->
+      <section v-if="data.covenant">
+        <div class="section-head">
+          <div class="section-label">Debt Service Coverage Ratio (Eastern Bank Covenant)</div>
+          <div class="section-note">{{ data.covenant.minimumRatio.toFixed(2) }}x minimum, first tested at FY{{ data.covenant.testYear }} year-end</div>
+        </div>
+        <div class="hero-row two-up">
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">Projected FY{{ data.covenant.testYear }} DSCR</span>
+              <span v-if="dscrRaw !== null" :class="['chip', dscrRaw >= data.covenant.minimumRatio ? 'good' : 'critical']">
+                {{ dscrRaw >= data.covenant.minimumRatio ? 'Meets covenant' : 'Below covenant' }}
+              </span>
+            </div>
+            <div class="figure">{{ dscrRaw !== null ? fmtRatio(dscrRaw) : '—' }}</div>
+            <div class="caption">EBITDA ÷ annual principal + interest, as reported — no adjustment for the pre-opening reclass entries.</div>
+          </div>
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">If reclasses count as one-time add-backs</span>
+              <span v-if="dscrAdjusted !== null" :class="['chip', dscrAdjusted >= data.covenant.minimumRatio ? 'good' : 'critical']">
+                {{ dscrAdjusted >= data.covenant.minimumRatio ? 'Meets covenant' : 'Below covenant' }}
+              </span>
+            </div>
+            <div class="figure">{{ dscrAdjusted !== null ? fmtRatio(dscrAdjusted) : '—' }}</div>
+            <div class="caption">Not something Eastern Bank has agreed to accept — see the note below.</div>
+          </div>
+        </div>
+        <div class="fcf-breakdown">
+          <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
+          <div class="fcf-row"><span>+ Interest (loan amortization schedule, all 10 loans, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.scheduledInterestForYear) }}</span></div>
+          <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
+          <div class="fcf-row total"><span>= EBITDA (as reported)</span><span>{{ projectedEbitdaForYear !== null ? fmt(projectedEbitdaForYear) : '—' }}</span></div>
+          <div v-if="data.covenant.ytd.preOpeningNonCashAddBack !== 0" class="fcf-row"><span>+ Pre-opening reclass entries (YTD, if accepted as one-time)</span><span>{{ fmt(data.covenant.ytd.preOpeningNonCashAddBack) }}</span></div>
+          <div v-if="data.covenant.ytd.preOpeningNonCashAddBack !== 0" class="fcf-row total"><span>= EBITDA (adjusted)</span><span>{{ projectedEbitdaForYearAdjusted !== null ? fmt(projectedEbitdaForYearAdjusted) : '—' }}</span></div>
+          <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenant.annualDebtService.total) }}</span></div>
+        </div>
+        <div class="section-note">
+          {{ data.covenant.debtScopeAssumption }}
+        </div>
+        <div class="section-note">
+          Not a live compliance check — Eastern Bank tests this once, against FY{{ data.covenant.testYear }}'s actual year-end financials, not on a running or quarterly basis. This projection uses this year's actual results so far plus budget for the remaining months, the same way the Year-End Projection above does. The reclass-adjusted ratio assumes Eastern Bank accepts the pre-opening reclass entries (see the Free Cash Flow breakdown above) as non-recurring add-backs — EBITDA's own definition (Interest/Depreciation/Amortization only) doesn't do this automatically, so raise it directly with the bank rather than assuming it.
         </div>
       </section>
 

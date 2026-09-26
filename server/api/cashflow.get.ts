@@ -384,11 +384,66 @@ export default defineEventHandler((event) => {
   const fullYearReserveFunded = summarizeDebtService(fullYearRows.filter(r => r.loan_key !== 'sba'))
   const breakevenNetIncomeForYear = fullYearDirect.principal + fullYearDirect.catchUpInterest + reserveTransfersProjectedForYear - budgetedDepreciationForYear
 
+  const thisYearFreeCashFlow = freeCashFlow(yearStart, yearEnd, yearRows)
+
+  // ---- Eastern Bank DSCR covenant (informational only — see CLAUDE.md's
+  // "Debt Service Coverage Ratio covenant tracking" section) ---------------
+  // Per the Loan Agreement (§5.24): "1.25x Minimum Debt Service Coverage,
+  // tested annually, beginning Fiscal Year End 2026, measured as Earnings
+  // Before Interest, Depreciation, and Amortization (EBITDA) divided by the
+  // sum of all annual principal and interest payments." Two things this app
+  // cannot confirm from the loan documents alone, both surfaced explicitly
+  // to the user rather than silently assumed:
+  // (1) whether "all annual principal and interest payments" means just the
+  //     Eastern Bank SBA loan or all 10 loans including the 9 subordinated
+  //     investor notes — this computes it against ALL 10 (fullYearRows,
+  //     unfiltered by loan_key), the more conservative (larger-denominator)
+  //     reading, per the user's own explicit choice 2026-09-26;
+  // (2) whether Eastern Bank will accept the pre-opening reclass add-backs
+  //     (PRE_OPENING_NONCASH_ADJUSTMENTS above) as non-recurring items —
+  //     EBITDA's own definition only adds back Interest/Depreciation/
+  //     Amortization, not rent/insurance/serviceware expense, so both a
+  //     raw and a reclass-adjusted ratio are computed and shown side by
+  //     side rather than picking one.
+  const fullYearAllLoans = summarizeDebtService(fullYearRows)
+  const covenant = {
+    minimumRatio: 1.25,
+    testYear: year,
+    debtScopeAssumption:
+      'Assumes "the sum of all annual principal and interest payments" covers all 10 loans (the $500K Eastern Bank SBA loan plus the 9 subordinated investor notes), not just the SBA loan itself — Eastern Bank has not confirmed this in writing. See CLAUDE.md.',
+    annualDebtService: {
+      principal: fullYearAllLoans.principal,
+      interest: fullYearAllLoans.interest,
+      catchUpInterest: fullYearAllLoans.catchUpInterest,
+      total: fullYearAllLoans.totalCashOut
+    },
+    ytd: {
+      netIncome: thisYearFreeCashFlow.netIncome,
+      interest: thisYearFreeCashFlow.actualLoanInterest,
+      depreciation: thisYearFreeCashFlow.depreciation,
+      preOpeningNonCashAddBack: thisYearFreeCashFlow.preOpeningNonCashAddBack,
+      ebitda: thisYearFreeCashFlow.netIncome + thisYearFreeCashFlow.actualLoanInterest + thisYearFreeCashFlow.depreciation
+    },
+    // Inputs for the client's full-year projected EBITDA (which also needs
+    // projectedNetIncomeForYear, computed client-side the same way the
+    // Year-End Projection section above already does — see cashflow.vue).
+    // scheduledInterestForYear deliberately uses the loan amortization
+    // schedule for these 10 loans (not account 7020's real postings, which
+    // may include interest from debt outside this brief's scope — see
+    // actualsFor()'s own comment above) so the interest add-back and the
+    // debt-service denominator both come from the same source and can't
+    // drift apart from each other.
+    fullYearProjectionInputs: {
+      scheduledInterestForYear: fullYearAllLoans.interest,
+      budgetedDepreciationForYear
+    }
+  }
+
   return {
     year,
     thisYear: {
       debtService: yearDebtService,
-      freeCashFlow: freeCashFlow(yearStart, yearEnd, yearRows)
+      freeCashFlow: thisYearFreeCashFlow
     },
     yearProjection: {
       principal: fullYearDirect.principal,
@@ -399,6 +454,7 @@ export default defineEventHandler((event) => {
       reserveTransfers: reserveTransfersProjectedForYear,
       breakevenNetIncome: breakevenNetIncomeForYear
     },
+    covenant,
     reserve: reserveProgress(today),
     upcomingPayments: allLoanRows
       .filter(r => r.payment_date >= today)
