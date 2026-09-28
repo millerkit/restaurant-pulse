@@ -391,20 +391,19 @@ export default defineEventHandler((event) => {
   // Per the Loan Agreement (§5.24): "1.25x Minimum Debt Service Coverage,
   // tested annually, beginning Fiscal Year End 2026, measured as Earnings
   // Before Interest, Depreciation, and Amortization (EBITDA) divided by the
-  // sum of all annual principal and interest payments." Two things this app
-  // cannot confirm from the loan documents alone, both surfaced explicitly
-  // to the user rather than silently assumed:
-  // (1) whether "all annual principal and interest payments" means just the
-  //     Eastern Bank SBA loan or all 10 loans including the 9 subordinated
-  //     investor notes — this computes it against ALL 10 (fullYearRows,
-  //     unfiltered by loan_key), the more conservative (larger-denominator)
-  //     reading, per the user's own explicit choice 2026-09-26;
-  // (2) whether Eastern Bank will accept the pre-opening reclass add-backs
-  //     (PRE_OPENING_NONCASH_ADJUSTMENTS above) as non-recurring items —
-  //     EBITDA's own definition only adds back Interest/Depreciation/
-  //     Amortization, not rent/insurance/serviceware expense, so both a
-  //     raw and a reclass-adjusted ratio are computed and shown side by
-  //     side rather than picking one.
+  // sum of all annual principal and interest payments." One thing this app
+  // cannot confirm from the loan documents alone, surfaced explicitly to
+  // the user rather than silently assumed: whether "all annual principal
+  // and interest payments" means just the Eastern Bank SBA loan or all 10
+  // loans including the 9 subordinated investor notes — this computes it
+  // against ALL 10 (fullYearRows, unfiltered by loan_key), the more
+  // conservative (larger-denominator) reading, per the user's own explicit
+  // choice 2026-09-26. Deliberately does NOT adjust EBITDA for the
+  // pre-opening reclass entries (PRE_OPENING_NONCASH_ADJUSTMENTS above) —
+  // considered and removed 2026-09-28 at the user's own call: EBITDA's own
+  // definition only adds back Interest/Depreciation/Amortization, not
+  // rent/insurance/serviceware expense, and a reclass-adjusted ratio isn't
+  // relevant to what Eastern Bank will actually see.
   const fullYearAllLoans = summarizeDebtService(fullYearRows)
   const covenant = {
     minimumRatio: 1.25,
@@ -416,13 +415,6 @@ export default defineEventHandler((event) => {
       interest: fullYearAllLoans.interest,
       catchUpInterest: fullYearAllLoans.catchUpInterest,
       total: fullYearAllLoans.totalCashOut
-    },
-    ytd: {
-      netIncome: thisYearFreeCashFlow.netIncome,
-      interest: thisYearFreeCashFlow.actualLoanInterest,
-      depreciation: thisYearFreeCashFlow.depreciation,
-      preOpeningNonCashAddBack: thisYearFreeCashFlow.preOpeningNonCashAddBack,
-      ebitda: thisYearFreeCashFlow.netIncome + thisYearFreeCashFlow.actualLoanInterest + thisYearFreeCashFlow.depreciation
     },
     // Inputs for the client's full-year projected EBITDA (which also needs
     // projectedNetIncomeForYear, computed client-side the same way the

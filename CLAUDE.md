@@ -3688,17 +3688,13 @@ section on the Cash Flow tab
 tracking only, not a live compliance check, since the real test doesn't
 happen until FY2026 actual year-end financials are in.
 
-- **Two real ambiguities the loan documents don't resolve, both shown to
-  the user rather than silently assumed**: (1) whether "the sum of all
-  annual principal and interest payments" means just the $500K Eastern Bank
-  SBA loan or all 10 loans including the 9 subordinated investor notes —
-  **built against all 10** (`fullYearAllLoans = summarizeDebtService(fullYearRows)`,
+- **One real ambiguity the loan documents don't resolve, shown to the user
+  rather than silently assumed**: whether "the sum of all annual principal
+  and interest payments" means just the $500K Eastern Bank SBA loan or all
+  10 loans including the 9 subordinated investor notes — **built against
+  all 10** (`fullYearAllLoans = summarizeDebtService(fullYearRows)`,
   unfiltered by `loan_key`), the more conservative reading, per the user's
-  own explicit choice; (2) whether Eastern Bank will actually accept the
-  pre-opening reclasses as non-recurring add-backs — so **both a raw and a
-  reclass-adjusted ratio are shown side by side** (two hero cards, each
-  with its own pass/fail chip against the 1.25x floor), never picked for
-  the user.
+  own explicit choice.
 - **Projected EBITDA = this year's already-established Net Income
   projection** (`projectedNetIncomeForYear`, the same actual-for-elapsed-
   months + budget-for-the-rest figure the Year-End Projection section above
@@ -3718,12 +3714,25 @@ happen until FY2026 actual year-end financials are in.
   with the accountant whether depreciation is actually being posted to QBO
   before relying on this ratio for a real conversation with the bank.
 - **Verified end-to-end against real production data**: raw DSCR came back
-  1.53x (meets the 1.25x floor even before any reclass adjustment), and the
-  reclass-adjusted figure came back 2.23x — both rendered correctly with
-  their own pass/fail chips on the live `/cashflow` page, and the EBITDA
-  breakdown reconciled by hand against `/api/cashflow`'s raw JSON
-  (`covenant.annualDebtService.total` = $128,439.96; `covenant.ytd.ebitda`
-  = −$66,299.73 YTD, before the full-year budget projection).
+  1.53x, meeting the 1.25x floor, rendered correctly with its pass/fail
+  chip on the live `/cashflow` page, and the EBITDA breakdown reconciled by
+  hand against `/api/cashflow`'s raw JSON
+  (`covenant.annualDebtService.total` = $128,439.96).
+
+**Reclass-adjusted ratio removed, 2026-09-28** — originally built shown
+side by side with the raw ratio (two hero cards), since whether Eastern
+Bank would accept the pre-opening reclasses as non-recurring add-backs was
+a real open question. The user's own call after seeing it live: not
+relevant for the bank, so drop it rather than leave a second number that
+invites a conversation the bank was never going to have. `covenant.ytd`
+(the block feeding that second ratio — `netIncome`/`interest`/
+`depreciation`/`preOpeningNonCashAddBack`/`ebitda`) was removed from
+`server/api/cashflow.get.ts`'s response entirely, not left dormant, along
+with `dscrAdjusted`/`projectedEbitdaForYearAdjusted` in `cashflow.vue` —
+it was the only consumer of that block, so nothing else needed touching.
+The remaining single DSCR card and EBITDA breakdown are unchanged except
+for losing the "(as reported)" qualifier on the `= EBITDA` row, since
+there's no longer a second version to distinguish it from.
 
 ## Not yet done
 
