@@ -3795,6 +3795,89 @@ The remaining single DSCR card and EBITDA breakdown are unchanged except
 for losing the "(as reported)" qualifier on the `= EBITDA` row, since
 there's no longer a second version to distinguish it from.
 
+## Reserve sustainability past the catch-up: a real 2027+ target and weekly rate — 2026-09-28
+
+Closes the gap flagged in "Real running-balance reserve projection"
+above and carried on the "Not yet done" list ever since: that simulation
+only ever projected through `catchUpDate` itself (Dec 20, 2026) and had
+nothing to say about whether the reserve could keep sustaining every
+reserve-funded loan's *ordinary* monthly payment afterward — a real
+question once the one-time catch-up stops being the only thing this
+account has to cover. Prompted directly by the user asking two tied
+questions: what's a more accurate end-of-2026 target once 2027's ongoing
+payments are accounted for, and what should the weekly transfer become
+once 2027 starts.
+
+- **The 2027 draw pattern turned out to be exactly level**, once pulled
+  from the real `loan_schedule`: every reserve-funded loan (`loan_key !=
+  'sba'`) posts the same two payments every month of 2027 — $5,500.62 on
+  the 15th (Jones + Miller) and $11,130.98 on the 20th (the other 7) —
+  totaling $199,579.20 for the year. 2027 has 52 Mondays, so
+  $199,579.20 ÷ 52 = $3,838.06/week is the exact break-even rate.
+- **Break-even alone isn't safe, because deposits and withdrawals don't
+  stay in phase** — withdrawals land on fixed calendar dates (15th/20th)
+  while deposits land on Mondays, so simulating the real 2027 dates (not
+  just comparing annual totals) shows even a perfect break-even deposit
+  needs a real cushion already sitting in the account on Jan 1 to never
+  dip negative at some mid-year trough. This is the same technique
+  "Real running-balance reserve projection" above already established for
+  the catch-up date itself, just run forward across a full ordinary year
+  instead of stopping at one lump payment.
+- **`server/api/cashflow.get.ts` gained three simulation helpers** —
+  `mondaysThrough` (Monday-date generator, factored out of
+  `reserveProgress()`'s existing inline loop so both the catch-up
+  projection and this new simulation share one definition),
+  `simulateReserveBalance` (runs a weekly-deposit-vs-real-withdrawal-dates
+  event timeline and returns the ending and minimum balance — the general
+  form of the same running-balance technique `reserveProgress()` already
+  used just for the catch-up window), and two binary searches built on top
+  of it: `minStartingBalanceToSustain` (the smallest Jan 1 balance that
+  keeps a given weekly rate non-negative all year) and
+  `minWeeklyRateToReachTarget` (the smallest weekly rate that both never
+  goes negative and hits a target ending balance).
+- **A new `reserve.sustainability` block**, computed inside
+  `reserveProgress()` right alongside the existing catch-up projection:
+  `sustainYear` (`catchUpDate`'s own year + 1 — not hardcoded to 2027, so
+  this stays correct once `catchUpDate` itself rolls to a different
+  loan/year), `totalDraws` and `breakEvenWeeklyRate` (both computed from
+  `loan_schedule`, not hardcoded), `recommendedWeeklyRate` (break-even
+  rounded up to the nearest $500 — a practical, round number with real
+  margin, not the bare decimal, which leaves zero room for a late or
+  skipped transfer), `bufferNeededForRecommendedRate` (what that rate
+  actually needs banked on Jan 1, per the real-dates simulation),
+  `projectedYearEndBalance` (where the *current* declared weekly plan
+  actually lands by Dec 31 if nothing changes — unlike
+  `projectedBalanceAtCatchUp` above, this one includes the catch-up
+  payment itself, since it's answering "what's left afterward," not "is
+  there enough to make it"), `surplusVsNeeded`/`onTrack`, and
+  `suggestedRemainderOfYearRate` — the least that needs to keep moving
+  into the reserve for the rest of *this* year to still land at
+  `bufferNeededForRecommendedRate`, plus `operatingCashFreedPerWeek`/
+  `operatingCashFreedTotal` if the current plan is overshooting that.
+- **A real, counter-intuitive finding while verifying
+  `suggestedRemainderOfYearRate` against production's actual numbers**:
+  simple algebra on the year-end target alone (starting balance + 14 more
+  weekly deposits − remaining 2026 withdrawals ≥ buffer) suggested
+  ~$3,855/week would be enough, but the binary search (which also enforces
+  the balance never dipping negative at any point, not just at year end)
+  came back with $4,006.07/week instead — because only 12 of the 14
+  remaining Mondays land *before* Dec 20, so the balance right after that
+  one big payment clears is the real binding constraint, not the eventual
+  Dec 31 total. A good demonstration of why this needed a real
+  date-by-date simulation rather than dividing totals.
+- **Rendered on the Cash Flow page** (`app/pages/cashflow.vue`) as a
+  second card inside the existing Loan Reserve Savings Plan section,
+  directly below the catch-up projection, with the same on-track/behind
+  chip convention — reads e.g. "the current $5,000/week is overshooting
+  what 2027 needs — as little as $4,006/week for the rest of 2026 would
+  still get there safely, freeing roughly $13,915 of operating cash
+  between now and year end" against real production numbers, or "the
+  current $5,000/week isn't quite enough — at least $5,608/week... is
+  needed to be 2027-ready" against local dev's smaller real balance —
+  verified both phrasings render correctly against each environment's own
+  real (very different) `saved`/`currentWeeklyAmount` figures, confirming
+  the feature isn't hardcoded to either.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -3852,11 +3935,6 @@ there's no longer a second version to distinguish it from.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
   SQL on the two owner accounts) and to split *actual* labor by owner-comp
   the same way the budget side already is (needs real per-account actuals)
-- Extending the reserve running-balance simulation past `catchUpDate` (Dec
-  20, 2026) — it currently only projects through the one-time catch-up
-  payment; it doesn't project whether the reserve can keep sustaining
-  Jones & Miller's monthly payments indefinitely afterward — see "Real
-  running-balance reserve projection" above.
 - Buyout revenue modeling on the Capacity Pace tab — bookmarked at the
   user's own request 2026-08-07 until a guaranteed-minimum figure exists to
   model against; see the Capacity tab section above.

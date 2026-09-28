@@ -537,6 +537,7 @@ async function save() {
            questions the modeled row below asks, for an at-a-glance "does my model roughly
            match recent reality" check. Visually distinguished with its own tint (see
            .stat-tile.trailing) so it doesn't get mistaken for more modeled figures. -->
+      <div class="stat-row-heading trailing">Recent Actuals &amp; Trend Projection</div>
       <div class="stat-grid comparison-row">
         <div class="stat-tile trailing">
           <div class="stat-label">Trailing 3-mo avg wages / mo<template v-if="trailingWindowLabel"> ({{ trailingWindowLabel }})</template></div>
@@ -561,6 +562,7 @@ async function save() {
         </div>
       </div>
 
+      <div class="stat-row-heading modeled">Modeled Budget &mdash; Going Forward</div>
       <div class="stat-grid">
         <div class="stat-tile">
           <div class="stat-label">Avg wages / mo ({{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec)</div>
@@ -801,6 +803,16 @@ async function save() {
   border-radius: 8px; padding: 8px 14px; color: var(--ink); cursor: pointer;
 }
 .action-btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+/* Labels the two stat-grid rows below by what they represent (trailing real-world
+   average vs. the editable modeled budget) — same color-mix-toward-ink tint as each
+   row's own tiles, so the heading visually pairs with the row it introduces. */
+.stat-row-heading {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  margin: 14px 0 6px;
+}
+.stat-row-heading.trailing { color: color-mix(in srgb, var(--accent) 70%, var(--ink-3)); }
+.stat-row-heading.modeled { color: color-mix(in srgb, var(--good) 70%, var(--ink-3)); }
 
 .stat-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;

@@ -91,6 +91,75 @@ function nextMonday(asOfIso: string): string {
   return d.toISOString().slice(0, 10)
 }
 
+// Every Monday from nextMonday(startIso) through endIso inclusive — the
+// deposit-date generator shared by reserveProgress()'s existing
+// catch-up-date simulation and the 2027+ sustainability simulation below,
+// so both use the same "deposits land on Mondays" assumption.
+function mondaysThrough(startIso: string, endIso: string): string[] {
+  const out: string[] = []
+  for (let d = nextMonday(startIso); d <= endIso; ) {
+    out.push(d)
+    const next = new Date(`${d}T00:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 7)
+    d = next.toISOString().slice(0, 10)
+  }
+  return out
+}
+
+// Runs a weekly-deposit-vs-real-withdrawal-dates simulation between two
+// dates and returns the ending balance and the lowest point the balance
+// ever reaches — the same real running-balance technique
+// reserveProgress()'s catch-up projection already uses (see CLAUDE.md's
+// "Real running-balance reserve projection" section), generalized here so
+// it can also simulate past the catch-up date into an ordinary year of
+// twice-monthly payments.
+function simulateReserveBalance(startBalance: number, startIso: string, endIso: string, weeklyAmount: number, withdrawalRows: LoanRow[]) {
+  const deposits = mondaysThrough(startIso, endIso).map(d => ({ date: d, amount: weeklyAmount }))
+  const withdrawals = withdrawalRows
+    .filter(r => r.payment_date >= startIso && r.payment_date <= endIso)
+    .map(r => ({ date: r.payment_date, amount: -r.total_payment }))
+  const events = [...deposits, ...withdrawals].sort((a, b) => a.date.localeCompare(b.date) || (a.amount > 0 ? -1 : 1))
+  let balance = startBalance
+  let minBalance = balance
+  for (const e of events) {
+    balance += e.amount
+    if (balance < minBalance) minBalance = balance
+  }
+  return { endBalance: balance, minBalance }
+}
+
+// Binary search: the smallest starting balance on startIso that keeps
+// simulateReserveBalance's minBalance >= 0 all the way through endIso at a
+// fixed weekly deposit rate. Used to find how big a cushion a given 2027+
+// weekly rate actually needs, given real (unevenly-timed) payment dates.
+function minStartingBalanceToSustain(startIso: string, endIso: string, weeklyAmount: number, withdrawalRows: LoanRow[]): number {
+  let lo = 0, hi = 1_000_000
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    const { minBalance } = simulateReserveBalance(mid, startIso, endIso, weeklyAmount, withdrawalRows)
+    if (minBalance < 0) lo = mid; else hi = mid
+  }
+  return Math.round(hi * 100) / 100
+}
+
+// Binary search: the smallest weekly deposit rate, starting from a real
+// current balance, that both (a) never lets the running balance dip below
+// zero before endIso (which also guarantees the catch-up payment itself
+// can be made in full — see the reserveTarget comment above) and (b) ends
+// endIso with at least targetEndBalance banked. Lets the reserve plan
+// answer "what's the least I need to transfer the rest of this year to
+// still be ready for next year," not just "what's the least to hit the
+// catch-up alone."
+function minWeeklyRateToReachTarget(startBalance: number, startIso: string, endIso: string, targetEndBalance: number, withdrawalRows: LoanRow[]): number {
+  let lo = 0, hi = 50_000
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    const { endBalance, minBalance } = simulateReserveBalance(startBalance, startIso, endIso, mid, withdrawalRows)
+    if (minBalance < 0 || endBalance < targetEndBalance) lo = mid; else hi = mid
+  }
+  return Math.round(hi * 100) / 100
+}
+
 export default defineEventHandler((event) => {
   const query = getQuery(event)
   const year = Number(query.year)
@@ -226,6 +295,84 @@ export default defineEventHandler((event) => {
       catchUpShortfall = Math.max(0, reserveTarget - projectedBalanceAtCatchUp)
     }
 
+    // ---- Sustaining the year after the catch-up ---------------------
+    // The reserve's job doesn't end once the one-time catch-up clears —
+    // every reserve-funded loan's ordinary monthly payment keeps drawing
+    // from this same account well past it (through 2031, per
+    // loan_schedule) — a gap CLAUDE.md's "Not yet done" list flagged
+    // ("it doesn't project whether the reserve can keep sustaining Jones &
+    // Miller's monthly payments indefinitely afterward"), closed here.
+    // "sustainYear" is catchUpDate's own year + 1, not hardcoded to 2027,
+    // so this stays correct once catchUpDate itself rolls forward.
+    let sustainability: {
+      sustainYear: number
+      totalDraws: number
+      breakEvenWeeklyRate: number
+      recommendedWeeklyRate: number
+      bufferNeededForRecommendedRate: number
+      projectedYearEndBalance: number | null
+      surplusVsNeeded: number | null
+      onTrack: boolean | null
+      suggestedRemainderOfYearRate: number | null
+      operatingCashFreedPerWeek: number | null
+      operatingCashFreedTotal: number | null
+    } | null = null
+    if (catchUpDate) {
+      const sustainYear = Number(catchUpDate.slice(0, 4)) + 1
+      const sustainStart = `${sustainYear}-01-01`
+      const sustainEnd = `${sustainYear}-12-31`
+      const sustainRows = reserveFundedRows.filter(r => r.payment_date >= sustainStart && r.payment_date <= sustainEnd)
+      const totalDraws = sustainRows.reduce((s, r) => s + r.total_payment, 0)
+      const mondayCount = mondaysThrough(sustainStart, sustainEnd).length
+      const breakEvenWeeklyRate = mondayCount > 0 ? totalDraws / mondayCount : 0
+      // Rounded up to the nearest $500 — a practical, round number with
+      // real margin above bare break-even (which leaves zero room for a
+      // late or skipped transfer), not the raw decimal.
+      const recommendedWeeklyRate = Math.ceil(breakEvenWeeklyRate / 500) * 500
+      const bufferNeededForRecommendedRate = totalDraws > 0
+        ? minStartingBalanceToSustain(sustainStart, sustainEnd, recommendedWeeklyRate, sustainRows)
+        : 0
+
+      const yearEnd = `${catchUpDate.slice(0, 4)}-12-31`
+      let projectedYearEndBalance: number | null = null
+      let suggestedRemainderOfYearRate: number | null = null
+      if (currentWeeklyAmount) {
+        // "If nothing changes between now and year end" — continues the
+        // CURRENT declared plan (not the recommended sustainYear rate)
+        // through yearEnd, including the catch-up payment itself this
+        // time (unlike projectedBalanceAtCatchUp above, which deliberately
+        // stops just short of it) — the real balance actually carried
+        // into sustainYear.
+        projectedYearEndBalance = simulateReserveBalance(saved, asOfIso, yearEnd, currentWeeklyAmount, reserveFundedRows).endBalance
+        // The least that needs to keep moving into the reserve for the
+        // rest of THIS year to still land at bufferNeededForRecommendedRate
+        // by year end (while still safely covering the catch-up payment
+        // along the way) — answers "how much of the current plan is more
+        // than this obligation actually needs," which can go back to
+        // operating cash instead.
+        suggestedRemainderOfYearRate = minWeeklyRateToReachTarget(saved, asOfIso, yearEnd, bufferNeededForRecommendedRate, reserveFundedRows)
+      }
+      const surplusVsNeeded = projectedYearEndBalance !== null ? projectedYearEndBalance - bufferNeededForRecommendedRate : null
+      const operatingCashFreedPerWeek = currentWeeklyAmount !== null && suggestedRemainderOfYearRate !== null
+        ? currentWeeklyAmount - suggestedRemainderOfYearRate
+        : null
+      const remainderOfYearWeeks = mondaysThrough(asOfIso, yearEnd).length
+
+      sustainability = {
+        sustainYear,
+        totalDraws,
+        breakEvenWeeklyRate,
+        recommendedWeeklyRate,
+        bufferNeededForRecommendedRate,
+        projectedYearEndBalance,
+        surplusVsNeeded,
+        onTrack: surplusVsNeeded !== null ? surplusVsNeeded >= 0 : null,
+        suggestedRemainderOfYearRate,
+        operatingCashFreedPerWeek,
+        operatingCashFreedTotal: operatingCashFreedPerWeek !== null ? operatingCashFreedPerWeek * remainderOfYearWeeks : null
+      }
+    }
+
     return {
       target: reserveTarget,
       saved,
@@ -236,7 +383,8 @@ export default defineEventHandler((event) => {
       onPaceForCatchUp,
       catchUpShortfall,
       complete: remaining <= 0,
-      transfers: toDate.map(t => ({ date: t.transfer_date, amount: t.amount, note: t.note }))
+      transfers: toDate.map(t => ({ date: t.transfer_date, amount: t.amount, note: t.note })),
+      sustainability
     }
   }
   // How much reserve was transferred (net) *within* the requested

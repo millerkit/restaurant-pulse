@@ -10,6 +10,19 @@ type PeriodFigures = {
   freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, preOpeningNonCashAddBack: number, nonCashAdjustments: { label: string, amount: number }[], reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
 type ReserveTransfer = { date: string, amount: number, note: string | null }
+type ReserveSustainability = {
+  sustainYear: number
+  totalDraws: number
+  breakEvenWeeklyRate: number
+  recommendedWeeklyRate: number
+  bufferNeededForRecommendedRate: number
+  projectedYearEndBalance: number | null
+  surplusVsNeeded: number | null
+  onTrack: boolean | null
+  suggestedRemainderOfYearRate: number | null
+  operatingCashFreedPerWeek: number | null
+  operatingCashFreedTotal: number | null
+}
 type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
 type Covenant = {
   minimumRatio: number
@@ -27,6 +40,7 @@ type CashFlowResponse = {
     target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
     catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
     transfers: ReserveTransfer[]
+    sustainability: ReserveSustainability | null
   }
   upcomingPayments: Payment[]
 }
@@ -384,6 +398,40 @@ async function submitPlan() {
               Projected: <strong>{{ fmt(data.reserve.projectedBalanceAtCatchUp) }}</strong> vs. the {{ fmt(data.reserve.target) }} needed.
               <template v-if="!data.reserve.onPaceForCatchUp && data.reserve.catchUpShortfall">
                 Short by <strong>{{ fmt(data.reserve.catchUpShortfall) }}</strong> at the current pace.
+              </template>
+            </div>
+          </div>
+
+          <div v-if="data.reserve.sustainability" class="catchup-projection">
+            <div class="runway-head">
+              <span class="name">Sustaining {{ data.reserve.sustainability.sustainYear }}'s ongoing payments</span>
+              <span v-if="data.reserve.sustainability.onTrack !== null" :class="['chip', data.reserve.sustainability.onTrack ? 'good' : 'critical']">
+                {{ data.reserve.sustainability.onTrack ? 'On track' : 'Behind' }}
+              </span>
+            </div>
+            <div class="section-note">
+              Once the {{ fmtDate(data.reserve.catchUpDate!) }} catch-up clears, every reserve-funded loan is in ordinary
+              monthly-payment mode — {{ fmt(data.reserve.sustainability.totalDraws) }} scheduled to draw from this account
+              across {{ data.reserve.sustainability.sustainYear }}. Break-even is {{ fmt(data.reserve.sustainability.breakEvenWeeklyRate) }}/week;
+              a safer, rounder pace is <strong>{{ fmt(data.reserve.sustainability.recommendedWeeklyRate) }}/week</strong>,
+              which needs about {{ fmt(data.reserve.sustainability.bufferNeededForRecommendedRate) }} already banked by
+              Jan 1 to never dip negative.
+              <template v-if="data.reserve.sustainability.projectedYearEndBalance !== null">
+                At the current pace, you're on track to carry <strong>{{ fmt(data.reserve.sustainability.projectedYearEndBalance) }}</strong>
+                into {{ data.reserve.sustainability.sustainYear }}<template v-if="data.reserve.sustainability.surplusVsNeeded !== null && data.reserve.sustainability.surplusVsNeeded >= 0"> — {{ fmt(data.reserve.sustainability.surplusVsNeeded) }} more than that needs.</template><template v-else-if="data.reserve.sustainability.surplusVsNeeded !== null"> — {{ fmt(Math.abs(data.reserve.sustainability.surplusVsNeeded)) }} short of what that needs.</template>
+              </template>
+              <template v-if="data.reserve.sustainability.suggestedRemainderOfYearRate !== null && data.reserve.currentWeeklyAmount">
+                <template v-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null && data.reserve.sustainability.operatingCashFreedPerWeek > 0">
+                  The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week is overshooting what {{ data.reserve.sustainability.sustainYear }} needs —
+                  as little as <strong>{{ fmt(data.reserve.sustainability.suggestedRemainderOfYearRate) }}/week</strong> for the
+                  rest of {{ data.reserve.catchUpDate!.slice(0, 4) }} would still get there safely, freeing roughly
+                  <strong>{{ fmt(data.reserve.sustainability.operatingCashFreedTotal!) }}</strong> of operating cash between now and year end.
+                </template>
+                <template v-else-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null">
+                  The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week isn't quite enough — at least
+                  <strong>{{ fmt(data.reserve.sustainability.suggestedRemainderOfYearRate) }}/week</strong> for the rest of
+                  {{ data.reserve.catchUpDate!.slice(0, 4) }} is needed to be {{ data.reserve.sustainability.sustainYear }}-ready.
+                </template>
               </template>
             </div>
           </div>
