@@ -1262,6 +1262,67 @@ $53,014.60 would actually be available by Dec 15).
   what happens to the account after Dec 20, when Jones & Miller's monthly
   payments keep coming out indefinitely — see "Not yet done" below.
 
+## Reserve target and reserve-funded loans widened to all 9 investor notes — 2026-08-15
+
+A SaasAnt Expense import built this day changed how Chen/Savage/Schaefer/
+Gilreath/Mis/Price/Reid's loan payments actually post in QBO — not just
+Jones & Miller's, as assumed above — so all 9 investor loans' payments,
+including each of the 7 original loans' Dec 20, 2026 catch-up interest
+**and** first regular installment together, now draw from the 1005 reserve
+account, rather than the 7 loans' regular installment coming from separate
+operating cash as the section above assumed. Two related updates in
+`server/api/cashflow.get.ts`, both driven by that same underlying fact:
+
+- **`reserveFundedRows`** widened from `loan_key === 'jones' ||
+  loan_key === 'miller'` to `loan_key !== 'sba'` — every loan except the
+  Eastern Bank SBA loan (still paid directly from operating cash, unchanged)
+  now counts as a withdrawal from this account in `reserveProgress()`'s
+  running-balance simulation.
+- **`reserveTarget`** widened from $50,562.50 (pure catch-up interest across
+  the 7 original loans) to $61,693.48 — the full Dec 20 cash payment across
+  those same 7 loans (catch-up interest + first regular installment
+  combined), since the target has always meant "how much needs to be
+  sitting in the account right before Dec 20," and now the whole payment,
+  not just its catch-up portion, comes out of it. (This is a separate
+  widening from the one reverted 2026-07-31 above, which was about folding
+  Jones & Miller's own catch-up into this static target — that reasoning
+  still holds unchanged: their catch-up stays modeled as an ordinary
+  scheduled withdrawal in the simulation, never folded into the target
+  itself.)
+
+**A related double-count caught the next day, 2026-08-16**: `freeCashFlow()`'s
+"profit needed to cover the loans" figure was still subtracting all
+reserve-funded loans' debt service directly, on top of the reserve transfers
+already subtracted for the same cash — a minor discrepancy back when only
+Jones/Miller drew from reserve, but a real double-count once
+`reserveFundedRows` covered all 9 loans (the same cash counted twice: once
+when it left operating cash as a reserve transfer, again when it left the
+reserve to pay a lender). Found after the user pointed out the reserve
+transfers exist specifically to cover these loan payments, which made
+subtracting both confusing — and, on inspection, wrong. Fixed by scoping
+that subtraction to SBA's debt service only (the one loan still paid
+directly from operating cash); the other loans' debt service is still
+summarized in full for display elsewhere (`thisYear.debtService`,
+`fullYearReserveFunded`) — only the Free Cash Flow subtraction itself is
+scoped to SBA.
+
+**Confirmed still accurate, 2026-09-28** — raised after the user found (from
+a real QBO register screenshot) that the SBA loan specifically is paid via a
+direct transfer from Amex Checking that bypasses the reserve entirely, and
+asked whether that explained why the reserve was running ahead of pace. It
+wasn't the cause — SBA was already excluded from `reserveFundedRows`, per
+this section — but it prompted confirming directly with the user whether the
+other 7 investor loans' payments (including their Dec 20 catch-up + first
+installment, which the $61,693.48 target above is built from) still really
+draw from the 1005 reserve the way this section assumes, rather than having
+also since moved to a direct-from-checking setup like SBA's. Confirmed yes —
+no code change needed.
+
+This section documents code that's been live since 2026-08-15/16 but was
+never written up here until now — a real gap between the code and this file,
+caught 2026-09-28 while investigating the reserve-ahead-of-pace question
+above.
+
 ## QBO sync catch-up range + local dev sandbox guard — 2026-07-31
 
 Prompted by a user report that a QBO sync run in production was missing
