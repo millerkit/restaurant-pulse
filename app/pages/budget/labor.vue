@@ -485,14 +485,15 @@ async function save() {
     const settingsPayload = accounts.value.map(a => ({
       accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden
     }))
-    const slotsPayload = accounts.value
-      .filter(a => a.payType === 'hourly' || a.payType === 'salary')
+    const slotAccounts = accounts.value.filter(a => a.payType === 'hourly' || a.payType === 'salary')
+    const slotAccountIds = slotAccounts.map(a => a.accountId)
+    const slotsPayload = slotAccounts
       .flatMap(a => a.slots.map((s, i) => ({
         accountId: a.accountId, slotIndex: i + 1, employeeName: s.employeeName || null,
         hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary
       })))
 
-    await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, taxRates: taxRates.value } })
+    await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, slotAccountIds, taxRates: taxRates.value } })
 
     const targets: { year: number, month: number, accountId: number, amount: number }[] = []
     for (const month of targetMonths.value) {

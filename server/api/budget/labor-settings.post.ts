@@ -12,9 +12,10 @@ type SlotInput = { accountId: number, slotIndex: number, employeeName: string | 
 type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ settings?: SettingsInput[], slots?: SlotInput[], taxRates?: TaxRatesInput }>(event)
+  const body = await readBody<{ settings?: SettingsInput[], slots?: SlotInput[], slotAccountIds?: number[], taxRates?: TaxRatesInput }>(event)
   const settings = body?.settings ?? []
   const slots = body?.slots ?? []
+  const slotAccountIds = body?.slotAccountIds ?? []
   const taxRates = body?.taxRates
 
   const db = useDb()
@@ -63,6 +64,13 @@ export default defineEventHandler(async (event) => {
     }
     for (const [accountId, maxIndex] of maxSlotIndexByAccount) {
       trimSlots.run(accountId, maxIndex)
+    }
+    // An account whose last person was removed sends no slots at all, so it never appears
+    // in maxSlotIndexByAccount above — the client lists every slot-bearing account here so
+    // those still get trimmed (slot_index > 0 = all of them). The role itself survives as an
+    // empty placeholder (its labor_position_settings row is untouched).
+    for (const accountId of slotAccountIds) {
+      if (!maxSlotIndexByAccount.has(accountId)) trimSlots.run(accountId, 0)
     }
 
     if (taxRates) upsertTaxRates.run({ ...taxRates, updatedAt: now })
