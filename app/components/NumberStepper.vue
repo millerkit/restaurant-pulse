@@ -23,15 +23,25 @@ function clamp(v: number) {
   return n
 }
 
+// While focused, show the raw text the user is typing — reformatting to N decimals on
+// every keystroke turned "2" into "2.00" mid-entry, so the next digit landed after the zeros.
+const draft = ref<string | null>(null)
+const displayValue = computed(() =>
+  draft.value ?? (props.decimals ? props.modelValue.toFixed(props.decimals) : String(props.modelValue)))
+
 function onInput(e: Event) {
   const raw = (e.target as HTMLInputElement).value
+  draft.value = raw
   if (raw === '') return
   const n = Number(raw)
   if (!Number.isNaN(n)) emit('update:modelValue', clamp(n))
 }
 
+function onBlur() { draft.value = null }
+
 function bump(dir: 1 | -1) {
   const next = Math.round((props.modelValue + dir * props.step) / props.step) * props.step
+  draft.value = null
   emit('update:modelValue', clamp(Number(next.toFixed(6))))
 }
 </script>
@@ -40,9 +50,9 @@ function bump(dir: 1 | -1) {
   <div class="number-stepper" :class="{ 'number-stepper-disabled': disabled }">
     <input
       type="number" :step="step" :min="min ?? undefined" :max="max ?? undefined"
-      :value="decimals ? modelValue.toFixed(decimals) : modelValue"
+      :value="displayValue"
       :disabled="disabled"
-      @input="onInput" class="number-stepper-input" :style="{ width }"
+      @input="onInput" @blur="onBlur" class="number-stepper-input" :style="{ width }"
     />
     <div class="number-stepper-arrows">
       <button type="button" tabindex="-1" aria-label="Increase" :disabled="disabled" @click="bump(1)">&#9650;</button>
