@@ -52,13 +52,19 @@ function countFridaysBetween(startIso: string, endIso: string): number {
 // the user has currently typed into this account's own slots (their live, unsaved draft),
 // which this server route has no visibility into. That conversion happens client-side
 // instead (see accountAvgRate/impliedWeeklyHours in labor.vue).
+// Closed months only — the in-progress month has just a day or two of data and would skew
+// the average. Zone-aware so "current month" can't be off by one near a UTC month boundary.
+function currentMonthLocal(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit' }).formatToParts(new Date())
+  return `${parts.find(p => p.type === 'year')!.value}-${parts.find(p => p.type === 'month')!.value}`
+}
 function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
   return (db.prepare(`
     SELECT DISTINCT strftime('%Y-%m', dli.date) AS ym
     FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
-    WHERE a.category = 'labor'
+    WHERE a.category = 'labor' AND strftime('%Y-%m', dli.date) < ?
     ORDER BY ym DESC LIMIT 3
-  `).all() as { ym: string }[]).map(r => r.ym)
+  `).all(currentMonthLocal()) as { ym: string }[]).map(r => r.ym)
 }
 
 // avgMonthlyDollars backs the flat accounts' (Other Labor/Benefits) "$/mo" hint directly.
