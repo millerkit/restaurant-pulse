@@ -301,13 +301,13 @@ async function submitPlan() {
       <!-- P&L view vs Cash Flow view, per the source brief's Section 7 -->
       <section>
         <div class="section-head">
-          <div class="section-label">P&amp;L View vs. Cash Flow View</div>
+          <div class="section-label">P&amp;L View vs. Cash Paid to Date</div>
           <div class="section-note">{{ YEAR }} year-to-date</div>
         </div>
         <div class="cf-table-card">
           <table class="cf-table">
             <thead>
-              <tr><th></th><th>P&amp;L View</th><th>Cash Flow View</th></tr>
+              <tr><th></th><th>P&amp;L View</th><th>Cash Paid to Date</th></tr>
             </thead>
             <tbody>
               <tr>
