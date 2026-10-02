@@ -12,12 +12,19 @@
   --accent-wash: rgba(42,120,214,0.10);
   --good:        #0ca30c;
   --good-wash:   rgba(12,163,12,0.10);
-  --warning:     #b8860b;
-  --warning-wash:rgba(250,178,25,0.16);
-  --serious:     #c1592f;
-  --serious-wash:rgba(236,131,90,0.16);
-  --critical:    #d03b3b;
-  --critical-wash:rgba(208,59,59,0.10);
+  /* Blue, not amber (2026-10-02): amber was hard to tell from --good green for a user with
+     red-green color vision deficiency. Chips/meters always carry an icon + label too. */
+  /* serious/critical (2026-10-02): were rust-orange vs red, nearly identical under red-green
+     CVD (ΔE ~6 deutan). Now two lightness steps of one red hue — light mode: mid-red vs deep
+     maroon; dark mode: pale salmon vs bright red — ΔE >=24 for normal/deutan/protan (own
+     Lab ΔE76 check with Machado CVD matrices; validate_palette.js not available locally).
+     good-vs-serious under deutan is ~15 in light mode — chips always carry icon + label. */
+  --warning:     #2a78d6;
+  --warning-wash:rgba(42,120,214,0.10);
+  --serious:     #e04f4f;
+  --serious-wash:rgba(224,79,79,0.14);
+  --critical:    #8f1212;
+  --critical-wash:rgba(143,18,18,0.10);
   /* Revenue Calendar's two below-goal severity steps (added 2026-08-20) —
      deliberately NOT --serious/--critical. Those two are already close
      enough in hue (rust-orange vs. red) that validate_palette.js measures
@@ -52,12 +59,12 @@
     --accent-wash: rgba(57,135,229,0.14);
     --good:        #1fc21f;
     --good-wash:   rgba(31,194,31,0.14);
-    --warning:     #fab219;
-    --warning-wash:rgba(250,178,25,0.16);
-    --serious:     #ec835a;
-    --serious-wash:rgba(236,131,90,0.14);
-    --critical:    #e35a5a;
-    --critical-wash:rgba(227,90,90,0.14);
+    --warning:     #3987e5;
+    --warning-wash:rgba(57,135,229,0.14);
+    --serious:     #f7b0b0;
+    --serious-wash:rgba(247,176,176,0.14);
+    --critical:    #e8353f;
+    --critical-wash:rgba(232,53,63,0.16);
     --shortfall:      #ef4444;
     --shortfall-deep: #ab1a44;
     --card-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.35);
@@ -77,12 +84,12 @@
   --accent-wash: rgba(57,135,229,0.14);
   --good:        #1fc21f;
   --good-wash:   rgba(31,194,31,0.14);
-  --warning:     #fab219;
-  --warning-wash:rgba(250,178,25,0.16);
-  --serious:     #ec835a;
-  --serious-wash:rgba(236,131,90,0.14);
-  --critical:    #e35a5a;
-  --critical-wash:rgba(227,90,90,0.14);
+  --warning:     #3987e5;
+  --warning-wash:rgba(57,135,229,0.14);
+  --serious:     #f7b0b0;
+  --serious-wash:rgba(247,176,176,0.14);
+  --critical:    #e8353f;
+  --critical-wash:rgba(232,53,63,0.16);
   --shortfall:      #ef4444;
   --shortfall-deep: #ab1a44;
   --card-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.35);
