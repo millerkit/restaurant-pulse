@@ -447,31 +447,24 @@ function projectedMonthDollars(account: LaborAccount): number {
   const modeled = accountMonthlyDollars(account, asOfMonth)
   return actual.hasActual ? actual.amount + (modeled - expectedToDate(account)) : modeled
 }
-function referenceClass(expected: number, actual: number): string {
-  if (expected === 0) return 'neutral'
-  return Math.abs(actual - expected) / expected <= 0.1 ? 'good' : 'warning'
+// Trend indicator next to each "trailing" hint: how the modeled figure compares to the
+// trailing reference. More than 5% above → red ▲ N%; more than 5% below → green ▼ N%;
+// within ±5% → green ✓. Direction is carried by the glyph (not just color) since
+// red/green alone isn't readable for everyone. Empty when there's nothing to compare against.
+const TREND_BAND = 0.05
+function trendRatio(modeled: number, trailing: number): number | null {
+  return trailing > 0 ? (modeled - trailing) / trailing : null
 }
-// " · 25% below" / " · 12% above" — how far the modeled figure is from the trailing reference,
-// only when it's outside the 10% band (the ≠ case), so the size of the miss is readable
-// without comparing two numbers by eye. Empty when within the band or nothing to compare.
-function deltaNote(modeled: number, trailing: number): string {
-  if (referenceClass(modeled, trailing) !== 'warning' || trailing === 0) return ''
-  const pct = Math.round(Math.abs(modeled - trailing) / trailing * 100)
-  return ` · ${pct}% ${modeled < trailing ? 'below' : 'above'}`
+function trendClass(modeled: number, trailing: number): string {
+  const r = trendRatio(modeled, trailing)
+  if (r === null) return ''
+  return r > TREND_BAND ? 'over' : 'ok'
 }
-// 'neutral' (nothing entered yet, so there's no real expectation to compare against) gets
-// no icon at all — showing a ▲ there read as a false warning even though the color was
-// already correctly neutral gray.
-function referenceIcon(cls: string): string {
-  return cls === 'good' ? '✓' : cls === 'warning' ? '≠' : ''
-}
-// '' (rather than 'neutral') specifically means "nothing to compare against at all" (no
-// trailing data yet) — distinct from referenceClass's own 'neutral' (a real comparison
-// where the expected side happens to be 0) — so the caller can skip rendering an icon or
-// color entirely instead of showing a misleadingly-confident gray one.
-function weeklyStatusClass(modeledWeekly: number, accountId: number): string {
-  const trailing = trailingActuals.value[accountId]?.weeklyAvg
-  return trailing != null ? referenceClass(modeledWeekly, trailing) : ''
+function trendText(modeled: number, trailing: number): string {
+  const r = trendRatio(modeled, trailing)
+  if (r === null) return ''
+  const pct = Math.round(Math.abs(r) * 100)
+  return r > TREND_BAND ? `▲ ${pct}%` : r < -TREND_BAND ? `▼ ${pct}%` : '✓'
 }
 // The month's real trailing-3-month weekly average, projected out across this month's own
 // Fridays — a second, trend-based reference for "projected this month" (the bold figure)
@@ -481,10 +474,6 @@ function weeklyStatusClass(modeledWeekly: number, accountId: number): string {
 function trailingProjectedMonthDollars(accountId: number): number | null {
   const weeklyAvg = trailingActuals.value[accountId]?.weeklyAvg
   return weeklyAvg != null ? weeklyAvg * fridaysInMonth(YEAR, asOfMonth) : null
-}
-function monthStatusClass(account: LaborAccount): string {
-  const trailing = trailingProjectedMonthDollars(account.accountId)
-  return trailing != null ? referenceClass(projectedMonthDollars(account), trailing) : ''
 }
 
 const saveStatus = ref<'idle' | 'saving' | 'done' | 'error'>('idle')
@@ -636,7 +625,7 @@ async function save() {
           <table v-if="TABLE_GROUPS.includes(group)" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role / person</td><td class="num num-inset">$/hr</td><td class="num num-inset">hrs/wk</td><td class="num">weekly</td><td class="num">projected this month</td><td class="actions-col"></td>
+                <td>role / person</td><td class="num num-inset">$/hr</td><td class="num num-inset">hrs/wk</td><td class="num">weekly</td><td class="num">projected this month</td><td class="trend-col"></td><td class="actions-col"></td>
               </tr>
             </thead>
 
@@ -644,6 +633,7 @@ async function save() {
               <template v-for="acc in hourlyAccountsIn(group)" :key="acc.accountId">
                 <tr class="role-row" :class="{ 'is-hidden-row': acc.isHidden }">
                   <td colspan="4"><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                  <td></td>
                   <td></td>
                   <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
                 </tr>
@@ -654,18 +644,19 @@ async function save() {
                   </td>
                   <td class="num">
                     <NumberStepper v-model="slot.weeklyHours" :step="HOURS_STEP" :min="0" width="64px" />
-                    <div v-if="acc.slots.length === 1 && impliedWeeklyHours(acc) !== null" class="cell-hint reference" :class="referenceClass(slot.weeklyHours, impliedWeeklyHours(acc)!)">
-                      {{ referenceIcon(referenceClass(slot.weeklyHours, impliedWeeklyHours(acc)!)) }} &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing{{ deltaNote(slot.weeklyHours, impliedWeeklyHours(acc)!) }}
+                    <div v-if="acc.slots.length === 1 && impliedWeeklyHours(acc) !== null" class="cell-hint">
+                      &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
                     </div>
                   </td>
                   <td class="num muted">
-                    <span v-if="acc.slots.length === 1 && weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)" class="status-icon" :class="weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)">{{ referenceIcon(weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId)) }}</span><span class="status-text" :class="acc.slots.length === 1 ? weeklyStatusClass(slotWeeklyDollars(acc, slot, asOfMonth), acc.accountId) : ''">{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</span>
-                    <div v-if="acc.slots.length === 1 && trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk{{ deltaNote(slotWeeklyDollars(acc, slot, asOfMonth), trailingActuals[acc.accountId].weeklyAvg!) }}</div>
+                    <span>{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</span>
+                    <div v-if="acc.slots.length === 1 && trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
                   </td>
                   <td class="num">
-                    <span v-if="acc.slots.length === 1 && monthStatusClass(acc)" class="status-icon" :class="monthStatusClass(acc)">{{ referenceIcon(monthStatusClass(acc)) }}</span><strong class="status-text" :class="acc.slots.length === 1 ? monthStatusClass(acc) : ''">{{ fmt(acc.slots.length === 1 ? projectedMonthDollars(acc) : slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
-                    <div v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average{{ deltaNote(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</div>
+                    <strong class="trend-num" :class="acc.slots.length === 1 ? trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) : ''">{{ fmt(acc.slots.length === 1 ? projectedMonthDollars(acc) : slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
+                    <div v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
                   </td>
+                  <td class="trend-col"><span v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</span></td>
                   <td class="actions-col"><button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button></td>
                 </tr>
                 <tr v-if="acc.slots.length > 1" class="total-row">
@@ -673,22 +664,23 @@ async function save() {
                   <td class="num muted num-inset">—</td>
                   <td class="num num-inset">
                     {{ accountEffectiveHours(acc, asOfMonth).toFixed(1) }}
-                    <div v-if="impliedWeeklyHours(acc) !== null" class="cell-hint reference" :class="referenceClass(accountEffectiveHours(acc, asOfMonth), impliedWeeklyHours(acc)!)">
-                      {{ referenceIcon(referenceClass(accountEffectiveHours(acc, asOfMonth), impliedWeeklyHours(acc)!)) }} &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing{{ deltaNote(accountEffectiveHours(acc, asOfMonth), impliedWeeklyHours(acc)!) }}
+                    <div v-if="impliedWeeklyHours(acc) !== null" class="cell-hint">
+                      &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
                     </div>
                   </td>
                   <td class="num muted">
-                    <span v-if="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)" class="status-icon" :class="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)">{{ referenceIcon(weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)) }}</span><span class="status-text" :class="weeklyStatusClass(accountWeeklyDollars(acc, asOfMonth), acc.accountId)">{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</span>
-                    <div v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk{{ deltaNote(accountWeeklyDollars(acc, asOfMonth), trailingActuals[acc.accountId].weeklyAvg!) }}</div>
+                    <span>{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</span>
+                    <div v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
                   </td>
                   <td class="num">
-                    <span v-if="monthStatusClass(acc)" class="status-icon" :class="monthStatusClass(acc)">{{ referenceIcon(monthStatusClass(acc)) }}</span><strong class="status-text" :class="monthStatusClass(acc)">{{ fmt(projectedMonthDollars(acc)) }}</strong>
-                    <div v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average{{ deltaNote(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</div>
+                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ fmt(projectedMonthDollars(acc)) }}</strong>
+                    <div v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
                   </td>
+                  <td class="trend-col"><span v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</span></td>
                   <td class="actions-col"></td>
                 </tr>
                 <tr class="add-row">
-                  <td colspan="6"><button type="button" class="add-person" @click="addPerson(acc)">+ Add person to {{ acc.name }}</button></td>
+                  <td colspan="7"><button type="button" class="add-person" @click="addPerson(acc)">+ Add person to {{ acc.name }}</button></td>
                 </tr>
               </template>
 
@@ -701,18 +693,19 @@ async function save() {
                   <td class="num muted num-inset">—</td>
                   <td class="num">
                     <NumberStepper v-model="overtimeAccountIn(group)!.otHours" :step="HOURS_STEP" :min="0" width="64px" />
-                    <div v-if="impliedOtHours(group as 'boh' | 'foh') !== null" class="cell-hint reference" :class="referenceClass(overtimeAccountIn(group)!.otHours, impliedOtHours(group as 'boh' | 'foh')!)">
-                      {{ referenceIcon(referenceClass(overtimeAccountIn(group)!.otHours, impliedOtHours(group as 'boh' | 'foh')!)) }} &asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs trailing{{ deltaNote(overtimeAccountIn(group)!.otHours, impliedOtHours(group as 'boh' | 'foh')!) }}
+                    <div v-if="impliedOtHours(group as 'boh' | 'foh') !== null" class="cell-hint">
+                      &asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs trailing
                     </div>
                   </td>
                   <td class="num muted">
-                    <span v-if="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)" class="status-icon" :class="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)">{{ referenceIcon(weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)) }}</span><span class="status-text" :class="weeklyStatusClass(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), overtimeAccountIn(group)!.accountId)">{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</span>
-                    <div v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk{{ deltaNote(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth), trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}</div>
+                    <span>{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</span>
+                    <div v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk</div>
                   </td>
                   <td class="num">
-                    <span v-if="monthStatusClass(overtimeAccountIn(group)!)" class="status-icon" :class="monthStatusClass(overtimeAccountIn(group)!)">{{ referenceIcon(monthStatusClass(overtimeAccountIn(group)!)) }}</span><strong class="status-text" :class="monthStatusClass(overtimeAccountIn(group)!)">{{ fmt(projectedMonthDollars(overtimeAccountIn(group)!)) }}</strong>
-                    <div v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }} projected from {{ trailingWindowLabel }} average{{ deltaNote(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }}</div>
+                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ fmt(projectedMonthDollars(overtimeAccountIn(group)!)) }}</strong>
+                    <div v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
                   </td>
+                  <td class="trend-col"><span v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ trendText(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }}</span></td>
                   <td class="actions-col"></td>
                 </tr>
               </template>
@@ -892,17 +885,12 @@ async function save() {
    next to it instead of requiring a mental jump across the table. font-weight is reset to
    normal since .total-row td bolds everything by default. */
 .cell-hint { font-size: 10.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; white-space: nowrap; }
-/* The ✓/▲ caret sits inline with its total (status-icon, deliberately smaller than the
-   total's own font-size — a small badge, not a second headline number) rather than on the
-   secondary hint line below, so the total figure itself is the thing colored/flagged at a
-   glance; status-text carries that same color onto the total's digits. Both share one
-   color set with .cell-hint.reference below (same good/warning/neutral meaning), just
-   without .cell-hint's own smaller font-size, which would shrink the total unintentionally. */
-.status-icon { font-size: 10.5px; margin-right: 3px; }
-.status-icon.good, .status-text.good { color: var(--good); }
-.status-icon.warning, .status-text.warning { color: var(--accent); }
-.status-icon.warning { font-weight: 700; }
-.status-icon.neutral, .status-text.neutral { color: var(--ink-3); }
+/* Trend indicator (▲ N% / ▼ N% / ✓) sits right after the "trailing" hint text. */
+.trend-col { width: 64px; text-align: left; white-space: nowrap; padding-left: 4px; }
+.trend { font-weight: 700; color: var(--good); }
+.trend.over { color: var(--critical); }
+strong.trend-num.ok { color: var(--good); }
+strong.trend-num.over { color: var(--critical); }
 
 .name-input {
   font-size: 12.5px; border: 1px solid var(--hair); border-radius: 5px; padding: 4px 6px;
@@ -979,8 +967,4 @@ td.num-inset { padding-right: 40px; }
 .seasonal-toggle-lg input { margin: 0; }
 .ot-note { font-size: 10.5px; color: var(--ink-3); margin-left: 8px; font-weight: 400; }
 
-.reference { font-size: 10px; }
-.reference.good { color: var(--good); }
-.reference.warning { color: var(--accent); font-weight: 600; }
-.reference.neutral { color: var(--ink-3); }
 </style>
