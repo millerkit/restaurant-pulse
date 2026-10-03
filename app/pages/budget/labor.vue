@@ -43,12 +43,13 @@ const SALARY_STEP = 1000
 const SEASONALITY_CAP_PCT = 15
 
 type PayType = 'hourly' | 'salary' | 'overtime' | 'flat' | 'tax'
+type RoleClass = 'direct' | 'supervision' | 'overhead' | 'growth'
 type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
 type Slot = { id: number | null, slotIndex: number, employeeName: string, hourlyRate: number, weeklyHours: number, weeklySalary: number }
 type LaborAccount = {
   accountId: number, accountNumber: string | null, name: string, groupKey: GroupKey, payType: PayType,
   scalesWithSeasonality: boolean, otHours: number, otBaseGroup: 'boh' | 'foh' | null, flatAmount: number,
-  taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, isHidden: boolean, slots: Slot[]
+  taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, isHidden: boolean, roleClass: RoleClass | null, slots: Slot[]
 }
 type TaxRates = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
 type MonthlyIndexEntry = { month: number, indexPct: number | null, years: number[] }
@@ -59,6 +60,20 @@ const GROUP_LABEL: Record<GroupKey, string> = {
 }
 const GROUP_ORDER: GroupKey[] = ['boh', 'foh', 'management', 'other', 'benefits', 'tax']
 const TABLE_GROUPS: GroupKey[] = ['boh', 'foh']
+
+// Role classes (schema.sql's labor_position_settings.role_class): how a role's cost behaves,
+// not whether it "produces revenue" — see CLAUDE.md's "Labor role classes" section.
+const ROLE_CLASS_ORDER: RoleClass[] = ['direct', 'supervision', 'overhead', 'growth']
+const ROLE_CLASS_LABEL: Record<RoleClass, string> = {
+  direct: 'Direct / production', supervision: 'Required supervision', overhead: 'Overhead / enabling', growth: 'Growth bets'
+}
+const ROLE_CLASS_HINT: Record<RoleClass, string> = {
+  direct: 'scales with volume',
+  supervision: 'sized to shifts & stations, not covers',
+  overhead: 'fixed, no direct supervision duty',
+  growth: 'fixed cost, judged by return'
+}
+const isWageAccount = (a: LaborAccount) => a.payType === 'hourly' || a.payType === 'salary' || a.payType === 'overtime'
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
@@ -347,6 +362,68 @@ function getMonthCategoryBudgetLive(month: number, cat: Category): number | null
 const projectedAnnualRevenue = computed(() => hybridYearTotals(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth).revenue)
 const laborPctOfRevenue = computed(() => projectedAnnualRevenue.value > 0 ? (totalLaborForYear.value / projectedAnnualRevenue.value) * 100 : null)
 
+// ---- Labor by role class (the summary card under the modeled row) ---------------------
+// Splits modeled labor $ by each wage account's role_class tag. Payroll taxes are allocated
+// to each class pro rata by its share of wage-subject pay (they're computed as a flat % of
+// that same wage-subject total, so this is exact, not an approximation); the share of taxes
+// attributable to flat 'Additional Pay' — plus Employee Benefits and Additional Pay itself —
+// has no role to belong to, so it stays in its own "Benefits & other" row rather than being
+// smeared across classes. Reads live, unsaved inputs like every other modeled figure here.
+type ClassKey = RoleClass | 'unclassified' | 'other'
+type ClassRow = { key: ClassKey, label: string, hint: string, monthly: number, shareOfLabor: number | null, pctOfRevenue: number | null, roles: string[] }
+
+const roleClassRows = computed<ClassRow[]>(() => {
+  const months = targetMonths.value
+  const sums: Record<ClassKey, number> = { direct: 0, supervision: 0, overhead: 0, growth: 0, unclassified: 0, other: 0 }
+  const revMonths = months.filter(m => (getMonthCategoryBudgetLive(m, 'revenue') ?? 0) > 0)
+  const revSums: Record<ClassKey, number> = { direct: 0, supervision: 0, overhead: 0, growth: 0, unclassified: 0, other: 0 }
+  let revenue = 0
+  for (const m of months) {
+    const taxTotal = accountsIn('tax').reduce((sum, a) => sum + accountMonthlyDollars(a, m), 0)
+    const subject = wageSubjectTotal(m)
+    const perClass: Record<ClassKey, number> = { direct: 0, supervision: 0, overhead: 0, growth: 0, unclassified: 0, other: 0 }
+    for (const a of accounts.value) {
+      if (!isWageAccount(a)) continue
+      const wages = accountMonthlyDollars(a, m)
+      const taxShare = subject > 0 ? taxTotal * wages / subject : 0
+      perClass[a.roleClass ?? 'unclassified'] += wages + taxShare
+    }
+    const classified = (Object.keys(perClass) as ClassKey[]).reduce((sum, k) => sum + perClass[k], 0)
+    perClass.other = modeledLaborTotal(m) - classified
+    const hasRevenue = revMonths.includes(m)
+    if (hasRevenue) revenue += getMonthCategoryBudgetLive(m, 'revenue')!
+    for (const k of Object.keys(perClass) as ClassKey[]) {
+      sums[k] += perClass[k]
+      if (hasRevenue) revSums[k] += perClass[k]
+    }
+  }
+  const totalLabor = (Object.keys(sums) as ClassKey[]).reduce((sum, k) => sum + sums[k], 0)
+  const rowFor = (key: ClassKey, label: string, hint: string): ClassRow => ({
+    key, label, hint,
+    monthly: months.length > 0 ? sums[key] / months.length : 0,
+    shareOfLabor: totalLabor > 0 ? sums[key] / totalLabor : null,
+    pctOfRevenue: revenue > 0 ? (revSums[key] / revenue) * 100 : null,
+    roles: key in ROLE_CLASS_LABEL ? accounts.value.filter(a => isWageAccount(a) && a.roleClass === key && !a.isHidden && a.payType !== 'overtime').map(a => a.name) : []
+  })
+  const rows: ClassRow[] = ROLE_CLASS_ORDER.map(k => rowFor(k, ROLE_CLASS_LABEL[k], ROLE_CLASS_HINT[k]))
+  if (sums.unclassified > 0.5) rows.push(rowFor('unclassified', 'Unclassified', 'wage roles with no class tag yet'))
+  rows.push(rowFor('other', 'Benefits & other', 'employee benefits, additional pay, and the taxes on it'))
+  return rows
+})
+const roleClassRevenueMonths = computed(() => targetMonths.value.filter(m => (getMonthCategoryBudgetLive(m, 'revenue') ?? 0) > 0).length)
+const roleClassTotalMonthly = computed(() => roleClassRows.value.reduce((sum, r) => sum + r.monthly, 0))
+// The "fixed layer" (supervision + overhead + growth) vs. the direct layer, as the one
+// headline number the split is meant to surface — fixed-cost labor that doesn't flex with covers.
+const roleClassFixedLayerPct = computed(() => {
+  const fixed = roleClassRows.value.filter(r => r.key === 'supervision' || r.key === 'overhead' || r.key === 'growth')
+  const pcts = fixed.map(r => r.pctOfRevenue)
+  return pcts.every(p => p !== null) ? pcts.reduce((sum, p) => sum + p!, 0) : null
+})
+const laborPctOfRevenueForClassMonths = computed(() => {
+  const pcts = roleClassRows.value.map(r => r.pctOfRevenue)
+  return pcts.every(p => p !== null) ? pcts.reduce((sum, p) => sum + p!, 0).toFixed(1) + '%' : '—'
+})
+
 // ---- Trailing-actual comparison row (rendered above the modeled summary cards) --------
 // A second, independently-sourced answer to the same 5 questions, built entirely from
 // real trailing actuals rather than this page's own live model — a sanity check for
@@ -483,7 +560,7 @@ async function save() {
   saveStatus.value = 'saving'
   try {
     const settingsPayload = accounts.value.map(a => ({
-      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden
+      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden, roleClass: isWageAccount(a) ? a.roleClass : null
     }))
     const slotAccounts = accounts.value.filter(a => a.payType === 'hourly' || a.payType === 'salary')
     const slotAccountIds = slotAccounts.map(a => a.accountId)
@@ -593,6 +670,43 @@ async function save() {
         </div>
       </div>
 
+      <div class="drill-card class-card">
+        <div class="class-card-head">
+          <div class="stat-row-heading class">Labor by Role Class &mdash; Going Forward</div>
+          <div v-if="roleClassFixedLayerPct !== null" class="class-headline">
+            Fixed layer (supervision + overhead + growth): <strong>{{ roleClassFixedLayerPct.toFixed(1) }}%</strong> of revenue
+          </div>
+        </div>
+        <table class="class-table">
+          <thead>
+            <tr><td>class</td><td class="num">$ / mo</td><td class="num">% of labor</td><td class="num">% of revenue</td><td class="bar-col"></td></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in roleClassRows" :key="row.key" :class="{ 'class-other': row.key === 'other' || row.key === 'unclassified' }">
+              <td>
+                <strong>{{ row.label }}</strong>
+                <div class="class-sub">{{ row.hint }}<template v-if="row.roles.length > 0"> &middot; {{ row.roles.join(', ') }}</template></div>
+              </td>
+              <td class="num">{{ fmt(row.monthly) }}</td>
+              <td class="num">{{ row.shareOfLabor !== null ? (row.shareOfLabor * 100).toFixed(0) + '%' : '—' }}</td>
+              <td class="num">{{ row.pctOfRevenue !== null ? row.pctOfRevenue.toFixed(1) + '%' : '—' }}</td>
+              <td class="bar-col"><div class="share-track"><div class="share-fill" :style="{ width: ((row.shareOfLabor ?? 0) * 100) + '%' }"></div></div></td>
+            </tr>
+            <tr class="class-total">
+              <td>Total labor</td>
+              <td class="num">{{ fmt(roleClassTotalMonthly) }}</td>
+              <td class="num">100%</td>
+              <td class="num">{{ laborPctOfRevenueForClassMonths }}</td>
+              <td class="bar-col"></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="quiet-note small">
+          Average per month, {{ MONTH_NAMES[asOfMonth - 1] }}&ndash;Dec, from the modeled inputs below (including unsaved edits). Payroll taxes are spread across classes in proportion to wages.
+          % of revenue uses budgeted revenue for {{ roleClassRevenueMonths }} of {{ targetMonths.length }} months. Set each role's class with the selector on its row.
+        </div>
+      </div>
+
       <div class="drill-card seasonality-panel">
         <label class="seasonal-toggle-lg">
           <input type="checkbox" :checked="globalScaleSeasonally" @change="setGlobalSeasonality(($event.target as HTMLInputElement).checked)" />
@@ -633,7 +747,11 @@ async function save() {
             <tbody>
               <template v-for="acc in hourlyAccountsIn(group)" :key="acc.accountId">
                 <tr class="role-row" :class="{ 'is-hidden-row': acc.isHidden }">
-                  <td colspan="4"><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                  <td colspan="4"><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span>
+                    <select v-model="acc.roleClass" class="class-select" title="Role class — how this role's cost behaves">
+                      <option :value="null">Unclassified</option>
+                      <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
+                    </select></td>
                   <td></td>
                   <td></td>
                   <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
@@ -690,6 +808,10 @@ async function save() {
                   <td>
                     <strong>{{ overtimeAccountIn(group)!.name }}</strong>
                     <span class="ot-note">1.5&times; ${{ blendedRate(group as 'boh' | 'foh').toFixed(2) }}/hr blended</span>
+                    <select v-model="overtimeAccountIn(group)!.roleClass" class="class-select" title="Role class — how this role's cost behaves">
+                      <option :value="null">Unclassified</option>
+                      <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
+                    </select>
                   </td>
                   <td class="num muted num-inset">—</td>
                   <td class="num">
@@ -715,12 +837,18 @@ async function save() {
           <table v-else-if="group === 'management'" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
+                <td>role</td><td>class</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
               </tr>
             </thead>
             <tbody>
               <tr v-for="acc in visibleAccountsIn('management')" :key="acc.accountId" class="person-row" :class="{ 'is-hidden-row': acc.isHidden }">
                 <td><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                <td>
+                  <select v-model="acc.roleClass" class="class-select" title="Role class — how this role's cost behaves">
+                    <option :value="null">Unclassified</option>
+                    <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
+                  </select>
+                </td>
                 <td class="num">
                   <NumberStepper
                     :model-value="Math.round(annualSalary(acc))"
@@ -818,6 +946,7 @@ async function save() {
 }
 .stat-row-heading.trailing { color: color-mix(in srgb, var(--accent) 70%, var(--ink-3)); }
 .stat-row-heading.modeled { color: color-mix(in srgb, var(--good) 70%, var(--ink-3)); }
+.stat-row-heading.class { color: var(--ink-2); margin: 0; }
 
 .stat-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;
@@ -964,6 +1093,27 @@ td.num-inset { padding-right: 40px; }
 .hidden-toggle-row { margin: -8px 0 18px; }
 
 .seasonality-panel { padding: 12px 16px; margin-bottom: 22px; gap: 4px; }
+
+/* Labor by Role Class card. Neutral ink on purpose: the four classes are a cost-behavior
+   taxonomy, not good/bad statuses, so no status colors (and no color-keyed legend) — each row
+   is identified by its text label, the share bar is a single neutral hue. */
+.class-card { margin: 0 0 22px; gap: 8px; }
+.class-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.class-headline { font-size: 12.5px; color: var(--ink-2); }
+.class-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.class-table thead td { font-size: 11px; color: var(--ink-3); padding: 4px 8px; }
+.class-table tbody td { padding: 7px 8px; border-top: 1px solid var(--hair); vertical-align: middle; }
+.class-table .num { text-align: right; white-space: nowrap; }
+.class-sub { font-size: 10.5px; color: var(--ink-3); font-weight: 400; margin-top: 1px; }
+.class-other td { color: var(--ink-2); }
+.class-total td { font-weight: 700; border-top: 2px solid var(--hair); }
+.bar-col { width: 22%; min-width: 80px; }
+.share-track { height: 8px; background: var(--surface-alt); border-radius: 4px; overflow: hidden; }
+.share-fill { height: 100%; background: var(--ink-3); border-radius: 4px; }
+.class-select {
+  font-size: 11px; margin-left: 10px; padding: 2px 4px; border: 1px solid var(--hair);
+  border-radius: 5px; background: var(--surface); color: var(--ink-2);
+}
 .seasonal-toggle-lg { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
 .seasonal-toggle-lg input { margin: 0; }
 .ot-note { font-size: 10.5px; color: var(--ink-3); margin-left: 8px; font-weight: 400; }

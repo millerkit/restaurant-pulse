@@ -502,6 +502,16 @@ CREATE TABLE drilldown_thresholds (
 -- laborManaged/Budget Edit visibility too. Hiding an account never excludes it from any
 -- computation (totals, wage-subject, what Save writes to budget_targets) — purely a Labor
 -- tab display filter, toggleable back via a "Show N hidden" control on the page.
+-- role_class (added 2026-10-02) classifies a wage account (pay_type hourly/salary/overtime)
+-- by how its cost behaves, for the Labor tab's "Labor by role class" summary card:
+--   'direct'      — production labor that scales with volume (cooks, servers, bartenders, porters, hosts)
+--   'supervision' — required oversight sized to shifts/stations/staff, not covers (GM, floor manager, sous/exec chef)
+--   'overhead'    — enabling/admin roles with no direct supervision duty (business manager, assistant to the GM)
+--   'growth'      — fixed-cost roles justified by a revenue bet (wine director, retail/events)
+-- NULL = unclassified (always the case for 'flat'/'tax' accounts, which the summary allocates
+-- separately). One class per role — a hybrid like the Executive Chef (cooks AND supervises) gets
+-- whichever reason dominates. First-pass defaults via scripts/add-labor-role-class.mjs; editable
+-- in the Labor tab, same "classify now, revise later" posture as accounts.cost_behavior.
 CREATE TABLE labor_position_settings (
   account_id               INTEGER PRIMARY KEY REFERENCES accounts(id),
   pay_type                 TEXT NOT NULL CHECK (pay_type IN ('hourly', 'salary', 'overtime', 'flat', 'tax')),
@@ -511,6 +521,7 @@ CREATE TABLE labor_position_settings (
   flat_amount              REAL NOT NULL DEFAULT 0,
   tax_key                  TEXT CHECK (tax_key IN ('medicare', 'social_security', 'futa', 'suta_ma', 'pfml_ma')),
   is_hidden                 INTEGER NOT NULL DEFAULT 0,
+  role_class                TEXT CHECK (role_class IN ('direct', 'supervision', 'overhead', 'growth')),
   updated_at                TEXT NOT NULL
 );
 

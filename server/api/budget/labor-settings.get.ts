@@ -135,7 +135,7 @@ export default defineEventHandler(() => {
       p.account_number AS parentAccountNumber,
       lps.pay_type AS payType, lps.scales_with_seasonality AS scalesWithSeasonality,
       lps.ot_hours AS otHours, lps.ot_base_group AS otBaseGroup, lps.flat_amount AS flatAmount, lps.tax_key AS taxKey,
-      lps.is_hidden AS isHidden
+      lps.is_hidden AS isHidden, lps.role_class AS roleClass
     FROM accounts a
     JOIN labor_position_settings lps ON lps.account_id = a.id
     LEFT JOIN accounts p ON p.id = a.parent_account_id
@@ -169,6 +169,7 @@ export default defineEventHandler(() => {
     flatAmount: r.flatAmount,
     taxKey: r.taxKey as 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null,
     isHidden: !!r.isHidden,
+    roleClass: (r.roleClass ?? null) as 'direct' | 'supervision' | 'overhead' | 'growth' | null,
     slots: slotsByAccount.get(r.accountId) ?? []
   }))
 
