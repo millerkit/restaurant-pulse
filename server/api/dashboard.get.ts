@@ -357,6 +357,7 @@ export default defineEventHandler((event) => {
       avgSpendPerCover,
       sinceDate: NEW_LOCATION_START,
       sampleOpenDays,
+      excludedNights: weekly.excludedNights,
       days: dayTargets,
       thisWeek: {
         mondayOf: thisWeekMonday,

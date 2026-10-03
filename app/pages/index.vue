@@ -297,6 +297,10 @@ function meterStatusLabel(status: string | null) {
           </div>
           <div class="section-note" v-if="weeklyTargets.avgSpendPerCover">
             Covers targets use a real avg spend/cover of ${{ weeklyTargets.avgSpendPerCover.toFixed(2) }}, computed the same way, since {{ formatWeekdayDate(weeklyTargets.sinceDate) }}.
+            <template v-if="weeklyTargets.excludedNights?.length">
+              Left out as unrepresentative (spend per cover far from typical &mdash; likely an event or buyout):
+              <span v-for="(n, i) in weeklyTargets.excludedNights" :key="n.date">{{ formatWeekdayDate(n.date) }} (${{ Math.round(n.spend) }}/cover){{ i < weeklyTargets.excludedNights.length - 1 ? ', ' : '.' }}</span>
+            </template>
           </div>
           <div class="section-note" v-if="weeklyTargets.suggestedWeeklyGoal.amount">
             Data-driven suggestion: to cover this month's Labor (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.laborMonthEstimate).toLocaleString() }}) + Opex (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.opexMonthEstimate).toLocaleString() }}) + loan principal due (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.principalDueThisMonth).toLocaleString() }}) at a {{ (weeklyTargets.suggestedWeeklyGoal.cogsPct * 100).toFixed(0) }}% COGS ratio ({{ weeklyTargets.suggestedWeeklyGoal.cogsPctSource === 'benchmark' ? 'from your COGS benchmark' : 'trailing actual' }}), you'd need at least <strong>${{ Math.round(weeklyTargets.suggestedWeeklyGoal.amount).toLocaleString() }}/week</strong> this month.

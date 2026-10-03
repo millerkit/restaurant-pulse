@@ -13,6 +13,8 @@
 //
 // Window choice: "everything since the move," not a rolling window — see
 // that same CLAUDE.md section for why.
+import type { ExcludedNight } from './core-revenue'
+
 export const NEW_LOCATION_START = '2026-06-20'
 
 export const WEEKDAYS = [
@@ -41,6 +43,7 @@ export type WeeklyRevenueTargets = {
   avgSpendPerCover: number | null
   sinceDate: string
   sampleOpenDays: number
+  excludedNights: ExcludedNight[] // unrepresentative nights left out (see excludeSpendOutliers)
   days: WeekdayTarget[] // Tue..Sun, in that order
   targetByDow: Map<number, WeekdayTarget> // 0=Sun..6=Sat — Monday (1) never populated
 }
@@ -68,15 +71,19 @@ export function computeWeeklyRevenueTargets(): WeeklyRevenueTargets {
   // night). The Monday check is belt-and-suspenders — a real Monday should
   // already fail the covers filter — kept explicit for clarity.
   type OpenDay = { date: string, dow: number, revenue: number, covers: number }
-  const openDays: OpenDay[] = []
+  const allOpenDays: OpenDay[] = []
   for (const [date, covers] of coversByDate) {
     if (covers < MIN_COVERS_FOR_OPEN_DAY) continue
     const revenue = coreRevenueByDate.get(date)
     if (revenue == null || revenue <= 0) continue
     const dow = new Date(`${date}T00:00:00Z`).getUTCDay()
     if (dow === 1) continue
-    openDays.push({ date, dow, revenue, covers })
+    allOpenDays.push({ date, dow, revenue, covers })
   }
+  // Leave out nights whose spend per cover is far from typical (an event/buyout posting
+  // revenue to a core account, or the reverse) so one such night can't skew a weekday's
+  // share or the blended spend — see excludeSpendOutliers in core-revenue.ts.
+  const { kept: openDays, excluded: excludedNights } = excludeSpendOutliers(allOpenDays)
 
   const weekdayAvg = WEEKDAYS.map((w) => {
     const days = openDays.filter(d => d.dow === w.dow)
@@ -111,6 +118,7 @@ export function computeWeeklyRevenueTargets(): WeeklyRevenueTargets {
     avgSpendPerCover,
     sinceDate: NEW_LOCATION_START,
     sampleOpenDays: openDays.length,
+    excludedNights,
     days,
     targetByDow: new Map(days.map(d => [d.dow, d]))
   }

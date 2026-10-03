@@ -3878,6 +3878,113 @@ once 2027 starts.
   real (very different) `saved`/`currentWeeklyAmount` figures, confirming
   the feature isn't hardcoded to either.
 
+## Labor role classes — 2026-10-02
+
+Prompted by a conversation about whether Urban Hearth's labor is top-heavy
+after adding a Floor Manager, Assistant to the GM, and (proposed) salaried Wine
+Director in place of cheaper tipped/hourly hours. The useful split isn't
+"revenue-producing vs. not" (cooks don't produce revenue either) but **how a
+role's cost behaves**: `labor_position_settings.role_class` is `direct`
+(scales with volume), `supervision` (sized to shifts/stations/staff, not
+covers — GM, Floor Manager, Sous Chef, Executive Chef), `overhead` (Business
+Manager, Assistant to the GM), or `growth` (fixed cost justified by a revenue
+bet — Wine Director), or NULL (unclassified; always NULL for `flat`/`tax`
+accounts). One class per role — a hybrid like the Executive Chef (cooks and
+supervises) gets whichever reason dominates; editable, same "first-pass,
+revise later" posture as `cost_behavior`/`is_owner_compensation`.
+
+- **Labor tab** ([`app/pages/budget/labor.vue`](app/pages/budget/labor.vue)):
+  a class selector on every wage role row (BOH/FOH role rows, the OT rows,
+  the Management Salaries table) and a **Labor by Role Class** summary card
+  under the modeled row — $/mo, % of labor, % of budgeted revenue per class,
+  Oct–Dec average, driven by live (unsaved) inputs like every other modeled
+  figure. Payroll taxes are allocated to classes pro rata by wages (exact —
+  taxes are a flat % of the same wage-subject total); employee benefits,
+  Additional Pay and the taxes on it stay in their own "Benefits & other" row.
+  The card headlines the **fixed layer** (supervision + overhead + growth) as %
+  of revenue. Neutral ink only — a taxonomy, not a status, so no status colors.
+- **Seeded** by `npm run db:add-labor-role-class` (adds the column, classifies
+  by `account_number`, only fills NULLs so it never clobbers UI edits;
+  idempotent). **Production needs this run by hand** (`fly ssh console`, same
+  manual-migration posture as every other schema change to an existing
+  volume) **before** `fly deploy`, or `/api/budget/labor-settings` will 500 on
+  the missing column — migrate first, then deploy.
+- Verified locally against synthetic unsaved inputs (hand-checked card math)
+  and an API round-trip (valid class saves, invalid class 400s). Local dev has
+  no modeled rates, so the card reads $0 until rates are entered.
+
+## Breakeven covers/night — 2026-10-02
+
+Built straight out of the role-class conversation above: once labor is split
+by cost behavior, "how many covers a night do we need" is just fixed cost ÷
+(nights × contribution per cover). A card on the Capacity Pace page
+([`app/components/BreakevenCard.vue`](app/components/BreakevenCard.vue),
+data from [`server/api/breakeven.get.ts`](server/api/breakeven.get.ts)),
+month selectable (current month through Dec).
+
+- **Four cumulative tiers**: (1) fixed labor — supervision/overhead/growth
+  roles, unclassified wage roles (treated as fixed, deliberately
+  conservative), Additional Pay, benefits, and payroll taxes pro rata;
+  (2) + kitchen crew — `direct`-class BOH hourly; (3) + fixed opex
+  (`cost_behavior='fixed'`) = the **P&L breakeven**; (4) + scheduled loan
+  principal from `loan_schedule` = the **cash breakeven** (principal is
+  invisible to QBO's P&L; interest is already inside fixed opex via 7020, so
+  it isn't added again). Costs come from the *saved* month budget
+  (`budget_targets`), so the card only moves when the Labor/Edit Budget tabs
+  are saved.
+- **FOH hourly is a variable cost, not a tier** — tipped FOH hours flex with
+  covers, so it's subtracted per cover at current volume. Contribution per
+  cover = spend × (1 − COGS% − variable opex%) − FOH per cover, with COGS%/
+  variable opex% from `category_benchmarks` (the app's own standards), not
+  recent actuals.
+- **Spend and volume are a trailing 8-week window of real data** (Toast
+  covers, core dine-in QBO revenue, same open-day filter as
+  `weekly-targets.ts`). The weekday table asks what each night needs to
+  carry an *equal share* of the selected tier at that weekday's own spend —
+  an intentionally simple framing (busy nights realistically carry more).
+- **Core dine-in only**: events/catering/retail margin lowers the real
+  covers needed and isn't modeled.
+- **Outlier nights are excluded, and listed** (2026-10-03, after the user saw
+  Tuesday's spend look off in production): two Tuesdays (Aug 25 at
+  $156/cover, Sep 29 at $145) posted far more core revenue than their Toast
+  covers explain, and alone lifted Tuesday's average from about $86 to $103.
+  **They're two different things** (confirmed with the user 2026-10-03):
+  Sep 29 was a Chef's Table buyout — 12 covers at roughly $234/cover, real
+  dine-in revenue that is simply unrepresentative of a normal night, not a
+  miscoding. Aug 25 was the **Chaîne dinner**, a partial buyout (the
+  restaurant bought out for the first few hours of service): 28 guests at
+  ~$232/guest ($167.28 prix fixe + $65 wine pairing = $6,503.84, plus a 20%
+  large-party service charge), real revenue and real covers. Two quirks
+  combined to make the night read $156/cover: Toast's guest count on that
+  4pm order was 1-2, not 28, and the order opened before the 5pm dinner-hour
+  cutoff, so its covers were dropped while its revenue stayed in core Food/
+  Wine. The remaining 85 table-service guests ran $80.35/guest, a normal
+  Tuesday. **Not a miscoding to fix**: the Revenue tab's buyout planning
+  deliberately folds buyout revenue into Restaurant Sales/Food/Beverage (see
+  `revenue_buyout_plan` in schema.sql), so actuals landing in core accounts
+  match the budget; recoding to Event Sales (4100s) would split actuals from
+  plan. (An earlier suggestion here to ring events under a distinct Toast
+  category was retracted for that reason.) The outlier filter is the intended
+  handling. A pre-5pm-revenue subtraction (new Toast column + backfill) was
+  offered and deliberately left undone.
+  Checked against the real production distribution first: the other nights
+  ran $67-$120/cover, so a band of 0.6x-1.4x the window's median sits
+  inside a clean gap. The rule lives in `excludeSpendOutliers()`
+  ([`server/utils/core-revenue.ts`](server/utils/core-revenue.ts)) and
+  returns the excluded nights, which are named to the user, never dropped
+  silently. **Applied the same day to three consumers**: this card, and
+  `weekly-targets.ts` (so the Dashboard's This Week's Targets and the Revenue
+  Calendar's weekday goals — on production the same two nights are the only
+  exclusions since the move, shifting Tuesday's share from 14.7% to 13.6%
+  and blended spend from $90.6 to $89.4). The Dashboard's spend note lists
+  excluded nights. **Not applied** to `server/api/capacity/history.get.ts`
+  (the Historical tab / "Set by History"), which has its own open-day
+  filter. Local dev's synthetic opening-week data trips the filter heavily
+  (11 exclusions) — production does not; judge it there.
+- No schema change and no migration; depends on role classes (see above), so
+  run `db:add-labor-role-class` in production first or every direct/fixed
+  split reads as unclassified-fixed.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -4150,6 +4257,7 @@ was deployed:
 - [`scripts/import-budget-xlsx.mjs`](scripts/import-budget-xlsx.mjs) — one-time seed of accounts + budget from a real QBO budget export
 - `data/qbo-budget-template.xlsx` — sanitized export template (checked in; the real xlsx it came from is not)
 - [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue) — Capacity Pace view (route `/capacity`)
+- [`app/components/BreakevenCard.vue`](app/components/BreakevenCard.vue) / [`server/api/breakeven.get.ts`](server/api/breakeven.get.ts) — breakeven covers/night card on Capacity Pace (see "Breakeven covers/night" above)
 - [`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue) — editable capacity/turns/per-cover-revenue + monthly fill %/holiday closures (route `/capacity/edit`)
 - [`server/api/capacity.get.ts`](server/api/capacity.get.ts) — Capacity tab's projection-vs-actual data route
 - [`server/api/capacity/settings.get.ts`](server/api/capacity/settings.get.ts) / [`settings.post.ts`](server/api/capacity/settings.post.ts) — load/save capacity assumptions

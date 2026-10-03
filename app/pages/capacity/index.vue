@@ -716,6 +716,9 @@ async function save() {
             </div>
           </section>
 
+          <!-- Breakeven: covers/night needed to carry each layer of fixed cost -->
+          <BreakevenCard />
+
           <!-- Month by month, one at a time -->
           <section>
             <div class="section-head">
