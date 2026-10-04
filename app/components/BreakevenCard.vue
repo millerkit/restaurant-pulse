@@ -44,6 +44,20 @@ function onMonthChange(e: Event) {
 }
 
 const tier = computed(() => data.value?.tiers.find(t => t.key === selectedTier.value) ?? null)
+
+// Weekly totals row for the weekday table: covers sum across the operating nights, spend is the
+// cover-weighted average (total revenue / total covers), and the delta reuses the same status chip.
+const weekTotals = computed(() => {
+  const d = data.value
+  if (!d) return null
+  const withCovers = d.weekdays.filter(w => w.avgCovers != null)
+  if (withCovers.length === 0) return null
+  const covers = withCovers.reduce((s, w) => s + w.avgCovers!, 0)
+  const revenue = withCovers.reduce((s, w) => s + w.avgCovers! * (w.avgSpend ?? 0), 0)
+  const needs = d.weekdays.map(w => w.coversNeeded[selectedTier.value] ?? null)
+  const needed = needs.every(n => n != null) ? needs.reduce((s, n) => s + n!, 0) : null
+  return { covers, spend: covers > 0 ? revenue / covers : null, needed }
+})
 const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString()}`
 const fmtCovers = (n: number | null) => n == null ? '—' : String(Math.round(n))
 
@@ -148,6 +162,18 @@ const sensitivity = computed(() => {
               </td>
             </tr>
           </tbody>
+          <tfoot v-if="weekTotals">
+            <tr>
+              <td><strong>Per week</strong><span class="be-sub">total across operating nights</span></td>
+              <td class="num"><strong>{{ fmtCovers(weekTotals.covers) }}</strong></td>
+              <td class="num"><strong>{{ weekTotals.spend != null ? fmtMoney(weekTotals.spend) : '—' }}</strong></td>
+              <td class="num"><strong>{{ fmtCovers(weekTotals.needed) }}</strong></td>
+              <td class="num">
+                <span v-if="status(weekTotals.covers, weekTotals.needed)" :class="['chip', status(weekTotals.covers, weekTotals.needed)!.cls]">{{ status(weekTotals.covers, weekTotals.needed)!.text }}</span>
+                <span v-else>—</span>
+              </td>
+            </tr>
+          </tfoot>
         </table>
 
         <div class="be-foot">
@@ -179,6 +205,7 @@ const sensitivity = computed(() => {
 .be-table thead td { font-size: 11px; color: var(--ink-3); padding: 4px 8px; }
 .be-table tbody td { padding: 7px 8px; border-top: 1px solid var(--hair); vertical-align: middle; }
 .be-table .num { text-align: right; white-space: nowrap; }
+.be-table tfoot td { padding: 8px 8px 7px; border-top: 2px solid var(--hair); vertical-align: middle; }
 .be-table tbody tr.selected td { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 .be-table tbody tr { cursor: default; }
 .be-table tbody tr:has(.tier-pick) { cursor: pointer; }
