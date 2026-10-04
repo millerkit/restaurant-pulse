@@ -4040,8 +4040,9 @@ month selectable (current month through Dec).
   just per category) is deliberately deferred rather than built alongside
   the category-level version.
 - A UI to toggle `accounts.is_owner_compensation` (currently set by hand via
-  SQL on the two owner accounts) and to split *actual* labor by owner-comp
-  the same way the budget side already is (needs real per-account actuals)
+  SQL on the two owner accounts). Actual labor is now split by owner-comp
+  too (`ownerCompLabor` in `server/api/budget/actuals.get.ts`, shown on
+  Budget Pace's Labor card) — only the toggle UI remains.
 - Buyout revenue modeling on the Capacity Pace tab — bookmarked at the
   user's own request 2026-08-07 until a guaranteed-minimum figure exists to
   model against; see the Capacity tab section above.

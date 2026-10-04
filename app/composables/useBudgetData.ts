@@ -313,7 +313,7 @@ export function currentAsOfDay(): number {
   return now.getFullYear() === YEAR ? now.getDate() : daysInMonth(YEAR, 12)
 }
 
-export type MonthActuals = { month: number, hasData: boolean, totals: Record<Category, number> }
+export type MonthActuals = { month: number, hasData: boolean, totals: Record<Category, number>, ownerCompLabor: number }
 
 // Real per-month actuals from daily_line_items, independent of
 // budget_targets — see actuals.get.ts. Empty (hasData: false for every

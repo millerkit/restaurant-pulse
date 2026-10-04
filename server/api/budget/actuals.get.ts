@@ -25,9 +25,20 @@ export default defineEventHandler((event) => {
     GROUP BY month, category
   `).all(String(year)) as { month: number, category: string, total: number }[]
 
+  // Labor actuals posted to owner-operator accounts (is_owner_compensation),
+  // so the Budget Pace page can show labor % with and without owner pay.
+  const ownerRows = db.prepare(`
+    SELECT CAST(strftime('%m', dli.date) AS INTEGER) AS month, SUM(dli.amount) AS total
+    FROM daily_line_items dli
+    JOIN accounts a ON a.id = dli.account_id
+    WHERE strftime('%Y', dli.date) = ? AND a.category = 'labor' AND a.is_owner_compensation = 1
+    GROUP BY month
+  `).all(String(year)) as { month: number, total: number }[]
+
   const months = Array.from({ length: 12 }, (_, i) => ({
     month: i + 1,
     hasData: false,
+    ownerCompLabor: 0,
     totals: { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 } as Record<string, number>
   }))
   for (const r of rows) {
@@ -35,6 +46,8 @@ export default defineEventHandler((event) => {
     m.hasData = true
     m.totals[r.category] = r.total
   }
+
+  for (const r of ownerRows) months[r.month - 1].ownerCompLabor = r.total
 
   return { year, months }
 })

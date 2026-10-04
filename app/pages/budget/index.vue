@@ -40,10 +40,9 @@ const yearBudget = computed(() => ({
 // schema.sql) carve-out: real cash cost, so it stays in total labor $ and
 // net income, but a hired-staff industry benchmark was never built
 // assuming the owners are on payroll, so we show labor % both ways rather
-// than picking one silently. Only the budget side of this is real — actual
-// labor is still a single lump real figure (daily_line_items has real
-// per-account data now, but nothing here breaks it out by account yet), so
-// there's no way to split actual labor by owner-comp vs. not yet.
+// than picking one silently. Both sides are split by account: budget from
+// budget_targets, actual from daily_line_items (actuals.get.ts's
+// ownerCompLabor).
 function ownerCompensationTotal(monthNumbers: number[]) {
   let total = 0
   for (const m of monthNumbers) {
@@ -63,13 +62,20 @@ const ownerCompAccountNames = computed(() => {
   if (!data) return []
   return data.accounts.filter(a => a.category === 'labor' && a.isOwnerCompensation).map(a => a.name)
 })
+function ownerCompActualsFor(monthNumbers: number[]) {
+  return monthNumbers.reduce((sum, m) => sum + (monthlyActuals.value[m - 1]?.ownerCompLabor ?? 0), 0)
+}
+const periodOwnerCompActual = computed(() => ownerCompActualsFor(
+  selectedPeriod.value === 'month' ? [asOfMonth] : Array.from({ length: 12 }, (_, i) => i + 1)
+))
 const laborExOwnerComp = computed(() => {
   const budget = periodBudget.value.totals.labor
   const ownerComp = periodOwnerComp.value
   if (!budget || ownerComp <= 0) return null
   const budgetExOwnerComp = budget - ownerComp
-  const actualPctExOwnerComp = budgetExOwnerComp > 0 ? (periodActuals.value.labor / budgetExOwnerComp) * 100 : null
-  return { ownerComp, budgetExOwnerComp, actualPctExOwnerComp }
+  const actualExOwnerComp = periodActuals.value.labor - periodOwnerCompActual.value
+  const actualPctExOwnerComp = budgetExOwnerComp > 0 ? (actualExOwnerComp / budgetExOwnerComp) * 100 : null
+  return { ownerComp, budgetExOwnerComp, actualExOwnerComp, actualPctExOwnerComp }
 })
 
 const selectedPeriod = ref<'month' | 'year'>('month')
@@ -445,8 +451,7 @@ async function submitThresholds() {
               </div>
               <div v-if="card.category === 'labor' && laborExOwnerComp" class="section-note">
                 Includes ${{ Math.round(laborExOwnerComp.ownerComp).toLocaleString() }} owner compensation ({{ ownerCompAccountNames.join(', ') }}).
-                Excluding it: ${{ Math.round(laborExOwnerComp.budgetExOwnerComp).toLocaleString() }} budget<template v-if="laborExOwnerComp.actualPctExOwnerComp !== null">, {{ laborExOwnerComp.actualPctExOwnerComp.toFixed(1) }}% of that pace</template>.
-                Actual can't be split by account yet — see "Not yet done" in CLAUDE.md.
+                Excluding it: ${{ Math.round(laborExOwnerComp.actualExOwnerComp).toLocaleString() }} actual vs. ${{ Math.round(laborExOwnerComp.budgetExOwnerComp).toLocaleString() }} budget<template v-if="laborExOwnerComp.actualPctExOwnerComp !== null"> ({{ laborExOwnerComp.actualPctExOwnerComp.toFixed(1) }}% of budget)</template>.
               </div>
             </template>
           </div>
