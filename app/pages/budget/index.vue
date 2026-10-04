@@ -195,7 +195,18 @@ const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const)
   return {
     category: cat, label: CATEGORY_LABEL[cat], noBudget: false, actual, budget, monthsBudgeted, unbudgetedPast,
     fillPct: Math.min(100, actualPct), expectedPct, status,
-    paceLabel: `${actualPct.toFixed(1)}% of ${selectedPeriod.value === 'month' ? 'month' : 'year'} budget`,
+    // Dollar gap vs. today's target (the tick mark) rather than a % of the
+    // whole period's budget, which is hard to judge without knowing exactly
+    // how far through the period we are.
+    paceLabel: (() => {
+      const expected = expectedAmountFor(cat, budget)
+      const gap = actual - expected
+      if (Math.abs(gap) < 1) return 'On target'
+      const amt = `$${Math.abs(Math.round(gap)).toLocaleString()}`
+      const pct = expected > 0 ? `${Math.abs((gap / expected) * 100).toFixed(1)}% ` : ''
+      const word = cat === 'revenue' ? (gap > 0 ? 'ahead of' : 'behind') : (gap > 0 ? 'over' : 'under')
+      return `${pct}${word} target (${gap > 0 ? '+' : '−'}${amt})`
+    })(),
     projection
   }
 }))
@@ -431,11 +442,6 @@ async function submitThresholds() {
               <div v-if="card.projection" class="section-note projection-note">
                 Projected month-end: <strong>${{ Math.round(card.projection.projected).toLocaleString() }}</strong>
                 <span :class="['chip', card.projection.projectedStatus]">{{ card.projection.projectedStatus === 'good' ? '✓' : (card.projection.delta >= 0 ? '▲' : '▼') }} {{ card.projection.delta >= 0 ? '+' : '−' }}${{ Math.abs(Math.round(card.projection.delta)).toLocaleString() }} vs budget</span>
-              </div>
-              <div v-if="selectedPeriod === 'year' && card.monthsBudgeted < 12" class="section-note">
-                Only {{ card.monthsBudgeted }} of 12 months budgeted so far
-                <template v-if="card.unbudgetedPast > 0">— {{ card.unbudgetedPast }} already-elapsed month{{ card.unbudgetedPast === 1 ? '' : 's' }} above use{{ card.unbudgetedPast === 1 ? 's' : '' }} actual revenue/spend instead of a budget</template>
-                — edit remaining months on the Edit Budget tab
               </div>
               <div v-if="card.category === 'labor' && laborExOwnerComp" class="section-note">
                 Includes ${{ Math.round(laborExOwnerComp.ownerComp).toLocaleString() }} owner compensation ({{ ownerCompAccountNames.join(', ') }}).
