@@ -216,10 +216,10 @@ table.pl-table {
    the benchmark % beneath it (matching the Edit Budget page's colored
    variance figures) — never color-alone since the icon on .pct right below
    already satisfies that rule for this row. */
-.pl-table .amount.good { color: var(--good); }
-.pl-table .amount.warning { color: var(--warning); }
-.pl-table .amount.serious { color: var(--serious); }
-.pl-table .amount.critical { color: var(--critical); }
+.pl-table .amount.good { color: var(--good-text); }
+.pl-table .amount.warning { color: var(--warning-text); }
+.pl-table .amount.serious { color: var(--serious-text); }
+.pl-table .amount.critical { color: var(--critical-text); }
 .pl-table .pct { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
 /* Never color-alone: a checkmark marks "within benchmark", a triangle marks
    any degree of "above benchmark" — the good/not-good shape distinction
@@ -229,12 +229,12 @@ table.pl-table {
 .pl-table .pct.warning::before,
 .pl-table .pct.serious::before,
 .pl-table .pct.critical::before { content: "▲ "; }
-.pl-table .pct.good { color: var(--good); }
-.pl-table .pct.warning { color: var(--warning); }
-.pl-table .pct.serious { color: var(--serious); }
-.pl-table .pct.critical { color: var(--critical); }
-.pl-table .net-figure.good { color: var(--good); }
-.pl-table .net-figure.critical { color: var(--critical); }
+.pl-table .pct.good { color: var(--good-text); }
+.pl-table .pct.warning { color: var(--warning-text); }
+.pl-table .pct.serious { color: var(--serious-text); }
+.pl-table .pct.critical { color: var(--critical-text); }
+.pl-table .net-figure.good { color: var(--good-text); }
+.pl-table .net-figure.critical { color: var(--critical-text); }
 .pl-table .net-figure { font-weight: 700; font-size: 14px; }
 
 .drill-card {

@@ -150,10 +150,10 @@ async function syncNow() {
   border-radius: 8px;
   border: 1px solid var(--hair);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--accent-text);
   cursor: pointer;
 }
 .mini-btn:disabled { opacity: 0.5; cursor: default; }
 .cooldown-note { font-size: 11px; color: var(--ink-3); }
-.cooldown-note.error { color: var(--critical); }
+.cooldown-note.error { color: var(--critical-text); }
 </style>

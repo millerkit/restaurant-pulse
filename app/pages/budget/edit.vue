@@ -1632,7 +1632,7 @@ function exportForQuickBooks() {
   color: var(--ink-3);
   cursor: pointer;
 }
-.filter-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+.filter-tab.active { background: var(--accent-wash); color: var(--accent-text); border-color: transparent; }
 .filter-tab:disabled { opacity: 0.4; cursor: default; }
 
 /* ---------- live pace preview ---------- */
@@ -1646,13 +1646,13 @@ function exportForQuickBooks() {
   margin-bottom: 14px;
 }
 .live-pace-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; }
-.chip.accent { background: var(--surface); color: var(--accent); }
+.chip.accent { background: var(--surface); color: var(--accent-text); }
 .live-pace-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; }
 .live-pace-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
 .live-pace-item .mini-note { font-size: 10.5px; font-weight: 500; color: var(--ink-3); }
 .live-pace-net { font-size: 12.5px; color: var(--ink-2); }
-.live-pace-net strong.good { color: var(--good); }
-.live-pace-net strong.critical { color: var(--critical); }
+.live-pace-net strong.good { color: var(--good-text); }
+.live-pace-net strong.critical { color: var(--critical-text); }
 
 /* ---------- edit table ---------- */
 .pl-table-card {
@@ -1692,7 +1692,7 @@ function exportForQuickBooks() {
   position: relative;
   top: 1px;
 }
-.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
+.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.8; }
 .month-tab.annual-total-tab { margin-left: 8px; }
 .month-tab.active {
   background: var(--surface);
@@ -1745,7 +1745,7 @@ table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; fo
   display: block;
   font-size: 10.5px;
   font-weight: 500;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 .labor-managed-note:hover { text-decoration: underline; }
@@ -1755,10 +1755,10 @@ table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; fo
    in parens) rather than a separate column — see varianceIcon/varianceClass/
    varianceDeltaLabel above. Specificity matches .amount-input.readonly.muted
    above so these colors actually win over the base readonly color. */
-.amount-input.readonly.variance-text.v-good { color: var(--good); }
-.amount-input.readonly.variance-text.v-warning { color: var(--warning); }
-.amount-input.readonly.variance-text.v-serious { color: var(--serious); }
-.amount-input.readonly.variance-text.v-critical { color: var(--critical); }
+.amount-input.readonly.variance-text.v-good { color: var(--good-text); }
+.amount-input.readonly.variance-text.v-warning { color: var(--warning-text); }
+.amount-input.readonly.variance-text.v-serious { color: var(--serious-text); }
+.amount-input.readonly.variance-text.v-critical { color: var(--critical-text); }
 .amount-input.readonly.variance-text {
   display: inline-flex;
   flex-direction: column;
@@ -1805,8 +1805,8 @@ table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; fo
 }
 .edit-table tr.net-income-row th { font-weight: 700; color: var(--ink); }
 .edit-table tr.net-income-row .amount-input.readonly { font-weight: 700; }
-.ni-good { color: var(--good); }
-.ni-critical { color: var(--critical); }
+.ni-good { color: var(--good-text); }
+.ni-critical { color: var(--critical-text); }
 .mini-btn {
   font-size: 11px;
   font-weight: 700;
@@ -1814,7 +1814,7 @@ table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; fo
   border-radius: 8px;
   border: 1px solid var(--hair);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--accent-text);
   cursor: pointer;
 }
 .mini-btn:disabled { opacity: 0.5; cursor: default; }

@@ -617,7 +617,7 @@ async function submitThresholds() {
   cursor: pointer;
   user-select: none;
 }
-.period-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+.period-tab.active { background: var(--accent-wash); color: var(--accent-text); border-color: transparent; }
 
 /* ---------- pace meters / budget runway bars (copied from index.vue) ---------- */
 .meter-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
@@ -670,8 +670,8 @@ async function submitThresholds() {
 .rank-row { display: grid; grid-template-columns: 150px 1fr 130px; align-items: center; gap: 12px; }
 .rank-row .label { font-size: 13px; font-weight: 600; }
 .rank-row .label .flag { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
-.rank-row .label .flag.serious { color: var(--serious); }
-.rank-row .label .flag.good { color: var(--good); }
+.rank-row .label .flag.serious { color: var(--serious-text); }
+.rank-row .label .flag.good { color: var(--good-text); }
 .rank-row .label .flag.neutral { color: var(--ink-3); font-weight: 500; }
 .rank-track { position: relative; height: 9px; border-radius: 5px; background: var(--surface-alt); }
 .rank-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; }
@@ -717,7 +717,7 @@ async function submitThresholds() {
   align-self: flex-start;
   font-size: 11.5px;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
   background: none;
   border: none;
   padding: 0;
@@ -786,9 +786,9 @@ async function submitThresholds() {
 }
 .anomaly-tile .amount-caption { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-3); margin-top: 2px; margin-bottom: -3px; }
 .anomaly-tile .amount { font-size: 12px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.delta-chip.up, .delta-chip.serious { color: var(--serious); background: var(--serious-wash); }
-.delta-chip.down, .delta-chip.good { color: var(--good); background: var(--good-wash); }
-.delta-chip.critical { color: var(--critical); background: var(--critical-wash); }
+.delta-chip.up, .delta-chip.serious { color: var(--serious-text); background: var(--serious-wash); }
+.delta-chip.down, .delta-chip.good { color: var(--good-text); background: var(--good-wash); }
+.delta-chip.critical { color: var(--critical-text); background: var(--critical-wash); }
 
 @media (max-width: 760px) {
   .meter-row { grid-template-columns: 1fr; }

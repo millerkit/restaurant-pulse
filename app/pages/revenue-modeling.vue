@@ -588,7 +588,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
 .link-btn {
   font: inherit;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   background: none;
   border: none;
   padding: 0;
@@ -638,7 +638,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 10px; padding-bottom: 10px; }
 
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.derived.sim { color: var(--accent); }
+.derived.sim { color: var(--accent-text); }
 /* Light gray backing for the three Sim. columns (Covers/Night, Per-Cover $,
    Nightly Revenue) on the per-area table, at the user's request, so they
    read as visually distinct from the current-value columns they sit next
@@ -658,7 +658,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .sim-table thead th.sim { background-color: color-mix(in srgb, #3e5c76 88%, white 12%); }
 .subtotal-row th, .subtotal-row td { border-top: 1px dashed var(--hair); font-weight: 700; }
 .subtotal-row .derived { color: var(--ink); }
-.subtotal-row .derived.sim { color: var(--accent); }
+.subtotal-row .derived.sim { color: var(--accent-text); }
 
 .pct-cell { display: inline-flex; align-items: center; gap: 3px; }
 

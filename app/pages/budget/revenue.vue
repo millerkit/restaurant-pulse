@@ -1099,7 +1099,7 @@ async function saveRevenue() {
   color: var(--ink-3);
   cursor: pointer;
 }
-.filter-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+.filter-tab.active { background: var(--accent-wash); color: var(--accent-text); border-color: transparent; }
 
 /* ---------- live pace preview ---------- */
 .live-pace-card {
@@ -1112,7 +1112,7 @@ async function saveRevenue() {
   margin-bottom: 14px;
 }
 .live-pace-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; }
-.chip.accent { background: var(--surface); color: var(--accent); }
+.chip.accent { background: var(--surface); color: var(--accent-text); }
 .chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
 .live-pace-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; }
 .live-pace-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
@@ -1149,7 +1149,7 @@ async function saveRevenue() {
   position: relative;
   top: 1px;
 }
-.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.55; }
+.month-tab.unbudgeted { color: var(--ink-2); opacity: 0.8; }
 .month-tab.annual-total-tab { margin-left: 8px; }
 .month-tab.active {
   background: var(--surface);
@@ -1205,10 +1205,10 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .amount-input.readonly.muted { color: var(--ink-3); font-weight: 500; }
 
-.amount-input.readonly.variance-text.v-good { color: var(--good); }
-.amount-input.readonly.variance-text.v-warning { color: var(--warning); }
-.amount-input.readonly.variance-text.v-serious { color: var(--serious); }
-.amount-input.readonly.variance-text.v-critical { color: var(--critical); }
+.amount-input.readonly.variance-text.v-good { color: var(--good-text); }
+.amount-input.readonly.variance-text.v-warning { color: var(--warning-text); }
+.amount-input.readonly.variance-text.v-serious { color: var(--serious-text); }
+.amount-input.readonly.variance-text.v-critical { color: var(--critical-text); }
 .amount-input.readonly.variance-text {
   display: inline-flex;
   flex-direction: column;
@@ -1289,7 +1289,7 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   border-radius: 8px;
   border: 1px solid var(--hair);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--accent-text);
   cursor: pointer;
 }
 .mini-btn:disabled { opacity: 0.5; cursor: default; }

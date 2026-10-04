@@ -1018,11 +1018,11 @@ async function save() {
   color: var(--ink-3);
   cursor: pointer;
 }
-.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn.active { color: var(--accent-text); border-bottom-color: var(--accent); }
 .link-btn {
   font: inherit;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   background: none;
   border: none;
   padding: 0;
@@ -1074,7 +1074,7 @@ async function save() {
   cursor: pointer;
   white-space: nowrap;
 }
-.month-tab.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+.month-tab.active { background: var(--accent-wash); color: var(--accent-text); border-color: transparent; }
 
 /* ---------- per-area breakdown (below the month detail card) ---------- */
 .area-section-head {
@@ -1186,10 +1186,10 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
    section in CLAUDE.md). Kept local rather than shared: the two pages'
    surrounding cell markup already differs enough that sharing would add
    more indirection than it saves. */
-.variance-text.v-good { color: var(--good); }
-.variance-text.v-warning { color: var(--warning); }
-.variance-text.v-serious { color: var(--serious); }
-.variance-text.v-critical { color: var(--critical); }
+.variance-text.v-good { color: var(--good-text); }
+.variance-text.v-warning { color: var(--warning-text); }
+.variance-text.v-serious { color: var(--serious-text); }
+.variance-text.v-critical { color: var(--critical-text); }
 .variance-text { display: inline-flex; flex-direction: column; align-items: center; font-weight: 600; }
 .variance-main { white-space: nowrap; }
 .variance-icon { display: inline-block; }

@@ -526,7 +526,7 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cf-table tbody tr:last-child { border-bottom: none; }
 .cf-table tbody tr.total th, .cf-table tbody tr.total td { border-top: 1px solid var(--hair); font-weight: 700; }
 .cf-table.upcoming td, .cf-table.upcoming th { font-variant-numeric: tabular-nums; }
-.cf-table .flag { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700; color: var(--serious); background: var(--serious-wash); border-radius: 100px; padding: 2px 7px; }
+.cf-table .flag { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700; color: var(--serious-text); background: var(--serious-wash); border-radius: 100px; padding: 2px 7px; }
 
 .drill-card {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
@@ -545,10 +545,10 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .catchup-projection { border-top: 1px solid var(--hair); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .catchup-projection .section-note { line-height: 1.5; }
 .transfer-history { border-top: 1px dashed var(--hair); padding-top: 8px; }
-.toggle-link { font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; user-select: none; }
+.toggle-link { font-size: 12px; font-weight: 600; color: var(--accent-text); cursor: pointer; user-select: none; }
 .cf-table.transfers { margin-top: 8px; }
 .cf-table.transfers th, .cf-table.transfers td { padding: 6px 10px; font-size: 12px; white-space: normal; }
-.cf-table.transfers td.negative { color: var(--critical); }
+.cf-table.transfers td.negative { color: var(--critical-text); }
 .cf-table.transfers td.note { color: var(--ink-3); }
 
 .transfer-form {

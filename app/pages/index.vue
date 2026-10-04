@@ -473,7 +473,7 @@ function meterStatusLabel(status: string | null) {
   text-transform: uppercase;
   color: var(--ink-3);
 }
-.compare-card.anchor .date-label { color: var(--accent); }
+.compare-card.anchor .date-label { color: var(--accent-text); }
 .compare-card .amount {
   font-size: 24px;
   font-weight: 700;
@@ -487,8 +487,8 @@ function meterStatusLabel(status: string | null) {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.delta.up { color: var(--good); }
-.delta.down { color: var(--critical); }
+.delta.up { color: var(--good-text); }
+.delta.down { color: var(--critical-text); }
 .compare-card .vs-label { font-size: 12px; color: var(--ink-3); }
 
 /* ---------- guest-economics row (sales per labor hour) ---------- */
@@ -518,7 +518,7 @@ function meterStatusLabel(status: string | null) {
   flex-direction: column;
   gap: 6px;
 }
-.day-card.upcoming { opacity: 0.7; }
+.day-card.upcoming { opacity: 0.85; }
 .day-card .day-label {
   font-size: 11px;
   font-weight: 700;

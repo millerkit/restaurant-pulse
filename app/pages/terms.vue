@@ -77,6 +77,6 @@ p {
   margin: 0 0 12px;
 }
 a {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 </style>

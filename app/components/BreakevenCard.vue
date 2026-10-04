@@ -214,7 +214,7 @@ const sensitivity = computed(() => {
 .be-sub { display: block; font-size: 10.5px; color: var(--ink-3); font-weight: 400; margin-top: 1px; }
 .be-sub.inline { display: inline; margin: 0; font-size: 11px; }
 .be-basis { font-size: 12px; color: var(--ink-2); }
-.be-basis.warn { color: var(--serious); }
+.be-basis.warn { color: var(--serious-text); }
 .be-weekday-head { font-size: 12px; font-weight: 700; color: var(--ink-2); margin-top: 6px; }
 .be-foot { font-size: 11px; color: var(--ink-3); }
 </style>

@@ -1017,10 +1017,10 @@ async function save() {
 .cell-hint { font-size: 10.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; white-space: nowrap; }
 /* Trend indicator (▲ N% / ▼ N% / ✓) sits right after the "trailing" hint text. */
 .trend-col { width: 64px; text-align: left; white-space: nowrap; padding-left: 4px; }
-.trend { font-weight: 700; color: var(--good); }
-.trend.over { color: var(--critical); }
-strong.trend-num.ok { color: var(--good); }
-strong.trend-num.over { color: var(--critical); }
+.trend { font-weight: 700; color: var(--good-text); }
+.trend.over { color: var(--critical-text); }
+strong.trend-num.ok { color: var(--good-text); }
+strong.trend-num.over { color: var(--critical-text); }
 
 .name-input {
   font-size: 12.5px; border: 1px solid var(--hair); border-radius: 5px; padding: 4px 6px;
@@ -1077,19 +1077,19 @@ td.num-inset { padding-right: 40px; }
 .remove-slot {
   font-size: 14px; color: var(--ink-3); background: none; border: none; cursor: pointer;
 }
-.remove-slot:hover { color: var(--critical); }
-.add-person { font-size: 11px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; }
+.remove-slot:hover { color: var(--critical-text); }
+.add-person { font-size: 11px; color: var(--accent-text); background: none; border: none; cursor: pointer; padding: 0; }
 
 .hide-toggle {
   font-size: 10.5px; color: var(--ink-3); background: none; border: none;
   cursor: pointer; text-decoration: underline; white-space: nowrap;
 }
-.hide-toggle:hover { color: var(--accent); }
+.hide-toggle:hover { color: var(--accent-text); }
 .hidden-tag {
   margin-left: 6px; font-size: 10px; font-weight: 500; color: var(--ink-3);
   background: var(--surface-alt); border-radius: 4px; padding: 1px 5px;
 }
-.is-hidden-row { opacity: 0.55; }
+.is-hidden-row { opacity: 0.75; }
 .hidden-toggle-row { margin: -8px 0 18px; }
 
 .seasonality-panel { padding: 12px 16px; margin-bottom: 22px; gap: 4px; }

@@ -478,7 +478,7 @@ function refreshBoth() {
 }
 .period-tab.active {
   background: var(--accent-wash);
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: transparent;
 }
 
@@ -528,7 +528,7 @@ function refreshBoth() {
   line-height: 1.5;
 }
 .drill-card .callout.callout-severe {
-  color: var(--shortfall-deep);
+  color: var(--ink);
   background: color-mix(in srgb, var(--shortfall-deep) 16%, var(--surface-alt));
   font-weight: 700;
 }
@@ -566,7 +566,7 @@ function refreshBoth() {
 }
 .calendar-cell.blank { background: transparent; }
 .calendar-cell.no-data { background: transparent; border: 1px dashed var(--hair); }
-.calendar-cell.future { opacity: 0.3; background: transparent; border: 1px dashed var(--hair); }
+.calendar-cell.future { opacity: 0.6; background: transparent; border: 1px dashed var(--hair); }
 .calendar-cell .day-num { font-size: 11px; font-weight: 700; color: var(--ink-3); }
 .calendar-cell .cell-delta { font-size: 10.5px; font-weight: 800; }
 .calendar-cell .cell-amount { font-size: 11px; font-weight: 700; margin-top: auto; font-variant-numeric: tabular-nums; }
@@ -576,11 +576,14 @@ function refreshBoth() {
 .calendar-cell.critical { background: color-mix(in srgb, var(--shortfall-deep) 45%, var(--surface-alt)); }
 .calendar-cell.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .calendar-cell.good .cell-delta,
-.calendar-cell.good .day-num { color: var(--good); }
+.calendar-cell.good .day-num,
+.calendar-cell.good .cell-amount,
 .calendar-cell.bad .cell-delta,
-.calendar-cell.bad .day-num { color: var(--shortfall); }
+.calendar-cell.bad .day-num,
+.calendar-cell.bad .cell-amount,
 .calendar-cell.critical .cell-delta,
-.calendar-cell.critical .day-num { color: var(--shortfall-deep); }
+.calendar-cell.critical .day-num,
+.calendar-cell.critical .cell-amount { color: var(--ink); }
 .calendar-cell.severe .cell-delta,
 .calendar-cell.severe .day-num { color: #fff; }
 
@@ -598,7 +601,7 @@ function refreshBoth() {
 .calendar-cell.mini.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .mini-day-num { font-size: 9px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); }
 .calendar-cell.mini.good .mini-day-num,
-.calendar-cell.mini.bad .mini-day-num,
+.calendar-cell.mini.bad .mini-day-num { color: #0b0b0b; text-shadow: none; }
 .calendar-cell.mini.critical .mini-day-num,
 .calendar-cell.mini.severe .mini-day-num { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); }
 
@@ -611,9 +614,9 @@ function refreshBoth() {
   background: var(--surface-alt);
   color: var(--ink-3);
 }
-.legend-chip.good { color: var(--good); background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
-.legend-chip.bad { color: var(--shortfall); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
-.legend-chip.critical { color: var(--shortfall-deep); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
+.legend-chip.good { color: var(--ink); background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
+.legend-chip.bad { color: var(--ink); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
+.legend-chip.critical { color: var(--ink); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
 .legend-chip.severe { color: #fff; background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
 
@@ -641,6 +644,6 @@ function refreshBoth() {
 .hover-tip .tip-value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); }
 .hover-tip .tip-label.strong,
 .hover-tip .tip-value.strong { font-weight: 800; font-size: 12px; }
-.hover-tip .tip-value.good { color: var(--good); }
-.hover-tip .tip-value.bad { color: var(--shortfall); }
+.hover-tip .tip-value.good { color: var(--good-text); }
+.hover-tip .tip-value.bad { color: var(--shortfall-text); }
 </style>
