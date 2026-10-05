@@ -821,12 +821,29 @@ const COGS_TRAILING_WINDOW = 3
 // degraded to whatever earlier months happened to have budget rows — in
 // production this meant Aug–Dec's COGS budgets were effectively built from
 // July alone.
+//
+// Revised 2026-10-05 after Aug/Sep actuals showed three ways this window
+// misled the recompute (see CLAUDE.md, "Oct–Dec 2026 budget recalibration"):
+//  1. Only CLOSED months qualify now — never a still-future month's budget.
+//     The old "has budget rows" rule let Nov's window average Oct's *budgeted*
+//     %, so each recompute fed its own output into the next month's average
+//     and drifted (Nov/Dec food cost crept up ~2pts).
+//  2. Months before COGS_BASELINE_START_MONTH are excluded. COGS here is
+//     purchase-based (no inventory accounting), and the new location's opening
+//     pantry/cellar stock-up (June purchases, 37% of food sales) is consumed in
+//     July (15.6%), so any window containing June/July understates steady state.
+//  3. Catering/event-heavy months stay in the average but are flagged — see
+//     cogsTrailingMixedMonths below.
+// First fully "steady" month at the new location (opened 2026-06-20). Months
+// before this are excluded from the COGS trailing average. Revisit (or make a
+// setting) if the business moves again or the restaurant adds inventory
+// accounting.
+const COGS_BASELINE_START_MONTH = 8
+
 function trailingMonthsWithData(targetMonth: number, count = COGS_TRAILING_WINDOW): number[] {
   const months: number[] = []
-  for (let m = targetMonth - 1; m >= 1 && months.length < count; m--) {
-    const data = monthlyData.value[m - 1]
-    const hasBudgetData = data && data.accounts.some(a => a.category === 'revenue' && a.amount !== null)
-    if (hasBudgetData || isMonthClosed(YEAR, m)) months.push(m)
+  for (let m = targetMonth - 1; m >= COGS_BASELINE_START_MONTH && months.length < count; m--) {
+    if (isMonthClosed(YEAR, m)) months.push(m)
   }
   return months.reverse()
 }
@@ -961,6 +978,40 @@ const cogsTrailingAllActuals = computed(() =>
   cogsTrailingMonths.value.length > 0 && cogsTrailingMonths.value.every(m => trailingActualsHasData.value[m])
 )
 const cogsTrailingSomeActuals = computed(() => cogsTrailingMonths.value.some(m => trailingActualsHasData.value[m]))
+
+// Catering/event revenue (accounts 41xx/42xx) as a share of core dining
+// revenue (the Food/Beverage-tagged revenue accounts) for one closed month.
+// Catering purchases are intermingled with regular ones in Food Costs (5010) —
+// 5220 Catering Food Costs is essentially never used — but catering *revenue*
+// is outside the Food % denominator, so a month with a lot of catering reads
+// high. Buyout revenue is NOT counted here: it rings into core accounts, so
+// its cost and revenue already land in the same buckets. Returns 0 when the
+// month has no synced actuals (nothing to measure).
+const COGS_CATERING_MIX_THRESHOLD = 0.05
+function cateringEventShare(m: number): number {
+  const data = monthlyData.value[m - 1]
+  const actuals = trailingActualsHasData.value[m] ? trailingAccountActuals.value[m] : null
+  if (!data || !actuals) return 0
+  let core = 0
+  let mix = 0
+  for (const acc of data.accounts) {
+    if (acc.category !== 'revenue' || !isLeafAccountIn(data, acc)) continue
+    const amount = actuals[acc.accountId] ?? 0
+    const num = acc.accountNumber ?? ''
+    if (acc.subcategory === 'Food' || acc.subcategory === 'Beverage') core += amount
+    else if (num.startsWith('41') || num.startsWith('42')) mix += amount
+  }
+  return core > 0 ? mix / core : 0
+}
+// Months in the window whose Food % likely includes catering purchases that
+// can't be separated out — shown as a note so the number isn't read as pure
+// restaurant food cost. They stay in the average (excluding them would leave
+// one thin month); as clean months close they roll the window forward.
+const cogsTrailingMixedMonths = computed(() =>
+  cogsTrailingMonths.value
+    .map(m => ({ month: m, share: cateringEventShare(m) }))
+    .filter(x => x.share > COGS_CATERING_MIX_THRESHOLD)
+)
 
 // Current group % actually budgeted for the month being edited, so it can be
 // compared against the trailing average below — this is derived from the
@@ -1497,6 +1548,19 @@ function exportForQuickBooks() {
                       <span v-else-if="cogsRecomputeStatus !== 'done' && cogsHasComparableData" class="chip neutral">Already tracking the trailing average</span>
                       <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
                       <span v-if="cogsRecomputeStatus === 'error'" class="chip warning">{{ cogsRecomputeMessage }}</span>
+                    </div>
+                    <div v-if="cogsTrailingMonths.length === 0" class="section-note">
+                      No steady-state closed months to average from yet — only closed months from {{ MONTH_NAMES[COGS_BASELINE_START_MONTH - 1] }} on count
+                      (earlier months reflect the new location's opening stock-up, not normal purchasing).
+                    </div>
+                    <div v-else class="section-note">
+                      Only closed months from {{ MONTH_NAMES[COGS_BASELINE_START_MONTH - 1] }} on are averaged; earlier months reflect opening stock-up.
+                      <template v-if="cogsTrailingMixedMonths.length">
+                        <strong>{{ cogsTrailingMixedMonths.map(x => MONTH_NAMES[x.month - 1]).join(', ') }}</strong>
+                        had catering/event revenue worth
+                        {{ cogsTrailingMixedMonths.map(x => Math.round(x.share * 100) + '%').join(', ') }}
+                        of dining sales, and catering purchases can't be separated from Food Costs — so Food % probably reads a little high for a month with no catering.
+                      </template>
                     </div>
                   </td>
                 </tr>

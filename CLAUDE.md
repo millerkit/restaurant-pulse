@@ -4033,8 +4033,29 @@ electricity and Marketing – PR (cash basis).
   not in the Food % denominator. Best estimate 26.5% → 5010 of $38,635 / $32,087 /
   $42,469 for Oct / Nov / Dec. Production currently holds Oct at 24% ($34,990)
   and Nov/Dec at 24.6%/23.6%; the user chose to enter the new figures by hand on
-  Edit Budget. **Don't use "Recompute COGS" for Oct** (its Jul–Sep window gives
-  23.4%); beverage budgets were left alone (Aug–Sep: liquor 21.8%, wine 37.5%).
+  Edit Budget. (Before the button fix below, its Jul–Sep window gave 23.4% for
+  Oct — don't trust any recompute done before 2026-10-05's change.) Beverage
+  budgets were left alone (Aug–Sep: liquor 21.8%, wine 37.5%).
+- **"Recompute COGS from this average" button made more accurate**
+  ([`app/pages/budget/edit.vue`](app/pages/budget/edit.vue), `trailingMonthsWithData`,
+  `COGS_BASELINE_START_MONTH`, `cateringEventShare`): (1) the trailing window is
+  now **closed months only** — it used to also accept months that merely had
+  budget rows, so Nov's window averaged Oct's *budgeted* % and each recompute
+  fed the next (Nov/Dec drifted up ~2pts); (2) months before
+  `COGS_BASELINE_START_MONTH = 8` (Aug 2026) are excluded, since purchase-based
+  COGS in June/July reflects the new location's opening stock-up (37% / 15.6%),
+  not steady state; (3) a closed month with catering/event revenue (41xx/42xx
+  accounts) above 5% of core dining revenue stays in the average but is **flagged
+  in the banner** with its percentage, because catering purchases can't be
+  separated from 5010 Food Costs. Net effect today: Oct, Nov and Dec all use the
+  Aug–Sep window (~27.5% food) until Oct closes; with Sep flagged (catering was
+  ~37% of dining sales) it likely reads ~1pt high for a no-catering month. The
+  window grows to 3 clean months by itself as months close. Verified in the
+  browser against temporary synthetic Aug/Sep rows in local dev (removed
+  afterward): 28.5% food / 32.7% wine matched hand calculation and Sep flagged at
+  32%. The empty-window message ("No steady-state closed months…") only appears
+  for an editable month that has no closed month ≥ Aug before it, so it wasn't
+  exercised. Not deployed yet.
 - Oct revenue budget was already ~$9.9K above what the Capacity model implies
   (left alone; only the outdoor change below was applied).
 
