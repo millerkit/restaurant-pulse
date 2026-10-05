@@ -3985,8 +3985,141 @@ month selectable (current month through Dec).
   run `db:add-labor-role-class` in production first or every direct/fixed
   split reads as unclassified-fixed.
 
+## Oct–Dec 2026 budget recalibration from Aug/Sep actuals — 2026-10-05
+
+Prompted by the user asking whether Aug/Sep budget-vs-actual (Aug net −$2.4K
+vs. +$19.3K budgeted; Sep +$52.5K vs. +$87.1K) says anything about how to budget
+Oct–Dec. All numbers below came from read-only queries against **production**
+(`fly ssh console` + disposable `.cjs` scripts piped in as base64 — local dev
+doesn't have Sep data). Sep's actuals were flattered ~$8K by unposted
+electricity and Marketing – PR (cash basis).
+
+**What was found**
+- **Revenue:** Aug core dining within 1.2% of budget; Sep −5.4% (about −9% on
+  regular nights) — a *covers* problem, not spend/cover (Sep ~80 covers/night vs.
+  85 modeled, one fewer regular night; Tue/Thu soft; outdoor and salon well
+  under). Catering (Sep 5 and 26) landed to the dollar. Beverage budgets are
+  accurate; the miss is food.
+- **Buyouts are budgeted twice.** The Revenue tab's buyout planner already adds
+  the *net* increment (rate − that weekday's normal-night target) to core
+  Restaurant Food/Beverage, and actuals ring into core (Sep 30's $10,000 buyout
+  posted to 4010/4022–4028, $0 to events). But 4150/4145 (On-Site Events) were
+  also hand-budgeted ($10K Sep, $20K Oct, $11K Nov). Oct/Nov event accounts were
+  zeroed; a partial buyout (Koepke, Oct 16 Fri dining room, $6K minimum, $3K
+  deposit paid Aug 19) was added to core as ~+$1K *net* (it displaces ~$5K of
+  normal dining-room revenue). A $7K Sep "Off-Site Events" (4180) line had no
+  matching event at all.
+- **Payroll posts every Friday** (weekly). Months with five Fridays (Jul, Oct)
+  carry ~25% more labor than four-Friday months. The Labor tab already models
+  this (`fridaysInMonth`); salaried roles are `weekly_salary × Fridays`, which is
+  why Oct's management salaries "jump" — it is the fifth paycheck, not a raise.
+  Floor Manager's Sep $3,750 = exactly three paychecks at $65K ($1,250/wk); the
+  Labor tab already models her at $75K ($1,442.31/wk).
+- **Payroll taxes run well above the statutory rate on posted wages**: SS and
+  Medicare each imply the *same* extra taxable base (~$40K Aug / ~$49K Sep, about
+  $10–12K per payroll) — almost certainly tips. SUTA/FUTA track the model fine.
+- **Opex gaps (recurring, were $0 or low in budget):** Business insurance 6752
+  $2,748.17 on the 2nd of every month; Reservation Platform Fees (budget −$5,000
+  assumed zero real fees; actual nets ~−$4,350); Stripe (~$42/day baseline plus
+  lumps — $2,024.64 on Oct 1); credit card interest, MarginEdge, travel, worker's
+  comp, bathroom supplies.
+- **Food cost % — revised twice; current guidance is ~26.5% of restaurant food
+  sales.** Aug alone looked like 27%, then Jul–Sep blended to ~23%, but July
+  (15.6%) is an artifact of June's opening pantry stock-up (cost is purchase-based;
+  no inventory accounting), so any window containing July understates steady state.
+  Aug (27.4%, no catering) is the only clean month; Sep (27.7%) includes some
+  catering food cost — catering purchases are intermingled with regular ones in
+  5010 (5220 Catering Food Costs has no postings), while catering *revenue* is
+  not in the Food % denominator. Best estimate 26.5% → 5010 of $38,635 / $32,087 /
+  $42,469 for Oct / Nov / Dec. Production currently holds Oct at 24% ($34,990)
+  and Nov/Dec at 24.6%/23.6%; the user chose to enter the new figures by hand on
+  Edit Budget. **Don't use "Recompute COGS" for Oct** (its Jul–Sep window gives
+  23.4%); beverage budgets were left alone (Aug–Sep: liquor 21.8%, wine 37.5%).
+- Oct revenue budget was already ~$9.9K above what the Capacity model implies
+  (left alone; only the outdoor change below was applied).
+
+**What was applied to production** (67 `budget_targets` rows, plus Labor-tab
+settings and one capacity row; **local dev was not changed**; taken after an
+on-volume backup; one transaction; every account matched by `account_number`,
+asserting exactly one active row): Oct/Nov 4150/4145 → $0; Oct outdoor expected
+covers 8 → 3 (`capacity_area_seasonality`) with the matching −$9.5K taken out of
+4010/4022–4028 by existing weights; opex edits above for Oct–Dec; **other income
+split 75% Oct / 25% Nov** ($100K Gain on Asset Sale and $67K Grant — user judged
+them ~75% likely to land in Oct); labor: BOH OT hours 10 → 24/wk, Additional Pay
+flat $3,000, PTO $700, ICHRA $2,350 (all saved in `labor_position_settings`, so
+they survive a Labor-tab Save). Result: Oct net +$98.6K, Nov +$13.8K, Dec −$1.6K.
+**Without the one-time other income Oct is about −$26.7K and Nov about −$28.1K.**
+
+**Labor overrides that a Labor-tab Save will silently revert.** Wine Director Oct
+($4,112.22: start Oct 12, first salaried paycheck Oct 23), Floor Manager Oct
+($6,634.62: raise to $75K on the Oct 23 paycheck), and all of 6083/6084/6086/6087
+(payroll taxes, Oct–Dec; SS/Medicare computed on modeled wages **plus an
+estimated $11K taxable tips per payroll**) were written straight to
+`budget_targets`. The Labor tab recomputes every labor line from its model on
+Save, and has no concept of a hire start date or taxable tips; SS/Medicare are
+deliberately locked to the statutory 6.2%/1.45% (production's had once been
+"calibrated" to the trailing effective rate by mistake — don't repeat that).
+If the user saves the Labor tab, re-apply these three. The durable fix (a
+taxable-tips input and per-person start dates) is on Not yet done.
+Oct labor is still ~$127K vs. a ~$133K run-rate estimate (FOH hourly lines like
+Bar Lead/Service Captain are budgeted at $0 but cost ~$1.3K/month).
+
+**Old Mass Ave location (closed May 30; being sold)**
+- New QBO account **7920 "Rent – Mass Ave (closed location)"**, type Other
+  Expense / Other Miscellaneous Expense (so it hits net income via
+  `other_expense` but stays out of operating rent, fixed opex and breakeven).
+  Picked up by the account sync as `other_expense`.
+- Rent checks are written on the 25th for the *following* month (rent is due
+  the 1st). The May 25–Sep 25 checks ($2,950 each, $14,750 total) were
+  reclassified from an asset account ("owed from new Mass Ave concept") into
+  7920, which put **$11,800 of rent on the P&L that wasn't there before**
+  (May–Aug; Sep's was already in opex). Oct is budgeted $0 on purpose — the user
+  hopes not to pay November's rent — but cash basis means an Oct 25 check would
+  still land in October actuals.
+- A $520 posted to 7920 on 5/29 was a **security deposit** on the new Mass Ave
+  lease, mistakenly reclassified with the rent; moved to asset account
+  1416 "Security Deposit – New 1263 Mass Ave" (balance sheet, not synced here).
+- Aug 20's $4,643.45 Eversource bill was recoded Gas (6522) → Electricity (6521).
+
+**Gotcha: a backdated reclass leaves stale duplicates.** The nightly sync only
+moves forward (30-day floor), and `scripts/backfill-qbo-pl.mjs` only *upserts
+rows QBO still reports* — a line that moved between accounts keeps its old row.
+[`scripts/oneoff-resync-energy-rent.cjs`](scripts/oneoff-resync-energy-rent.cjs)
+fixes this for a given range: it takes a `VACUUM INTO` backup, deletes the local
+`daily_line_items` rows for the listed accounts/dates, re-pulls them via the
+backfill script, and restores from the backup if the re-pull fails. Usage and
+the exact pipe-into-the-container command are in its header; args are
+`<since> <until> <qboAccountId,qboAccountId,...>` (QBO ids, not local ids).
+Run for Jul 25–Aug 31 (118,119), Jun 20–Oct 4 and Jan 1–Jun 19 (31,1150040249),
+and May 1–31 (1150040249).
+
+**Claude's production writes.** The budget apply ran only after the user gave
+explicit approval; the re-sync script was blocked twice by the auto-mode safety
+classifier (which is separate from, and not changed by, the `Bash(fly ssh ...)`
+allow rules already in `.claude/settings.local.json`), so the user ran it
+themselves. Do not try to reach production through another route after a block.
+That settings file also holds a plaintext Basic Auth login inside a saved `curl`
+rule (gitignored) — worth deleting and rotating.
+
+**DSCR heads-up (unverified):** the 1.53x covenant figure predates these changes.
+Projected FY net income fell ~$80K from the budget edits plus ~$12K from the rent
+reclass, so the ratio may now sit near or below the 1.25x floor. It also includes
+the $167K of one-time other income; whether the bank's EBITDA counts a gain on
+asset sale is an open question for the accountant.
+
+**Cleanup due ~2026-10-07:** four production DB copies are on the Fly volume
+(`/app/data/backup-pre-oct-edits-*` and three `backup-pre-resync-*`); they contain
+the QBO OAuth tokens, so delete them once the numbers are trusted
+(`fly ssh console -a restaurant-pulse -C "sh -c 'rm /app/data/backup-pre-*'"`).
+
 ## Not yet done
 
+- **Durable Labor-tab support for taxable tips and hire start dates** (due
+  ~2026-10-07; see "Labor overrides that a Labor-tab Save will silently
+  revert" above): add a "taxable tips per payroll" input to the SS/Medicare (and
+  SUTA, if wanted) wage base and a start date per salaried/hourly person, so the
+  Wine Director / Floor Manager / payroll-tax overrides stop being hand-written.
+  Needs a schema change, so migrate production by hand *before* `fly deploy`.
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
   "all annual principal and interest payments" counts only the SBA loan or
   all 10 loans (built against all 10 — see the DSCR covenant tracking
