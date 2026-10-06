@@ -530,9 +530,23 @@ export default defineEventHandler((event) => {
   // is already netted into Net Income and so doesn't need a separate check.
   const fullYearDirect = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba'))
   const fullYearReserveFunded = summarizeDebtService(fullYearRows.filter(r => r.loan_key !== 'sba'))
-  const breakevenNetIncomeForYear = fullYearDirect.principal + fullYearDirect.catchUpInterest + reserveTransfersProjectedForYear - budgetedDepreciationForYear
-
   const thisYearFreeCashFlow = freeCashFlow(yearStart, yearEnd, yearRows)
+
+  // Cash the loans take that never appears on the P&L (principal and
+  // catch-up interest paid directly, plus every reserve transfer) — a cash
+  // figure, not a profit one. Net Income needed is this minus the non-cash
+  // add-backs (depreciation and the pre-opening reclass entries, already
+  // deducted inside Net Income but not real current-period cash), the same
+  // adjustments freeCashFlow() applies, so the target and the Free Cash Flow
+  // table above it can't disagree.
+  const loanCashNeededForYear = fullYearDirect.principal + fullYearDirect.catchUpInterest + reserveTransfersProjectedForYear
+  // Forward-looking slice of the same cash: SBA principal/catch-up still
+  // scheduled after today (same "<= today counts as paid" cutoff yearRows
+  // uses) plus the remaining Monday transfers at the declared weekly plan.
+  const sbaRemaining = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba' && r.payment_date > today))
+  const remainingTransfers = remainingMondaysInYear * currentWeeklyAmountForProjection
+  const remainingLoanCashNeededForYear = sbaRemaining.principal + sbaRemaining.catchUpInterest + remainingTransfers
+  const breakevenNetIncomeForYear = loanCashNeededForYear - budgetedDepreciationForYear - thisYearFreeCashFlow.preOpeningNonCashAddBack
 
   // ---- Eastern Bank DSCR covenant (informational only — see CLAUDE.md's
   // "Debt Service Coverage Ratio covenant tracking" section) ---------------
@@ -579,6 +593,30 @@ export default defineEventHandler((event) => {
     }
   }
 
+  // Second, narrower view of the same covenant (user's call 2026-10-06):
+  // only the SBA, Chen, Savage, Schaefer, Gilreath and Mis loans — the other
+  // investor notes (Jones, Miller, Price, Reid) are outside this calculation's
+  // scope. Same EBITDA inputs; only the debt-service denominator and the
+  // interest add-back (both from loan_schedule) narrow.
+  const COVENANT_SCOPED_LOAN_KEYS = new Set(['sba', 'chen', 'savage', 'schaefer', 'gilreath', 'mis'])
+  const scopedYear = summarizeDebtService(fullYearRows.filter(r => COVENANT_SCOPED_LOAN_KEYS.has(r.loan_key)))
+  const covenantScoped = {
+    minimumRatio: covenant.minimumRatio,
+    testYear: year,
+    debtScopeAssumption:
+      'Counts only the SBA, Chen, Savage, Schaefer, Gilreath, and Mis loans — the other investor notes (Jones, Miller, Price, Reid) are outside the scope of this calculation, per the owner\'s determination.',
+    annualDebtService: {
+      principal: scopedYear.principal,
+      interest: scopedYear.interest,
+      catchUpInterest: scopedYear.catchUpInterest,
+      total: scopedYear.totalCashOut
+    },
+    fullYearProjectionInputs: {
+      scheduledInterestForYear: scopedYear.interest,
+      budgetedDepreciationForYear
+    }
+  }
+
   return {
     year,
     thisYear: {
@@ -592,9 +630,17 @@ export default defineEventHandler((event) => {
       reserveFundedCatchUpInterest: fullYearReserveFunded.catchUpInterest,
       depreciation: budgetedDepreciationForYear,
       reserveTransfers: reserveTransfersProjectedForYear,
+      preOpeningNonCashAddBack: thisYearFreeCashFlow.preOpeningNonCashAddBack,
+      loanCashNeeded: loanCashNeededForYear,
+      remainingLoanCashNeeded: remainingLoanCashNeededForYear,
+      remainingSbaPrincipal: sbaRemaining.principal + sbaRemaining.catchUpInterest,
+      remainingTransfers,
+      remainingTransferCount: remainingMondaysInYear,
+      weeklyTransferAmount: currentWeeklyAmountForProjection,
       breakevenNetIncome: breakevenNetIncomeForYear
     },
     covenant,
+    covenantScoped,
     reserve: reserveProgress(today),
     upcomingPayments: allLoanRows
       .filter(r => r.payment_date >= today)

@@ -23,7 +23,7 @@ type ReserveSustainability = {
   operatingCashFreedPerWeek: number | null
   operatingCashFreedTotal: number | null
 }
-type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, breakevenNetIncome: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, weeklyTransferAmount: number, breakevenNetIncome: number }
 type Covenant = {
   minimumRatio: number
   testYear: number
@@ -36,6 +36,7 @@ type CashFlowResponse = {
   thisYear: PeriodFigures
   yearProjection: YearProjection
   covenant: Covenant
+  covenantScoped: Covenant
   reserve: {
     target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
     catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
@@ -106,6 +107,16 @@ const dscrRaw = computed<number | null>(() => {
   if (projectedEbitdaForYear.value === null || !data.value) return null
   const denom = data.value.covenant.annualDebtService.total
   return denom > 0 ? projectedEbitdaForYear.value / denom : null
+})
+const projectedEbitdaScoped = computed<number | null>(() => {
+  if (projectedNetIncomeForYear.value === null || !data.value) return null
+  const { scheduledInterestForYear, budgetedDepreciationForYear } = data.value.covenantScoped.fullYearProjectionInputs
+  return projectedNetIncomeForYear.value + scheduledInterestForYear + budgetedDepreciationForYear
+})
+const dscrScoped = computed<number | null>(() => {
+  if (projectedEbitdaScoped.value === null || !data.value) return null
+  const denom = data.value.covenantScoped.annualDebtService.total
+  return denom > 0 ? projectedEbitdaScoped.value / denom : null
 })
 function fmtRatio(n: number) {
   return `${n.toFixed(2)}x`
@@ -237,13 +248,20 @@ async function submitPlan() {
           <div class="section-label">Year-End Projection</div>
           <div class="section-note">{{ YEAR }} full year</div>
         </div>
-        <div class="hero-row two-up">
+        <div class="hero-row three-up">
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">Cash still needed for the loans</span>
+            </div>
+            <div class="figure">{{ fmt(data.yearProjection.remainingLoanCashNeeded) }}</div>
+            <div class="caption">Going forward only, through Dec 31: {{ data.yearProjection.remainingTransferCount }} more weekly reserve transfers ({{ fmt(data.yearProjection.weeklyTransferAmount) }} each = {{ fmt(data.yearProjection.remainingTransfers) }}) plus SBA principal still due ({{ fmt(data.yearProjection.remainingSbaPrincipal) }}). Cash already paid this year isn't counted. Interest is already inside Net Income.</div>
+          </div>
           <div class="hero-card">
             <div class="hero-top">
               <span class="period">Profit needed to cover the loans</span>
             </div>
             <div class="figure">{{ fmt(data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0 — covers SBA's principal directly, plus reserve transfers (which fund the other 9 loans' principal and one-time catch-up interest). Interest itself is already inside Net Income, so it doesn't need a separate check.</div>
+            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation).</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
@@ -295,6 +313,35 @@ async function submitPlan() {
         </div>
         <div class="section-note">
           Not a live compliance check — Eastern Bank tests this once, against FY{{ data.covenant.testYear }}'s actual year-end financials, not on a running or quarterly basis. This projection uses this year's actual results so far plus budget for the remaining months, the same way the Year-End Projection above does. Doesn't adjust for the pre-opening reclass entries (see the Free Cash Flow breakdown above) — EBITDA's own definition (Interest/Depreciation/Amortization only) doesn't add those back automatically, and they aren't relevant to what Eastern Bank will actually see.
+        </div>
+      </section>
+
+      <section v-if="data.covenantScoped">
+        <div class="section-head">
+          <div class="section-label">Debt Service Coverage Ratio (SBA + 5 investor loans)</div>
+          <div class="section-note">{{ data.covenantScoped.minimumRatio.toFixed(2) }}x minimum, first tested at FY{{ data.covenantScoped.testYear }} year-end</div>
+        </div>
+        <div class="hero-row">
+          <div class="hero-card">
+            <div class="hero-top">
+              <span class="period">Projected FY{{ data.covenantScoped.testYear }} DSCR</span>
+              <span v-if="dscrScoped !== null" :class="['chip', dscrScoped >= data.covenantScoped.minimumRatio ? 'good' : 'critical']">
+                {{ dscrScoped >= data.covenantScoped.minimumRatio ? 'Meets covenant' : 'Below covenant' }}
+              </span>
+            </div>
+            <div class="figure">{{ dscrScoped !== null ? fmtRatio(dscrScoped) : '—' }}</div>
+            <div class="caption">EBITDA ÷ annual principal + interest on the SBA, Chen, Savage, Schaefer, Gilreath, and Mis loans only.</div>
+          </div>
+        </div>
+        <div class="fcf-breakdown">
+          <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
+          <div class="fcf-row"><span>+ Interest (loan amortization schedule, 6 loans, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.scheduledInterestForYear) }}</span></div>
+          <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
+          <div class="fcf-row total"><span>= EBITDA</span><span>{{ projectedEbitdaScoped !== null ? fmt(projectedEbitdaScoped) : '—' }}</span></div>
+          <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenantScoped.annualDebtService.total) }}</span></div>
+        </div>
+        <div class="section-note">
+          {{ data.covenantScoped.debtScopeAssumption }}
         </div>
       </section>
 
@@ -493,6 +540,7 @@ async function submitPlan() {
 <style scoped>
 .hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 1rem; }
 .hero-row.two-up { grid-template-columns: 1fr 1fr; }
+.hero-row.three-up { grid-template-columns: 1fr 1fr 1fr; }
 .hero-card {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
   box-shadow: var(--card-shadow); padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;
@@ -575,6 +623,6 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 @media (max-width: 760px) {
   .cf-table th, .cf-table td { padding: 8px 10px; }
-  .hero-row.two-up { grid-template-columns: 1fr; }
+  .hero-row.two-up, .hero-row.three-up { grid-template-columns: 1fr; }
 }
 </style>
