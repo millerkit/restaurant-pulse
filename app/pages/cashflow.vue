@@ -455,7 +455,7 @@ async function submitPlan() {
           <form class="transfer-form" @submit.prevent="submitTransfer">
             <div class="transfer-form-row">
               <label>Date<input type="date" v-model="transferForm.date" required /></label>
-              <label>Amount<input type="number" step="0.01" min="0.01" v-model.number="transferForm.amount" placeholder="5000.00" required /></label>
+              <label>Amount<input type="number" step="0.01" min="0.01" v-model.number="transferForm.amount" :placeholder="(data.reserve.currentWeeklyAmount ?? 0).toFixed(2)" required /></label>
               <label class="reversal"><input type="checkbox" v-model="transferForm.isReversal" /> Reversal / withdrawal</label>
             </div>
             <input type="text" v-model="transferForm.note" placeholder="Note (optional)" class="transfer-note" />
@@ -467,7 +467,7 @@ async function submitPlan() {
 
           <form class="transfer-form plan-form" @submit.prevent="submitPlan">
             <div class="transfer-form-row">
-              <label>Planned weekly amount<input type="number" step="0.01" min="0.01" v-model.number="planAmount" placeholder="4000.00" required /></label>
+              <label>Planned weekly amount<input type="number" step="0.01" min="0.01" v-model.number="planAmount" required /></label>
               <button type="submit" :disabled="planSubmitting">{{ planSubmitting ? 'Saving…' : 'Update plan' }}</button>
               <span v-if="planError" class="chip critical">{{ planError }}</span>
               <span v-else-if="planSaved" class="chip good">Plan updated</span>
