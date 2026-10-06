@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
-import { hybridYearTotals, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { YEAR, hybridYearTotals, hybridYearTotalsPastActual, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Revenue Modeling` })
 
@@ -261,6 +261,48 @@ const annualImpact = computed(() => {
   }
 })
 
+// ---- loan covenant (SBA + 5 investor loans) -----------------------------
+// Whether the simulated year still meets Eastern Bank's 1.25x debt service
+// coverage covenant, in the narrower scope the Cash Flow tab's "SBA + 5
+// investor loans" card uses. The baseline deliberately matches that card
+// exactly — real actuals for closed months, budget for this and every
+// future month (hybridYearTotalsPastActual), NOT the budget-first
+// currentAnnual above, so "current" here equals what Cash Flow shows — and
+// the simulation's own net-income change (which already flexes COGS,
+// variable labor and variable opex with revenue, see annualImpact) is
+// layered on top. EBITDA = net income + scheduled interest + budgeted
+// depreciation; ratio = EBITDA / annual debt service.
+type ScopedCovenant = {
+  minimumRatio: number
+  testYear: number
+  annualDebtService: { total: number }
+  fullYearProjectionInputs: { scheduledInterestForYear: number, budgetedDepreciationForYear: number }
+}
+const { data: cashflowData } = useFetch<{ covenantScoped: ScopedCovenant | null }>('/api/cashflow', {
+  query: { year: YEAR }, key: 'revenue-modeling-covenant', lazy: true, server: false
+})
+const covenantImpact = computed(() => {
+  const c = cashflowData.value?.covenantScoped
+  const ai = annualImpact.value
+  if (!c || !ai || annualDataLoading.value) return null
+  const denom = c.annualDebtService.total
+  if (denom <= 0) return null
+  const baseNetIncome = netIncome(hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+  const addBacks = c.fullYearProjectionInputs.scheduledInterestForYear + c.fullYearProjectionInputs.budgetedDepreciationForYear
+  const baseEbitda = baseNetIncome + addBacks
+  const simEbitda = baseEbitda + (ai.netIncome.sim - ai.netIncome.base)
+  const required = c.minimumRatio * denom
+  return {
+    minimumRatio: c.minimumRatio,
+    baseRatio: baseEbitda / denom,
+    simRatio: simEbitda / denom,
+    simEbitda,
+    required,
+    meets: simEbitda / denom >= c.minimumRatio,
+    gap: required - simEbitda // positive = short by this much, negative = headroom
+  }
+})
+
 async function handleSynced() {
   await Promise.all([refresh(), loadYear(), loadActualsYear()])
 }
@@ -386,6 +428,19 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <span v-if="marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)" :class="['chip', marginChip(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim)]">{{ fmtDeltaPts(annualImpact!.profitMargin.base, annualImpact!.profitMargin.sim) }}</span>
                 </div>
                 <div class="metric-sub">vs. {{ fmtPct(annualImpact!.profitMargin.base) }} current &middot; {{ fmtMoneyFull(annualImpact!.netIncome.sim) }} net income</div>
+              </div>
+            </div>
+            <div v-if="covenantImpact" class="assumption-card">
+              <div class="card-head"><span class="period-name">Loan Covenant (DSCR)</span></div>
+              <div class="metric primary">
+                <div class="metric-top">
+                  <div class="metric-figure">{{ covenantImpact.simRatio.toFixed(2) }}x</div>
+                  <span :class="['chip', covenantImpact.meets ? 'good' : 'critical']">{{ covenantImpact.meets ? '✓ Meets' : '▲ Below' }} {{ covenantImpact.minimumRatio.toFixed(2) }}x</span>
+                </div>
+                <div class="metric-sub">
+                  vs. {{ covenantImpact.baseRatio.toFixed(2) }}x current &middot; SBA + 5 investor loans &middot;
+                  {{ covenantImpact.meets ? `${fmtMoneyFull(-covenantImpact.gap)} of EBITDA headroom` : `${fmtMoneyFull(covenantImpact.gap)} of EBITDA short` }}
+                </div>
               </div>
             </div>
           </div>
@@ -663,7 +718,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .pct-cell { display: inline-flex; align-items: center; gap: 3px; }
 
 /* ---------- annual impact cards ---------- */
-.quick-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px; }
+.quick-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 8px; }
 .assumption-card {
   background: var(--surface);
   border: 1px solid var(--hair);
