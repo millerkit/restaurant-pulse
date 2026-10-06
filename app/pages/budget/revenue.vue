@@ -950,8 +950,8 @@ async function saveRevenue() {
             <thead v-else-if="selectedMonthIsCurrent">
               <tr class="col-head-row">
                 <th scope="col"></th>
-                <th scope="col">Actual (to date)</th>
                 <th scope="col">Budget</th>
+                <th scope="col">Actual (to date)</th>
                 <th scope="col">Projected</th>
               </tr>
             </thead>
@@ -993,12 +993,6 @@ async function saveRevenue() {
                   </button>
                   <span v-else class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                 </th>
-                <td v-if="selectedMonthIsCurrent">
-                  <span class="amount-cell">
-                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
-                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
-                  </span>
-                </td>
                 <td>
                   <span class="amount-cell">
                     <input
@@ -1006,6 +1000,12 @@ async function saveRevenue() {
                       v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
                     />
                     <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
+                  </span>
+                </td>
+                <td v-if="selectedMonthIsCurrent">
+                  <span class="amount-cell">
+                    <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
+                    <span v-else class="amount-input readonly">${{ Math.round(computedAccountActual(acc)).toLocaleString() }}</span>
                   </span>
                 </td>
                 <td v-if="selectedMonthIsCurrent">
@@ -1024,13 +1024,13 @@ async function saveRevenue() {
               </tr>
               <tr class="net-income-row">
                 <th scope="row">Total Revenue</th>
+                <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span class="amount-cell">
                     <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
                     <span v-else class="amount-input readonly"><strong>${{ Math.round(totalRevenueActual).toLocaleString() }}</strong></span>
                   </span>
                 </td>
-                <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
                 <td v-if="selectedMonthIsCurrent">
                   <span class="amount-cell">
                   <span v-if="!selectedMonthHasActuals" class="amount-input readonly muted">—</span>
