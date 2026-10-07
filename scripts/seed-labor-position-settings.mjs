@@ -47,6 +47,7 @@ db.exec(`
     hourly_rate    REAL NOT NULL DEFAULT 0,
     weekly_hours   REAL NOT NULL DEFAULT 0,
     weekly_salary  REAL NOT NULL DEFAULT 0,
+    first_paycheck_date TEXT,
     updated_at     TEXT NOT NULL,
     UNIQUE (account_id, slot_index)
   );
@@ -57,6 +58,7 @@ db.exec(`
     futa_rate             REAL NOT NULL,
     suta_ma_rate          REAL NOT NULL,
     pfml_ma_rate          REAL NOT NULL,
+    taxable_tips_per_payroll REAL NOT NULL DEFAULT 0,
     updated_at            TEXT NOT NULL
   );
 `)

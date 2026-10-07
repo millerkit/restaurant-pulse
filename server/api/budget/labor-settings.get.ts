@@ -11,7 +11,7 @@
 // window became the basis for the summary cards' trailing-average comparison row (see
 // labor.vue) — 3 months smooths a bit more sampling noise than 2 without going stale.
 // See schema.sql's labor_position_settings comment for the overall design.
-type SlotRow = { id: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number }
+type SlotRow = { id: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate: string | null }
 type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
 
 const GROUP_PARENT_NUMBERS: Record<string, GroupKey> = {
@@ -126,6 +126,43 @@ function trailingTaxRates(db: ReturnType<typeof useDb>, months: string[]): Recor
   return result
 }
 
+// Hint for the "taxable tips per payroll" input: the extra Social Security wage base the
+// trailing actuals imply beyond posted wages (SS tax / 6.2% - wage-subject pay), per weekly
+// payroll. Null if there's nothing to infer from. A rough hint only — the user sets the real
+// number; it is never applied automatically.
+function impliedTaxableTipsPerPayroll(db: ReturnType<typeof useDb>, months: string[]): number | null {
+  if (months.length === 0) return null
+  const placeholders = months.map(() => '?').join(',')
+  const wageSubject = (db.prepare(`
+    SELECT COALESCE(SUM(dli.amount), 0) AS total
+    FROM daily_line_items dli
+    WHERE dli.account_id IN (
+      SELECT a.id FROM accounts a
+      WHERE a.category = 'labor'
+        AND a.id NOT IN (
+          SELECT id FROM accounts WHERE account_number IN ('6060', '6080')
+          UNION
+          SELECT id FROM accounts WHERE parent_account_id IN (SELECT id FROM accounts WHERE account_number IN ('6060', '6080'))
+        )
+    )
+    AND strftime('%Y-%m', dli.date) IN (${placeholders})
+  `).get(...months) as { total: number }).total
+  const ss = (db.prepare(`
+    SELECT COALESCE(SUM(dli.amount), 0) AS total
+    FROM daily_line_items dli
+    JOIN labor_position_settings lps ON lps.account_id = dli.account_id AND lps.pay_type = 'tax' AND lps.tax_key = 'social_security'
+    WHERE strftime('%Y-%m', dli.date) IN (${placeholders})
+  `).get(...months) as { total: number }).total
+  if (wageSubject <= 0 || ss <= 0) return null
+  const sorted = [...months].sort()
+  const first = `${sorted[0]}-01`
+  const [ly, lm] = sorted[sorted.length - 1].split('-').map(Number)
+  const last = `${sorted[sorted.length - 1]}-${String(new Date(ly, lm, 0).getDate()).padStart(2, '0')}`
+  const fridays = countFridaysBetween(first, last)
+  if (fridays === 0) return null
+  return Math.max(0, (ss / 0.062 - wageSubject) / fridays)
+}
+
 export default defineEventHandler(() => {
   const db = useDb()
 
@@ -145,13 +182,14 @@ export default defineEventHandler(() => {
 
   const slotRows = db.prepare(`
     SELECT account_id AS accountId, id, slot_index AS slotIndex, employee_name AS employeeName,
-           hourly_rate AS hourlyRate, weekly_hours AS weeklyHours, weekly_salary AS weeklySalary
+           hourly_rate AS hourlyRate, weekly_hours AS weeklyHours, weekly_salary AS weeklySalary,
+           first_paycheck_date AS firstPaycheckDate
     FROM labor_position_slots ORDER BY account_id, slot_index
   `).all() as (SlotRow & { accountId: number })[]
   const slotsByAccount = new Map<number, SlotRow[]>()
   for (const s of slotRows) {
     const list = slotsByAccount.get(s.accountId) ?? []
-    list.push({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName, hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary })
+    list.push({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName, hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate })
     slotsByAccount.set(s.accountId, list)
   }
 
@@ -175,7 +213,8 @@ export default defineEventHandler(() => {
 
   const taxRow = db.prepare(`
     SELECT medicare_rate AS medicareRate, social_security_rate AS socialSecurityRate,
-           futa_rate AS futaRate, suta_ma_rate AS sutaMaRate, pfml_ma_rate AS pfmlMaRate
+           futa_rate AS futaRate, suta_ma_rate AS sutaMaRate, pfml_ma_rate AS pfmlMaRate,
+           taxable_tips_per_payroll AS taxableTipsPerPayroll
     FROM labor_tax_rates WHERE id = 1
   `).get() as any
 
@@ -186,6 +225,7 @@ export default defineEventHandler(() => {
     taxRates: taxRow ?? null,
     trailingWindow: { months: trailingMonths },
     trailingActuals: trailingActualsByAccount(db, trailingMonths),
-    trailingTaxRates: trailingTaxRates(db, trailingMonths)
+    trailingTaxRates: trailingTaxRates(db, trailingMonths),
+    impliedTaxableTipsPerPayroll: impliedTaxableTipsPerPayroll(db, trailingMonths)
   }
 })

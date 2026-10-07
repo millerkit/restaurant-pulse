@@ -45,13 +45,13 @@ const SEASONALITY_CAP_PCT = 15
 type PayType = 'hourly' | 'salary' | 'overtime' | 'flat' | 'tax'
 type RoleClass = 'direct' | 'supervision' | 'overhead' | 'growth'
 type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
-type Slot = { id: number | null, slotIndex: number, employeeName: string, hourlyRate: number, weeklyHours: number, weeklySalary: number }
+type Slot = { id: number | null, slotIndex: number, employeeName: string, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate: string }
 type LaborAccount = {
   accountId: number, accountNumber: string | null, name: string, groupKey: GroupKey, payType: PayType,
   scalesWithSeasonality: boolean, otHours: number, otBaseGroup: 'boh' | 'foh' | null, flatAmount: number,
   taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, isHidden: boolean, roleClass: RoleClass | null, slots: Slot[]
 }
-type TaxRates = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
+type TaxRates = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number, taxableTipsPerPayroll: number }
 type MonthlyIndexEntry = { month: number, indexPct: number | null, years: number[] }
 
 const GROUP_LABEL: Record<GroupKey, string> = {
@@ -78,7 +78,8 @@ const isWageAccount = (a: LaborAccount) => a.payType === 'hourly' || a.payType =
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 const accounts = ref<LaborAccount[]>([])
-const taxRates = ref<TaxRates>({ medicareRate: 0, socialSecurityRate: 0, futaRate: 0, sutaMaRate: 0, pfmlMaRate: 0 })
+const taxRates = ref<TaxRates>({ medicareRate: 0, socialSecurityRate: 0, futaRate: 0, sutaMaRate: 0, pfmlMaRate: 0, taxableTipsPerPayroll: 0 })
+const impliedTipsPerPayroll = ref<number | null>(null)
 const monthlyIndex = ref<MonthlyIndexEntry[]>([])
 const currentMonthActuals = ref<Record<number, number>>({})
 const hasCurrentMonthActuals = ref(false)
@@ -111,16 +112,17 @@ async function loadAll() {
     const [settingsRes, historyRes, actualsRes] = await Promise.all([
       $fetch<{
         accounts: any[], taxRates: TaxRates | null,
-        trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>
+        trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null
       }>('/api/budget/labor-settings'),
       $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] })),
       $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } }).catch(() => ({ accounts: [] }))
     ])
     accounts.value = settingsRes.accounts.map(a => ({
       ...a,
-      slots: (a.slots ?? []).map((s: any) => ({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName ?? '', hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary }))
+      slots: (a.slots ?? []).map((s: any) => ({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName ?? '', hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate ?? '' }))
     }))
-    if (settingsRes.taxRates) taxRates.value = settingsRes.taxRates
+    if (settingsRes.taxRates) taxRates.value = { ...settingsRes.taxRates, taxableTipsPerPayroll: settingsRes.taxRates.taxableTipsPerPayroll ?? 0 }
+    impliedTipsPerPayroll.value = settingsRes.impliedTaxableTipsPerPayroll ?? null
     trailingWindowMonths.value = settingsRes.trailingWindow?.months ?? []
     trailingActuals.value = settingsRes.trailingActuals ?? {}
     trailingTaxRates.value = settingsRes.trailingTaxRates ?? { medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null }
@@ -247,8 +249,25 @@ function impliedWeeklyHours(account: LaborAccount): number | null {
 function slotWeeklyDollars(account: LaborAccount, slot: Slot, month: number): number {
   return account.payType === 'hourly' ? slot.hourlyRate * effectiveHours(account, slot.weeklyHours, month) : 0
 }
+// Payroll Fridays in a month that this person is actually paid: all of them, or only those
+// on/after their first paycheck date when one is set (a mid-month hire). Compared as local
+// y/m/d components, never through a UTC-parsed Date, to avoid timezone drift.
+function slotFridays(slot: Slot, month: number): number {
+  const total = fridaysInMonth(YEAR, month)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(slot.firstPaycheckDate)) return total
+  const [fy, fm, fd] = slot.firstPaycheckDate.split('-').map(Number)
+  const monthStart = new Date(YEAR, month - 1, 1)
+  const monthEnd = new Date(YEAR, month, 0)
+  const from = new Date(fy, fm - 1, fd)
+  if (from <= monthStart) return total
+  if (from > monthEnd) return 0
+  return countFridays(from, monthEnd)
+}
 function slotMonthlyDollars(account: LaborAccount, slot: Slot, month: number): number {
-  return slotWeeklyDollars(account, slot, month) * fridaysInMonth(YEAR, month)
+  return slotWeeklyDollars(account, slot, month) * slotFridays(slot, month)
+}
+function slotSalaryMonthlyDollars(slot: Slot, month: number): number {
+  return slot.weeklySalary * slotFridays(slot, month)
 }
 // Total scaled hrs/wk across every person on an hourly role, for the role's totals row —
 // each slot's own effectiveHours (seasonality-scaled), summed, not the raw typical hours.
@@ -278,6 +297,12 @@ function wageSubjectTotal(month: number): number {
   return total
 }
 
+// Social Security and Medicare apply to wages PLUS reported tips; FUTA/SUTA/PFML stay on
+// wages only. Tips are entered per weekly payroll, so the monthly figure scales by Fridays.
+function taxBaseFor(key: NonNullable<LaborAccount['taxKey']>, month: number): number {
+  const wages = wageSubjectTotal(month)
+  return key === 'medicare' || key === 'social_security' ? wages + taxRates.value.taxableTipsPerPayroll * fridaysInMonth(YEAR, month) : wages
+}
 function taxRateFor(key: NonNullable<LaborAccount['taxKey']>): number {
   return { medicare: taxRates.value.medicareRate, social_security: taxRates.value.socialSecurityRate, futa: taxRates.value.futaRate, suta_ma: taxRates.value.sutaMaRate, pfml_ma: taxRates.value.pfmlMaRate }[key]
 }
@@ -297,7 +322,9 @@ function isFixedRateTax(key: LaborAccount['taxKey']): boolean {
 
 function accountMonthlyDollars(account: LaborAccount, month: number): number {
   if (account.payType === 'flat') return account.flatAmount
-  if (account.payType === 'tax') return account.taxKey ? taxRateFor(account.taxKey) * wageSubjectTotal(month) : 0
+  if (account.payType === 'tax') return account.taxKey ? taxRateFor(account.taxKey) * taxBaseFor(account.taxKey, month) : 0
+  if (account.payType === 'hourly') return account.slots.reduce((sum, s) => sum + slotMonthlyDollars(account, s, month), 0)
+  if (account.payType === 'salary') return account.slots.reduce((sum, s) => sum + slotSalaryMonthlyDollars(s, month), 0)
   return accountWeeklyDollars(account, month) * fridaysInMonth(YEAR, month)
 }
 
@@ -379,7 +406,9 @@ const roleClassRows = computed<ClassRow[]>(() => {
   const revSums: Record<ClassKey, number> = { direct: 0, supervision: 0, overhead: 0, growth: 0, unclassified: 0, other: 0 }
   let revenue = 0
   for (const m of months) {
-    const taxTotal = accountsIn('tax').reduce((sum, a) => sum + accountMonthlyDollars(a, m), 0)
+    // Only the tax on WAGES is spread across classes; tax on reported tips has no role to
+    // belong to, so it falls through to "Benefits & other" via perClass.other below.
+    const taxTotal = accountsIn('tax').reduce((sum, a) => sum + (a.taxKey ? taxRateFor(a.taxKey) * wageSubjectTotal(m) : 0), 0)
     const subject = wageSubjectTotal(m)
     const perClass: Record<ClassKey, number> = { direct: 0, supervision: 0, overhead: 0, growth: 0, unclassified: 0, other: 0 }
     for (const a of accounts.value) {
@@ -407,7 +436,7 @@ const roleClassRows = computed<ClassRow[]>(() => {
   })
   const rows: ClassRow[] = ROLE_CLASS_ORDER.map(k => rowFor(k, ROLE_CLASS_LABEL[k], ROLE_CLASS_HINT[k]))
   if (sums.unclassified > 0.5) rows.push(rowFor('unclassified', 'Unclassified', 'wage roles with no class tag yet'))
-  rows.push(rowFor('other', 'Benefits & other', 'employee benefits, additional pay, and the taxes on it'))
+  rows.push(rowFor('other', 'Benefits & other', 'employee benefits, additional pay, and the taxes on it and on tips'))
   return rows
 })
 const roleClassRevenueMonths = computed(() => targetMonths.value.filter(m => (getMonthCategoryBudgetLive(m, 'revenue') ?? 0) > 0).length)
@@ -459,7 +488,7 @@ function fmt(n: number): string {
 }
 
 function addPerson(account: LaborAccount) {
-  account.slots.push({ id: null, slotIndex: account.slots.length + 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0 })
+  account.slots.push({ id: null, slotIndex: account.slots.length + 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '' })
 }
 function removePerson(account: LaborAccount, index: number) {
   account.slots.splice(index, 1)
@@ -472,7 +501,7 @@ function removePerson(account: LaborAccount, index: number) {
 // table (a defensive single-element accessor, not a schema difference), so re-adding
 // multi-person salaries later needs no migration.
 function primarySlot(account: LaborAccount): Slot {
-  if (account.slots.length === 0) account.slots.push({ id: null, slotIndex: 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0 })
+  if (account.slots.length === 0) account.slots.push({ id: null, slotIndex: 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '' })
   return account.slots[0]!
 }
 // Salaries are entered/displayed as an annual figure (how they're actually communicated
@@ -567,7 +596,7 @@ async function save() {
     const slotsPayload = slotAccounts
       .flatMap(a => a.slots.map((s, i) => ({
         accountId: a.accountId, slotIndex: i + 1, employeeName: s.employeeName || null,
-        hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary
+        hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate || null
       })))
 
     await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, slotAccountIds, taxRates: taxRates.value } })
@@ -757,7 +786,10 @@ async function save() {
                   <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
                 </tr>
                 <tr v-for="(slot, i) in acc.slots" :key="i" class="person-row">
-                  <td><input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" /></td>
+                  <td>
+                    <input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" />
+                    <label class="start-date" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted.">first paycheck <input type="date" v-model="slot.firstPaycheckDate" /></label>
+                  </td>
                   <td class="num">
                     <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="72px" />
                   </td>
@@ -837,7 +869,7 @@ async function save() {
           <table v-else-if="group === 'management'" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role</td><td>class</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
+                <td>role</td><td>class</td><td>first paycheck</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
               </tr>
             </thead>
             <tbody>
@@ -848,6 +880,9 @@ async function save() {
                     <option :value="null">Unclassified</option>
                     <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
                   </select>
+                </td>
+                <td>
+                  <input type="date" class="date-input" v-model="primarySlot(acc).firstPaycheckDate" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted." />
                 </td>
                 <td class="num">
                   <NumberStepper
@@ -898,7 +933,19 @@ async function save() {
                 trailing {{ trailingWindowLabel }} effective rate: {{ (trailingTaxRates[acc.taxKey]! * 100).toFixed(2) }}%
               </div>
             </div>
-            <div class="simple-note quiet-note small">&times; {{ fmt(wageSubjectTotal(asOfMonth)) }} modeled wages ({{ MONTH_NAMES[asOfMonth - 1] }})</div>
+            <div class="simple-row-wrap">
+              <div class="simple-row">
+                <span class="label">Taxable tips per payroll</span>
+                <span class="unit">$</span>
+                <NumberStepper v-model="taxRates.taxableTipsPerPayroll" :step="250" :min="0" width="88px" />
+                <span class="unit">/wk</span>
+              </div>
+              <div class="simple-hint">
+                added to the Social Security &amp; Medicare base only (&times; {{ fridaysInMonth(YEAR, asOfMonth) }} paychecks in {{ MONTH_NAMES[asOfMonth - 1] }}).
+                <template v-if="impliedTipsPerPayroll !== null">Trailing {{ trailingWindowLabel }} actuals imply about {{ fmt(impliedTipsPerPayroll) }}.</template>
+              </div>
+            </div>
+            <div class="simple-note quiet-note small">Social Security &amp; Medicare on {{ fmt(taxBaseFor('social_security', asOfMonth)) }} ({{ fmt(wageSubjectTotal(asOfMonth)) }} modeled wages + tips); FUTA/SUTA/PFML on wages only ({{ MONTH_NAMES[asOfMonth - 1] }})</div>
           </div>
         </div>
       </template>
@@ -923,6 +970,8 @@ async function save() {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
   box-shadow: var(--card-shadow); padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 10px;
 }
+.start-date { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); }
+.start-date input, .date-input { font: inherit; font-size: 11.5px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 .quiet-note.small { font-size: 11px; color: var(--ink-3); }
 

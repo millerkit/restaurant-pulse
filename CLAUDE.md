@@ -4133,14 +4133,49 @@ asset sale is an open question for the accountant.
 the QBO OAuth tokens, so delete them once the numbers are trusted
 (`fly ssh console -a restaurant-pulse -C "sh -c 'rm /app/data/backup-pre-*'"`).
 
+## Labor tips and first-paycheck dates — 2026-10-07
+
+Closes the "Labor overrides that a Labor-tab Save will silently revert" gap from the
+Oct–Dec recalibration section above, for two of its three causes:
+
+- **`labor_tax_rates.taxable_tips_per_payroll`**: tips per weekly payroll, added to the wage
+  base for Social Security and Medicare only (FUTA/SUTA/PFML stay on wages). The 6.2%/1.45%
+  rates stay locked. Entered in the Labor tab's Payroll Taxes section, with a hint of what
+  trailing actuals imply (`impliedTaxableTipsPerPayroll` in `labor-settings.get.ts`: SS tax ÷
+  6.2% − wage-subject pay, per Friday). The hint is never applied automatically. Tax on tips
+  has no role to belong to, so the role-class card leaves it in "Benefits & other".
+- **`labor_position_slots.first_paycheck_date`**: a PAYCHECK date, not a hire date (payroll
+  lags: start Oct 12 → first paycheck Oct 23). Only Fridays on/after it are budgeted for that
+  person (`slotFridays` in labor.vue). Date input on each hourly person row and each
+  management row.
+- **Still hand-written, not modeled**: a raise effective mid-month (Floor Manager's $65K→$75K
+  from the Oct 23 paycheck). Re-apply it after a Labor-tab Save, or add an effective-dated
+  salary later. Also, `monthExpectedToDateFraction` still prorates by all Fridays, so a
+  current-month new hire's "projected" figure is slightly off.
+- **The overrides were not removed from production.** After deploying, enter the real tips
+  figure and first-paycheck dates in the UI and confirm a Save reproduces the hand-written
+  Oct–Dec numbers before trusting it.
+- **Migration**: `node scripts/add-labor-tips-and-start-dates.mjs` (idempotent). Run it on
+  production by hand BEFORE `fly deploy`, or `/api/budget/labor-settings` 500s.
+- Verified locally: migration (twice), upsert SQL, Friday math (Oct from 10/23 = 2 of 5), and
+  typecheck. Not exercised in the browser — local dev needs a Basic Auth login.
+- **Production rollout, 2026-10-07**: migration run by hand over `fly ssh console` (script
+  uploaded via `fly ssh sftp shell`; that shell only accepts cd/ls/get/put/chmod — leave with
+  Ctrl+D), then `fly deploy`. In the Labor tab: taxable tips **$10,100/payroll** (trailing
+  actuals implied ~$10,114), Wine Director first paycheck **2026-10-16** (salaried start Oct 5,
+  payroll lags ~11 days). A Save then recomputed Oct–Dec payroll taxes (6083/6084/6086/6087)
+  and the Wine Director from the model; Oct matched Edit Budget afterward.
+- **Floor Manager's raise is still a manual override.** $65K→$75K ($1,250→$1,442.31/wk) from the
+  Oct 16 paycheck; Oct has five Fridays, so Oct = 2×$1,250 + 3×$1,442.31 = **$6,826.92** (the Labor
+  tab would say $7,211.54). Written straight to `budget_targets` for 6058, with the Oct tax lines
+  adjusted by the $384.62 wage difference at their rates (now 6083 $215.09, 6084 $2,373.70,
+  6086 $10,149.63, 6087 $2,467.85). Nov/Dec ($5,769.23) are right as modeled. **A Labor-tab Save
+  reverts all of this** — re-apply it. The effective-dated salary change is still unmodeled.
+- Backups taken during the rollout contain QBO tokens; delete `/app/data/backup-pre-*` once
+  numbers are trusted.
+
 ## Not yet done
 
-- **Durable Labor-tab support for taxable tips and hire start dates** (due
-  ~2026-10-07; see "Labor overrides that a Labor-tab Save will silently
-  revert" above): add a "taxable tips per payroll" input to the SS/Medicare (and
-  SUTA, if wanted) wage base and a start date per salaried/hourly person, so the
-  Wine Director / Floor Manager / payroll-tax overrides stop being hand-written.
-  Needs a schema change, so migrate production by hand *before* `fly deploy`.
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
   "all annual principal and interest payments" counts only the SBA loan or
   all 10 loans (built against all 10 — see the DSCR covenant tracking

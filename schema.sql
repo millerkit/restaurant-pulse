@@ -543,6 +543,11 @@ CREATE TABLE labor_position_slots (
   hourly_rate    REAL NOT NULL DEFAULT 0,
   weekly_hours   REAL NOT NULL DEFAULT 0,
   weekly_salary  REAL NOT NULL DEFAULT 0,
+  -- first_paycheck_date (added 2026-10-07): ISO date of this person's first paycheck, or NULL
+  -- for "paid every payroll Friday". The Labor tab only models Fridays on/after it, so a
+  -- mid-month hire's first month isn't budgeted as a full month. It is a PAYCHECK date, not
+  -- a hire date: payroll lags work, e.g. start Oct 12 -> first paycheck Oct 23.
+  first_paycheck_date TEXT,
   updated_at     TEXT NOT NULL,
   UNIQUE (account_id, slot_index)
 );
@@ -560,6 +565,11 @@ CREATE TABLE labor_tax_rates (
   futa_rate             REAL NOT NULL,
   suta_ma_rate          REAL NOT NULL,
   pfml_ma_rate          REAL NOT NULL,
+  -- taxable_tips_per_payroll (added 2026-10-07): tips reported through payroll each weekly
+  -- run. Added to the wage base for Social Security and Medicare ONLY (FUTA/SUTA/PFML stay
+  -- on wages). The statutory 6.2%/1.45% rates stay locked; this is what makes the modeled
+  -- tax match actuals, which run well above rate x wages because tips are taxable.
+  taxable_tips_per_payroll REAL NOT NULL DEFAULT 0,
   updated_at            TEXT NOT NULL
 );
 

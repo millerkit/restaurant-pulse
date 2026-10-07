@@ -10,8 +10,9 @@
 type RoleClass = 'direct' | 'supervision' | 'overhead' | 'growth'
 const ROLE_CLASSES: RoleClass[] = ['direct', 'supervision', 'overhead', 'growth']
 type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number, isHidden: boolean, roleClass?: RoleClass | null }
-type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number }
-type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number }
+type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate?: string | null }
+type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number, taxableTipsPerPayroll?: number }
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ settings?: SettingsInput[], slots?: SlotInput[], slotAccountIds?: number[], taxRates?: TaxRatesInput }>(event)
@@ -33,24 +34,33 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  for (const slot of slots) {
+    if (slot.firstPaycheckDate != null && slot.firstPaycheckDate !== '' && !ISO_DATE.test(slot.firstPaycheckDate)) {
+      throw createError({ statusCode: 400, statusMessage: `Invalid first paycheck date "${slot.firstPaycheckDate}" (expected YYYY-MM-DD)` })
+    }
+  }
+  if (taxRates && !(Number(taxRates.taxableTipsPerPayroll ?? 0) >= 0)) {
+    throw createError({ statusCode: 400, statusMessage: 'Taxable tips per payroll must be zero or more' })
+  }
+
   const updateSettings = db.prepare(`
     UPDATE labor_position_settings SET scales_with_seasonality = @scalesWithSeasonality, ot_hours = @otHours, flat_amount = @flatAmount, is_hidden = @isHidden, role_class = @roleClass, updated_at = @updatedAt
     WHERE account_id = @accountId
   `)
   const upsertSlot = db.prepare(`
-    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, updated_at)
-    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @updatedAt)
+    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, first_paycheck_date, updated_at)
+    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @firstPaycheckDate, @updatedAt)
     ON CONFLICT(account_id, slot_index) DO UPDATE SET
       employee_name = excluded.employee_name, hourly_rate = excluded.hourly_rate,
-      weekly_hours = excluded.weekly_hours, weekly_salary = excluded.weekly_salary, updated_at = excluded.updated_at
+      weekly_hours = excluded.weekly_hours, weekly_salary = excluded.weekly_salary, first_paycheck_date = excluded.first_paycheck_date, updated_at = excluded.updated_at
   `)
   const trimSlots = db.prepare(`DELETE FROM labor_position_slots WHERE account_id = ? AND slot_index > ?`)
   const upsertTaxRates = db.prepare(`
-    INSERT INTO labor_tax_rates (id, medicare_rate, social_security_rate, futa_rate, suta_ma_rate, pfml_ma_rate, updated_at)
-    VALUES (1, @medicareRate, @socialSecurityRate, @futaRate, @sutaMaRate, @pfmlMaRate, @updatedAt)
+    INSERT INTO labor_tax_rates (id, medicare_rate, social_security_rate, futa_rate, suta_ma_rate, pfml_ma_rate, taxable_tips_per_payroll, updated_at)
+    VALUES (1, @medicareRate, @socialSecurityRate, @futaRate, @sutaMaRate, @pfmlMaRate, @taxableTipsPerPayroll, @updatedAt)
     ON CONFLICT(id) DO UPDATE SET
       medicare_rate = excluded.medicare_rate, social_security_rate = excluded.social_security_rate,
-      futa_rate = excluded.futa_rate, suta_ma_rate = excluded.suta_ma_rate, pfml_ma_rate = excluded.pfml_ma_rate,
+      futa_rate = excluded.futa_rate, suta_ma_rate = excluded.suta_ma_rate, pfml_ma_rate = excluded.pfml_ma_rate, taxable_tips_per_payroll = excluded.taxable_tips_per_payroll,
       updated_at = excluded.updated_at
   `)
 
@@ -64,7 +74,7 @@ export default defineEventHandler(async (event) => {
       maxSlotIndexByAccount.set(slot.accountId, Math.max(maxSlotIndexByAccount.get(slot.accountId) ?? 0, slot.slotIndex))
       upsertSlot.run({
         accountId: slot.accountId, slotIndex: slot.slotIndex, employeeName: slot.employeeName || null,
-        hourlyRate: slot.hourlyRate ?? 0, weeklyHours: slot.weeklyHours ?? 0, weeklySalary: slot.weeklySalary ?? 0, updatedAt: now
+        hourlyRate: slot.hourlyRate ?? 0, weeklyHours: slot.weeklyHours ?? 0, weeklySalary: slot.weeklySalary ?? 0, firstPaycheckDate: slot.firstPaycheckDate || null, updatedAt: now
       })
     }
     for (const [accountId, maxIndex] of maxSlotIndexByAccount) {
@@ -78,7 +88,7 @@ export default defineEventHandler(async (event) => {
       if (!maxSlotIndexByAccount.has(accountId)) trimSlots.run(accountId, 0)
     }
 
-    if (taxRates) upsertTaxRates.run({ ...taxRates, updatedAt: now })
+    if (taxRates) upsertTaxRates.run({ ...taxRates, taxableTipsPerPayroll: taxRates.taxableTipsPerPayroll ?? 0, updatedAt: now })
   })
   run()
 
