@@ -487,6 +487,11 @@ function fmt(n: number): string {
   return `$${Math.round(n).toLocaleString()}`
 }
 
+// Hourly rows only show the first-paycheck input for a person added this session (id === null)
+// or one who already has a date set — current employees never need it. Salaried roles have no
+// add-person flow, so they get a small "+ new hire" link instead.
+const showPaycheckDateFor = reactive(new Set<number>())
+
 function addPerson(account: LaborAccount) {
   account.slots.push({ id: null, slotIndex: account.slots.length + 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '' })
 }
@@ -788,7 +793,7 @@ async function save() {
                 <tr v-for="(slot, i) in acc.slots" :key="i" class="person-row">
                   <td>
                     <input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" />
-                    <label class="start-date" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted.">first paycheck <input type="date" v-model="slot.firstPaycheckDate" /></label>
+                    <label v-if="slot.id === null || slot.firstPaycheckDate" class="start-date" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted.">first paycheck <input type="date" v-model="slot.firstPaycheckDate" /></label>
                   </td>
                   <td class="num">
                     <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="72px" />
@@ -882,7 +887,8 @@ async function save() {
                   </select>
                 </td>
                 <td>
-                  <input type="date" class="date-input" v-model="primarySlot(acc).firstPaycheckDate" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted." />
+                  <input v-if="primarySlot(acc).firstPaycheckDate || showPaycheckDateFor.has(acc.accountId)" type="date" class="date-input" v-model="primarySlot(acc).firstPaycheckDate" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted." />
+                  <button v-else type="button" class="add-person" title="Only needed for a new hire whose first paycheck hasn't happened yet" @click="showPaycheckDateFor.add(acc.accountId)">+ new hire</button>
                 </td>
                 <td class="num">
                   <NumberStepper
