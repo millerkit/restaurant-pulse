@@ -316,6 +316,8 @@ export default defineEventHandler((event) => {
       suggestedRemainderOfYearRate: number | null
       operatingCashFreedPerWeek: number | null
       operatingCashFreedTotal: number | null
+      remainderOfYearWeeks: number
+      minimumRemainingDeposits: number | null
     } | null = null
     if (catchUpDate) {
       const sustainYear = Number(catchUpDate.slice(0, 4)) + 1
@@ -350,8 +352,11 @@ export default defineEventHandler((event) => {
         // along the way) — answers "how much of the current plan is more
         // than this obligation actually needs," which can go back to
         // operating cash instead.
-        suggestedRemainderOfYearRate = minWeeklyRateToReachTarget(saved, asOfIso, yearEnd, bufferNeededForRecommendedRate, reserveFundedRows)
       }
+      // Independent of the declared plan: the least this year still needs,
+      // given the real balance — also backs the Year-End Projection's
+      // "cash still needed" card, which must fall as extra is transferred.
+      suggestedRemainderOfYearRate = minWeeklyRateToReachTarget(saved, asOfIso, yearEnd, bufferNeededForRecommendedRate, reserveFundedRows)
       const surplusVsNeeded = projectedYearEndBalance !== null ? projectedYearEndBalance - bufferNeededForRecommendedRate : null
       const operatingCashFreedPerWeek = currentWeeklyAmount !== null && suggestedRemainderOfYearRate !== null
         ? currentWeeklyAmount - suggestedRemainderOfYearRate
@@ -369,7 +374,9 @@ export default defineEventHandler((event) => {
         onTrack: surplusVsNeeded !== null ? surplusVsNeeded >= 0 : null,
         suggestedRemainderOfYearRate,
         operatingCashFreedPerWeek,
-        operatingCashFreedTotal: operatingCashFreedPerWeek !== null ? operatingCashFreedPerWeek * remainderOfYearWeeks : null
+        operatingCashFreedTotal: operatingCashFreedPerWeek !== null ? operatingCashFreedPerWeek * remainderOfYearWeeks : null,
+        remainderOfYearWeeks,
+        minimumRemainingDeposits: suggestedRemainderOfYearRate !== null ? suggestedRemainderOfYearRate * remainderOfYearWeeks : null
       }
     }
 
@@ -544,7 +551,14 @@ export default defineEventHandler((event) => {
   // scheduled after today (same "<= today counts as paid" cutoff yearRows
   // uses) plus the remaining Monday transfers at the declared weekly plan.
   const sbaRemaining = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba' && r.payment_date > today))
-  const remainingTransfers = remainingMondaysInYear * currentWeeklyAmountForProjection
+  // What the declared plan would move (Mondays left × weekly amount) vs. the
+  // least the reserve actually still needs given its real balance — the
+  // card shows the latter, so transferring extra now lowers it. Falls back
+  // to the plan if the reserve simulation isn't available.
+  const plannedRemainingTransfers = remainingMondaysInYear * currentWeeklyAmountForProjection
+  const reserveState = reserveProgress(today)
+  const minimumRemainingDeposits = reserveState.sustainability?.minimumRemainingDeposits ?? null
+  const remainingTransfers = minimumRemainingDeposits ?? plannedRemainingTransfers
   const remainingLoanCashNeededForYear = sbaRemaining.principal + sbaRemaining.catchUpInterest + remainingTransfers
   const breakevenNetIncomeForYear = loanCashNeededForYear - budgetedDepreciationForYear - thisYearFreeCashFlow.preOpeningNonCashAddBack
 
@@ -635,13 +649,15 @@ export default defineEventHandler((event) => {
       remainingLoanCashNeeded: remainingLoanCashNeededForYear,
       remainingSbaPrincipal: sbaRemaining.principal + sbaRemaining.catchUpInterest,
       remainingTransfers,
-      remainingTransferCount: remainingMondaysInYear,
+      remainingTransferCount: reserveState.sustainability?.remainderOfYearWeeks ?? remainingMondaysInYear,
+      minimumWeeklyTransfer: reserveState.sustainability?.suggestedRemainderOfYearRate ?? null,
+      plannedRemainingTransfers,
       weeklyTransferAmount: currentWeeklyAmountForProjection,
       breakevenNetIncome: breakevenNetIncomeForYear
     },
     covenant,
     covenantScoped,
-    reserve: reserveProgress(today),
+    reserve: reserveState,
     upcomingPayments: allLoanRows
       .filter(r => r.payment_date >= today)
       .sort((a, b) => a.payment_date.localeCompare(b.payment_date))

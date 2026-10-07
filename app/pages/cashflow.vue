@@ -23,7 +23,7 @@ type ReserveSustainability = {
   operatingCashFreedPerWeek: number | null
   operatingCashFreedTotal: number | null
 }
-type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, weeklyTransferAmount: number, breakevenNetIncome: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number }
 type Covenant = {
   minimumRatio: number
   testYear: number
@@ -254,7 +254,7 @@ async function submitPlan() {
               <span class="period">Cash still needed for the loans</span>
             </div>
             <div class="figure">{{ fmt(data.yearProjection.remainingLoanCashNeeded) }}</div>
-            <div class="caption">Going forward only, through Dec 31: {{ data.yearProjection.remainingTransferCount }} more weekly reserve transfers ({{ fmt(data.yearProjection.weeklyTransferAmount) }} each = {{ fmt(data.yearProjection.remainingTransfers) }}) plus SBA principal still due ({{ fmt(data.yearProjection.remainingSbaPrincipal) }}). Cash already paid this year isn't counted. Interest is already inside Net Income.</div>
+            <div class="caption">Going forward only, through Dec 31: the least the loan reserve still needs ({{ fmt(data.yearProjection.remainingTransfers) }}<template v-if="data.yearProjection.minimumWeeklyTransfer !== null"> — about {{ fmt(data.yearProjection.minimumWeeklyTransfer) }}/week over {{ data.yearProjection.remainingTransferCount }} weeks</template>, to cover Dec 20 and start {{ YEAR + 1 }} with a safe buffer) plus SBA principal still due ({{ fmt(data.yearProjection.remainingSbaPrincipal) }}). Falls as you transfer ahead of schedule. Your {{ fmt(data.yearProjection.weeklyTransferAmount) }}/week plan would move {{ fmt(data.yearProjection.plannedRemainingTransfers) }}. Cash already paid this year isn't counted. Interest is already inside Net Income.</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
