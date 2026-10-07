@@ -181,6 +181,41 @@ export default defineEventHandler(() => {
   const buyoutBookedByDow: Record<number, number> = {}
   for (const r of bookedRows) buyoutBookedByDow[r.dow] = r.totalCount
 
+  // ---- ongoing retail context (4300 Retail Sales' leaf accounts) ----
+  // Shown beside the "added monthly retail" lines so the user can see what
+  // ongoing retail is already expected to make before typing an increase.
+  // Both figures read the children of 4300 (never 4300 itself), which avoids
+  // the parent-also-carries-its-own-amount double count noted in CLAUDE.md.
+  // budget: that month's saved budget_targets for modelYear. trailing: average
+  // of the last 3 *closed* months of real daily_line_items before
+  // asOfLineItemDate's month (0 for a month with no postings).
+  const retailBudgetByMonth: Record<number, number> = {}
+  const retailBudgetRows = db.prepare(`
+    SELECT bt.month AS month, SUM(bt.amount) AS amount
+    FROM budget_targets bt
+    JOIN accounts a ON a.id = bt.account_id
+    JOIN accounts p ON p.id = a.parent_account_id
+    WHERE bt.year = ? AND p.account_number = '4300'
+    GROUP BY bt.month
+  `).all(modelYear) as { month: number, amount: number }[]
+  for (const r of retailBudgetRows) retailBudgetByMonth[r.month] = r.amount
+
+  let retailTrailingMonthly: number | null = null
+  if (asOfLineItemDate) {
+    const asOfY = Number(asOfLineItemDate.slice(0, 4))
+    const asOfM = Number(asOfLineItemDate.slice(5, 7))
+    const first = monthsBack(asOfY, asOfM, 3)
+    const last = monthsBack(asOfY, asOfM, 1)
+    const row = db.prepare(`
+      SELECT SUM(dli.amount) AS total
+      FROM daily_line_items dli
+      JOIN accounts a ON a.id = dli.account_id
+      JOIN accounts p ON p.id = a.parent_account_id
+      WHERE p.account_number = '4300' AND dli.date BETWEEN ? AND ?
+    `).get(monthRange(first.year, first.month).start, monthRange(last.year, last.month).end) as { total: number | null }
+    retailTrailingMonthly = (row.total ?? 0) / 3
+  }
+
   return {
     asOfAreaDate,
     trailingWindow,
@@ -193,6 +228,8 @@ export default defineEventHandler(() => {
     opexVariableShare,
     buyoutRates,
     buyoutWeekdays,
-    buyoutBookedByDow
+    buyoutBookedByDow,
+    retailBudgetByMonth,
+    retailTrailingMonthly
   }
 })

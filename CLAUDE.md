@@ -4174,6 +4174,56 @@ Oct–Dec recalibration section above, for two of its three causes:
 - Backups taken during the rollout contain QBO tokens; delete `/app/data/backup-pre-*` once
   numbers are trusted.
 
+## Revenue Modeling: additional special events and retail — 2026-10-07
+
+Three new what-if sections on [`app/pages/revenue-modeling.vue`](app/pages/revenue-modeling.vue)
+for revenue the per-area covers/spend model and the buyout counts don't
+capture (see `reports/retail-sales-2025.html` for the 2025 retail history
+that motivated it). A first version had one generic retail list; the user
+clarified retail is really two things, so it was split the same day:
+
+- **Additional Special Events** — popups, off-site dinners: times/year x
+  revenue each.
+- **Ongoing Retail: Added Monthly Sales** — a lift to year-round retail
+  (biscuits, pantry, bottled cocktails): added $/month x months, with months
+  defaulting to the remainder of the year (current month through Dec). Shows
+  the already-expected context beside it: budgeted $/month for those months
+  and the trailing 3-closed-month actual average, both from the leaf accounts
+  under 4300 Retail Sales (`retailBudgetByMonth`/`retailTrailingMonthly` in
+  `server/api/revenue-modeling.get.ts`; never reads 4300 itself, avoiding the
+  parent-carries-its-own-amount double count noted under Not yet done).
+- **One-Time Retail Offerings** — holiday/popup retail (Thanksgiving pickups,
+  Nordic popup) that supplements the ongoing sales: a single total revenue
+  per offering, no count.
+
+Each line is a name, quantity (where applicable), revenue, and a
+**direct-cost %**. Client-side scratch state only (`extraLines`, with a
+`kind`), same as the buyout counts — never persisted, cleared by Reset
+simulation, no schema change, no migration.
+
+- **Direct-cost % replaces the blended COGS % for these lines** (defaulting to
+  the year's blended COGS %, editable per line): retail biscuits and a ticketed
+  event have very different margins from dining. Put any extra event labor in
+  this %, since these lines add no variable labor (labor still scales with
+  covers only). Variable opex still scales with *total* revenue, extras
+  included. In `annualImpact` the blended COGS % now applies to
+  `coreSimRevenue` (baseline + covers/spend/buyout delta) only, and extras'
+  direct cost is added separately — shown as its own "Added events/retail
+  direct costs" row in the breakdown table rather than hidden inside COGS.
+- These are **on top of** the baseline, which already includes whatever is
+  budgeted in the event/catering/retail revenue accounts, so a line should
+  only hold the *increment* — the same convention as the buyout "+N more than
+  booked" stepper. The DSCR covenant card picks the change up automatically,
+  since it layers the simulation's net-income delta on its baseline.
+- **Not browser-verified**: local dev is behind Basic Auth, so this was never
+  clicked through. Checked by compiling the SFC with `@vue/compiler-sfc` and by
+  `npm run`-less `npx nuxi typecheck`: no new type errors (254 before and
+  after; all pre-existing, mostly strict-undefined complaints elsewhere).
+- **`vue-tsc` + `typescript@5` are now devDependencies** (added 2026-10-07 so
+  `nuxi typecheck` works). `typescript` is deliberately pinned to 5.x — `npm
+  add` otherwise pulls TypeScript 7, which `vue-tsc` 3 can't load. Compare
+  error counts against a baseline rather than expecting zero.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

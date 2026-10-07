@@ -30,6 +30,8 @@ type RevenueModelingData = {
   buyoutRates: { weekdayRate: number, weekendRate: number, updatedAt: string | null }
   buyoutWeekdays: BuyoutWeekday[]
   buyoutBookedByDow: Record<number, number>
+  retailBudgetByMonth: Record<number, number>
+  retailTrailingMonthly: number | null
 }
 
 const { data, pending, error, refresh } = await useFetch<RevenueModelingData>('/api/revenue-modeling')
@@ -91,11 +93,97 @@ watch(() => data.value?.buyoutWeekdays, (weekdays) => {
   buyoutCounts.value = next
 }, { immediate: true })
 
+// ---- additional special events & retail sales (named line items) ----
+// Revenue streams the per-area covers/spend model doesn't capture: one-off
+// events (a popup weekend, an off-site dinner) and retail (pantry items,
+// bottled cocktails, holiday pickups). Each line is count x revenue per
+// occurrence, with its own direct-cost % standing in for COGS plus any extra
+// event labor — retail and events have very different margins from dining
+// (see reports/retail-sales-2025.html), so they don't inherit the blended COGS
+// % the way a plain covers/spend delta does. Three kinds: special events
+// (count x revenue each), ongoing retail (an added $/month for some number of
+// months — a lift to the year-round baseline), and one-time retail offerings
+// (a holiday/popup pickup, e.g. the Nordic popup, that supplements the
+// ongoing sales; count is always 1). Like the buyout counts, these are
+// "additional" on top of the baseline, which already includes whatever is
+// budgeted in the event/catering/retail revenue accounts, and are scratch
+// what-if state: never persisted, cleared by Reset.
+type ExtraKind = 'event' | 'retail-ongoing' | 'retail-onetime'
+type ExtraLine = { id: number, kind: ExtraKind, name: string, count: number, revenueEach: number, costPct: number }
+const extraLines = ref<ExtraLine[]>([])
+let nextExtraLineId = 1
+// New lines default to the year's blended COGS % as a starting point to edit.
+const blendedCostPct = computed(() => {
+  const c = currentAnnual.value
+  return c.revenue > 0 ? Math.round((c.cogs / c.revenue) * 100) : 30
+})
+// An ongoing-retail lift applies from the current month through December, so
+// its months default to however many of those remain.
+const remainingMonths = 12 - asOfMonth + 1
+function addExtraLine(kind: ExtraKind) {
+  const count = kind === 'retail-ongoing' ? remainingMonths : 1
+  extraLines.value.push({ id: nextExtraLineId++, kind, name: '', count, revenueEach: 0, costPct: blendedCostPct.value })
+}
+function removeExtraLine(id: number) {
+  extraLines.value = extraLines.value.filter(l => l.id !== id)
+}
+const eventLines = computed(() => extraLines.value.filter(l => l.kind === 'event'))
+const ongoingRetailLines = computed(() => extraLines.value.filter(l => l.kind === 'retail-ongoing'))
+const oneTimeRetailLines = computed(() => extraLines.value.filter(l => l.kind === 'retail-onetime'))
+function lineRevenue(l: ExtraLine): number {
+  return l.count * l.revenueEach
+}
+function lineDirectCost(l: ExtraLine): number {
+  return lineRevenue(l) * (l.costPct / 100)
+}
+function linesRevenue(lines: ExtraLine[]): number {
+  return lines.reduce((s, l) => s + lineRevenue(l), 0)
+}
+function linesDirectCost(lines: ExtraLine[]): number {
+  return lines.reduce((s, l) => s + lineDirectCost(l), 0)
+}
+const extrasRevenue = computed(() => linesRevenue(extraLines.value))
+const extrasDirectCost = computed(() => linesDirectCost(extraLines.value))
+
+// Ongoing-retail context: what's already expected before typing a lift.
+const ongoingRetailContext = computed(() => {
+  const budget = data.value?.retailBudgetByMonth ?? {}
+  const months = Array.from({ length: remainingMonths }, (_, i) => asOfMonth + i)
+  const budgeted = months.reduce((s, m) => s + (budget[m] ?? 0), 0)
+  return {
+    budgetedPerMonth: remainingMonths > 0 ? budgeted / remainingMonths : 0,
+    trailingPerMonth: data.value?.retailTrailingMonthly ?? null
+  }
+})
+
+type ExtraGroup = {
+  kind: ExtraKind, title: string, addLabel: string, placeholder: string, note: string, lines: ExtraLine[],
+  countLabel: string | null, revenueLabel: string, revenueStep: number
+}
+const extraGroups = computed<ExtraGroup[]>(() => [
+  {
+    kind: 'event', title: 'Additional Special Events', addLabel: 'Add event', placeholder: 'e.g. Nordic popup weekend',
+    note: 'Events beyond what\u2019s already budgeted — popups, off-site dinners, ticketed nights. Revenue is per occurrence.',
+    lines: eventLines.value, countLabel: 'Times / year', revenueLabel: 'Revenue each', revenueStep: 500
+  },
+  {
+    kind: 'retail-ongoing', title: 'Ongoing Retail: Added Monthly Sales', addLabel: 'Add monthly lift', placeholder: 'e.g. Biscuits & pantry',
+    note: 'A lift to year-round retail (pantry items, to-go biscuits, bottled cocktails), in dollars added per month on top of what\u2019s already expected.',
+    lines: ongoingRetailLines.value, countLabel: 'Months', revenueLabel: 'Added $ / month', revenueStep: 100
+  },
+  {
+    kind: 'retail-onetime', title: 'One-Time Retail Offerings', addLabel: 'Add offering', placeholder: 'e.g. Nordic popup',
+    note: 'Holiday or special one-off retail (Thanksgiving pickups, a popup weekend) that supplements the ongoing sales. Enter the total expected for the offering.',
+    lines: oneTimeRetailLines.value, countLabel: null, revenueLabel: 'Revenue', revenueStep: 500
+  }
+])
+
 function resetSimulation() {
   areaDrafts.value = areaDrafts.value.map(d => ({ ...d, coversDelta: 0, spendDelta: 0 }))
   const resetCounts: Record<number, number> = {}
   for (const dow of Object.keys(buyoutCounts.value)) resetCounts[Number(dow)] = 0
   buyoutCounts.value = resetCounts
+  extraLines.value = []
 }
 
 // Incremental revenue from one buyout on this weekday — null when there's
@@ -222,7 +310,13 @@ const annualImpact = computed(() => {
   const baseOpex = currentAnnual.value.opex
   const otherIncome = currentAnnual.value.other_income
   const otherExpense = currentAnnual.value.other_expense
-  const simRevenue = baseRevenue + annualRevenueDelta
+  // Added events/retail carry their own direct-cost % (below), so the blended
+  // COGS % applies only to the covers/spend/buyout revenue, not to them.
+  // Variable opex still scales with total revenue, extras included.
+  const coreSimRevenue = baseRevenue + annualRevenueDelta
+  const extrasRev = extrasRevenue.value
+  const extrasCost = extrasDirectCost.value
+  const simRevenue = coreSimRevenue + extrasRev
 
   const laborVariableShare = data.value!.laborVariableShare!
   const laborVariable = baseLabor * laborVariableShare
@@ -231,7 +325,7 @@ const annualImpact = computed(() => {
   const simLabor = simLaborVariable + laborFixed
 
   const cogsPct = baseRevenue > 0 ? baseCogs / baseRevenue : 0
-  const simCogs = cogsPct * simRevenue
+  const simCogs = cogsPct * coreSimRevenue
 
   const opexVariableShare = data.value!.opexVariableShare!
   const opexVariable = baseOpex * opexVariableShare
@@ -246,12 +340,13 @@ const annualImpact = computed(() => {
   // matching the canonical netIncome() formula used by Edit Budget's Total
   // tab and Budget Pace, rather than silently omitting Other Income/Expense.
   const baseNetIncome = netIncome({ revenue: baseRevenue, cogs: baseCogs, labor: baseLabor, opex: baseOpex, other_income: otherIncome, other_expense: otherExpense })
-  const simNetIncome = netIncome({ revenue: simRevenue, cogs: simCogs, labor: simLabor, opex: simOpex, other_income: otherIncome, other_expense: otherExpense })
+  const simNetIncome = netIncome({ revenue: simRevenue, cogs: simCogs + extrasCost, labor: simLabor, opex: simOpex, other_income: otherIncome, other_expense: otherExpense })
 
   return {
     coversMultiplier,
     revenue: { base: baseRevenue, sim: simRevenue },
     cogs: { base: baseCogs, sim: simCogs },
+    extras: { revenue: extrasRev, directCost: extrasCost },
     labor: { base: baseLabor, sim: simLabor, baseFixed: laborFixed, baseVariable: laborVariable, simFixed: laborFixed, simVariable: simLaborVariable },
     opex: { base: baseOpex, sim: simOpex, baseFixed: opexFixed, baseVariable: opexVariable, simFixed: opexFixed, simVariable: simOpexVariable },
     netIncome: { base: baseNetIncome, sim: simNetIncome },
@@ -340,6 +435,9 @@ function fmtDeltaPts(base: number | null, sim: number | null): string {
 function parseIso(s: string) {
   return new Date(`${s}T00:00:00Z`)
 }
+function fmtMonthName(m: number) {
+  return new Date(Date.UTC(2000, m - 1, 1)).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+}
 function fmtDate(s: string) {
   return parseIso(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
@@ -399,6 +497,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
             <div class="section-note">
               Scaled by {{ fmtCoversPerNight(totals.simCoversPerNight - totals.baseCoversPerNight) }} covers/night ({{ ((annualImpact!.coversMultiplier - 1) * 100).toFixed(1) }}%) &middot; {{ data!.operatingNightsPerYear }} operating nights/year
               <template v-if="buyoutHasAnyCount"> &middot; {{ fmtDeltaMoney(0, buyoutAnnualRevenueDelta) }} from planned buyouts</template>
+              <template v-if="extrasRevenue > 0"> &middot; {{ fmtDeltaMoney(0, extrasRevenue) }} from added events/retail</template>
             </div>
           </div>
 
@@ -470,6 +569,12 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.cogs.base) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.cogs.sim) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.cogs.base, annualImpact!.cogs.sim) }}</td>
+                </tr>
+                <tr v-if="annualImpact!.extras.revenue > 0">
+                  <th scope="row">Added events/retail direct costs</th>
+                  <td class="derived">$0</td>
+                  <td class="derived sim">{{ fmtMoneyFull(annualImpact!.extras.directCost) }}</td>
+                  <td class="derived">{{ fmtDeltaMoney(0, annualImpact!.extras.directCost) }}</td>
                 </tr>
                 <tr>
                   <th scope="row">Labor — fixed (salaries, benefits, taxes)</th>
@@ -624,13 +729,69 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
           </div>
         </section>
 
+        <section v-for="group in extraGroups" :key="group.kind" class="rm-section">
+          <div class="section-head">
+            <div class="section-label">{{ group.title }}</div>
+            <div class="section-note">
+              {{ group.note }}
+              <button type="button" class="link-btn" @click="addExtraLine(group.kind)">+ {{ group.addLabel }}</button>
+              <button type="button" class="link-btn" @click="resetSimulation">Reset simulation</button>
+            </div>
+          </div>
+
+          <div v-if="group.kind === 'retail-ongoing'" class="quiet-note extras-empty">
+            Already expected for {{ fmtMonthName(asOfMonth) }}–Dec: <strong>{{ fmtMoneyFull(ongoingRetailContext.budgetedPerMonth) }}/month</strong> budgeted<template v-if="ongoingRetailContext.trailingPerMonth != null">, vs. <strong>{{ fmtMoneyFull(ongoingRetailContext.trailingPerMonth) }}/month</strong> actual over the last 3 closed months</template>.
+          </div>
+          <div v-if="group.lines.length === 0" class="quiet-note extras-empty">None added yet.</div>
+          <div v-else class="pl-table-card">
+            <table class="pl-table extras-table">
+              <caption>{{ group.title }}: name, {{ group.countLabel ? group.countLabel.toLowerCase() + ', ' : '' }}{{ group.revenueLabel.toLowerCase() }}, direct cost percent, and the resulting total revenue and margin</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th v-if="group.countLabel" scope="col">{{ group.countLabel }}</th>
+                  <th scope="col">{{ group.revenueLabel }}</th>
+                  <th scope="col">Direct cost %</th>
+                  <th scope="col" class="sim">Total revenue</th>
+                  <th scope="col" class="sim">Margin</th>
+                  <th scope="col"><span class="sr-only">Remove</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="line in group.lines" :key="line.id">
+                  <th scope="row">
+                    <input v-model="line.name" type="text" class="extras-name" :placeholder="group.placeholder" :aria-label="`${group.title} name`" />
+                  </th>
+                  <td v-if="group.countLabel"><span class="pct-cell"><NumberStepper v-model="line.count" :min="0" :step="1" width="44px" /></span></td>
+                  <td><span class="pct-cell">$<NumberStepper v-model="line.revenueEach" :min="0" :step="group.revenueStep" width="70px" /></span></td>
+                  <td><span class="pct-cell"><NumberStepper v-model="line.costPct" :min="0" :max="100" :step="1" width="44px" />%</span></td>
+                  <td class="derived sim">{{ fmtMoneyFull(lineRevenue(line)) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(lineRevenue(line) - lineDirectCost(line)) }}</td>
+                  <td><button type="button" class="link-btn" :aria-label="`Remove ${line.name || 'line'}`" @click="removeExtraLine(line.id)">Remove</button></td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th scope="row">Total</th>
+                  <td v-if="group.countLabel" class="derived">—</td>
+                  <td class="derived">—</td>
+                  <td class="derived">—</td>
+                  <td class="derived sim">{{ fmtMoneyFull(linesRevenue(group.lines)) }}</td>
+                  <td class="derived sim">{{ fmtMoneyFull(linesRevenue(group.lines) - linesDirectCost(group.lines)) }}</td>
+                  <td class="derived">—</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+
         <div class="legend rm-legend">
           <span class="chip good">Improves vs. current</span>
           <span class="chip critical">Worsens vs. current</span>
         </div>
 
         <footer class="rm-footer">
-          <span>Baseline: real trailing 3-month Toast per-area covers/revenue, annualized against this year's real budget/actual revenue, COGS, labor, and opex.</span>
+          <span>Baseline: real trailing 3-month Toast per-area covers/revenue, annualized against this year's real budget/actual revenue, COGS, labor, and opex. Added events and retail are on top of anything already budgeted; their direct-cost % replaces the blended COGS % (include any extra event labor in it), and they add no variable labor.</span>
         </footer>
       </template>
     </template>
@@ -780,6 +941,17 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .buyout-compare-label { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--ink-3); }
 .buyout-compare-stat .derived { font-size: 12px; }
 .buyout-compare-count { font-size: 8.5px; color: var(--ink-3); }
+
+/* ---------- additional events / retail ---------- */
+.extras-empty { margin: 2px 0 6px; }
+.extras-table { min-width: 640px; }
+.extras-table thead th.sim { background-color: color-mix(in srgb, #3e5c76 88%, white 12%); }
+.extras-table .derived.sim { background: var(--surface-alt); }
+.extras-name {
+  width: 100%; min-width: 150px; font: inherit; font-size: 13px; font-weight: 500; padding: 6px 8px;
+  border: 1px solid var(--hair); border-radius: 5px; background: var(--surface); color: var(--ink);
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 @media (max-width: 760px) {
   .buyout-weekday-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
