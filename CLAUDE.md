@@ -4224,6 +4224,36 @@ simulation, no schema change, no migration.
   add` otherwise pulls TypeScript 7, which `vue-tsc` 3 can't load. Compare
   error counts against a baseline rather than expecting zero.
 
+## SBA payments routed through the loan reserve, effective Nov 1 2026 — 2026-10-08
+
+The user's call, to isolate all debt service from the main Amex operating
+account: one weekly transfer into the 1005 Loan Reserve funds everything, and
+each month the SBA payment ($6,161.18, level through 2035) moves from the
+reserve to the SBA account before the 12th. A transfer between two bank
+accounts, so no P&L effect in QBO.
+
+- **`SBA_VIA_RESERVE_FROM = '2026-11-01'` / `isReserveFunded()`**
+  (`server/api/cashflow.get.ts`) replace the old `loan_key !== 'sba'` test
+  everywhere: `reserveFundedRows` (reserve simulation, 2027 sustainability,
+  minimum deposits), `freeCashFlow()`'s direct-vs-reserve split, and the
+  year-projection direct/reserve-funded totals. SBA payments before Nov 1
+  (including Oct 12, already funded in the SBA account) stay "direct" and are
+  still subtracted as principal; from Nov 12 they are reserve draws, covered
+  by the reserve transfers already subtracted, so they are not subtracted
+  twice (same double-count rule as 2026-08-16).
+- **Numbers that move** (expected, from `loan_schedule`): Nov 12 and Dec 12
+  add $12,322.36 of draws before Dec 20 (the $61,693.48 target is unchanged);
+  2027 reserve draws rise from $199,579.20 to $273,513.36 a year, so
+  break-even goes from about $3,838 to about $5,260/week and the recommended
+  rate from $4,000 to about $5,500/week, with a larger Jan 1 buffer. The "Cash
+  still needed" card now carries only the Oct 12 SBA principal directly.
+- **Not done**: the DSCR covenant cards still use all loans / the scoped set
+  regardless of funding source, which is correct. No schema change.
+- Verified by typecheck only (no new errors beyond the pre-existing
+  strict-undefined ones in these files); not clicked through in a browser
+  (local dev is behind Basic Auth). Check the Cash Flow page after deploy:
+  the reserve cards should show the larger 2027 rate and the Nov/Dec draws.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

@@ -12,6 +12,18 @@
 type LoanRow = { loan_key: string, lender: string, payment_date: string, payment_type: 'catch_up' | 'regular', interest: number, principal: number, total_payment: number }
 type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null }
 
+// From this date on, the SBA loan's monthly payment is routed through the 1005
+// loan reserve like every other loan (user's call 2026-10-08): the weekly
+// transfer covers it, and each month the payment amount moves from the
+// reserve to the SBA account. Payments before it were paid straight from
+// operating cash, so history (and the Oct 12 payment, already funded in the
+// SBA account) stays "direct". See CLAUDE.md's "SBA payments routed through
+// the loan reserve" section.
+const SBA_VIA_RESERVE_FROM = '2026-11-01'
+function isReserveFunded(r: LoanRow): boolean {
+  return r.loan_key !== 'sba' || r.payment_date >= SBA_VIA_RESERVE_FROM
+}
+
 // Pre-opening, non-cash reclassification/catch-up entries — real P&L
 // expenses recognized well after the fact, for costs originally paid using
 // loan proceeds before this restaurant opened at its current (Cambridge
@@ -234,7 +246,7 @@ export default defineEventHandler((event) => {
   // regular installment is treated the same way Jones & Miller's regular
   // payments always have been: an ordinary withdrawal event in the
   // simulation below, not part of the minimum-balance target itself.
-  const reserveFundedRows = allLoanRows.filter(r => r.loan_key !== 'sba')
+  const reserveFundedRows = allLoanRows.filter(isReserveFunded)
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
@@ -462,8 +474,8 @@ export default defineEventHandler((event) => {
     return { hasData, netIncome, depreciation, actualLoanInterest, preOpeningNonCashAddBack, nonCashAdjustments, totals }
   }
 
-  // Only SBA's debt service is paid directly from operating cash — every
-  // other loan (reserveFundedRows, above) draws from the 1005 reserve
+  // Only SBA payments before SBA_VIA_RESERVE_FROM are paid directly from
+  // operating cash — every other payment (reserveFundedRows, above) draws from the 1005 reserve
   // account, which is itself built up FROM operating cash via the reserve
   // transfers subtracted below. Subtracting those loans' principal/catch-up
   // interest AGAIN here would double-count the same cash outflow: once when
@@ -480,8 +492,8 @@ export default defineEventHandler((event) => {
   function freeCashFlow(startIso: string, endIso: string, rows: LoanRow[]) {
     const actuals = actualsFor(startIso, endIso)
     const reserveTransfers = reserveTransferredInRange(startIso, endIso)
-    const direct = summarizeDebtService(rows.filter(r => r.loan_key === 'sba'))
-    const reserveFunded = summarizeDebtService(rows.filter(r => r.loan_key !== 'sba'))
+    const direct = summarizeDebtService(rows.filter(r => !isReserveFunded(r)))
+    const reserveFunded = summarizeDebtService(rows.filter(isReserveFunded))
     const freeCashFlow = actuals.netIncome + actuals.depreciation + actuals.preOpeningNonCashAddBack - direct.principal - direct.catchUpInterest - reserveTransfers
     return {
       ...actuals,
@@ -535,8 +547,8 @@ export default defineEventHandler((event) => {
   // 9 loans' principal/catch-up interest isn't also added here — it's
   // already inside reserveTransfersProjectedForYear). Loan interest itself
   // is already netted into Net Income and so doesn't need a separate check.
-  const fullYearDirect = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba'))
-  const fullYearReserveFunded = summarizeDebtService(fullYearRows.filter(r => r.loan_key !== 'sba'))
+  const fullYearDirect = summarizeDebtService(fullYearRows.filter(r => !isReserveFunded(r)))
+  const fullYearReserveFunded = summarizeDebtService(fullYearRows.filter(isReserveFunded))
   const thisYearFreeCashFlow = freeCashFlow(yearStart, yearEnd, yearRows)
 
   // Cash the loans take that never appears on the P&L (principal and
@@ -550,7 +562,7 @@ export default defineEventHandler((event) => {
   // Forward-looking slice of the same cash: SBA principal/catch-up still
   // scheduled after today (same "<= today counts as paid" cutoff yearRows
   // uses) plus the remaining Monday transfers at the declared weekly plan.
-  const sbaRemaining = summarizeDebtService(fullYearRows.filter(r => r.loan_key === 'sba' && r.payment_date > today))
+  const sbaRemaining = summarizeDebtService(fullYearRows.filter(r => !isReserveFunded(r) && r.payment_date > today))
   // What the declared plan would move (Mondays left × weekly amount) vs. the
   // least the reserve actually still needs given its real balance — the
   // card shows the latter, so transferring extra now lowers it. Falls back

@@ -218,7 +218,7 @@ async function submitPlan() {
               </span>
             </div>
             <div class="figure">{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</div>
-            <div class="caption">Net Income + Depreciation − SBA principal − Reserve transfers</div>
+            <div class="caption">Net Income + Depreciation − direct SBA principal − Reserve transfers</div>
             <div v-if="!data.thisYear.freeCashFlow.hasData" class="caption">No synced actuals for this period yet — Net Income is $0 below.</div>
           </div>
         </div>
@@ -227,12 +227,12 @@ async function submitPlan() {
           <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
           <div v-for="adj in data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0)" :key="adj.label" class="fcf-row"><span>+ {{ adj.label }} (non-cash add-back)</span><span>{{ fmt(adj.amount) }}</span></div>
-          <div class="fcf-row"><span>− SBA principal payments (paid directly from operating cash)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
+          <div class="fcf-row"><span>− SBA principal paid directly from operating cash (through Oct 12; from Nov it runs through the reserve)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
           <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
           <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
         </div>
         <div class="section-note">
-          The other 9 loans' principal ({{ fmt(data.thisYear.freeCashFlow.reserveFundedPrincipal) }}) and catch-up interest ({{ fmt(data.thisYear.freeCashFlow.reserveFundedCatchUpInterest) }}) are paid out of the loan reserve account, not directly from operating cash — already covered by the reserve transfers above, so they aren't subtracted a second time.
+          The other 9 loans' principal ({{ fmt(data.thisYear.freeCashFlow.reserveFundedPrincipal) }}) and catch-up interest ({{ fmt(data.thisYear.freeCashFlow.reserveFundedCatchUpInterest) }}) are paid out of the loan reserve account, not directly from operating cash — as are the SBA payments from Nov 12 on — already covered by the reserve transfers above, so they aren't subtracted a second time.
         </div>
         <div v-if="data.thisYear.freeCashFlow.preOpeningNonCashAddBack !== 0" class="section-note">
           Includes a total {{ fmt(data.thisYear.freeCashFlow.preOpeningNonCashAddBack) }} add-back for pre-opening reclassification/catch-up entries booked well after the fact ({{ data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0).map(a => `${a.label}: ${fmt(a.amount)}`).join('; ') }}) — real P&amp;L expenses, but not current-period cash: that spending was already paid out of loan proceeds before the restaurant opened at its current location, well before this reserve-tracking period began, so it's excluded here to avoid counting the same cash outflow twice.
@@ -254,7 +254,7 @@ async function submitPlan() {
               <span class="period">Cash still needed for the loans</span>
             </div>
             <div class="figure">{{ fmt(data.yearProjection.remainingLoanCashNeeded) }}</div>
-            <div class="caption">Going forward only, through Dec 31: the least the loan reserve still needs ({{ fmt(data.yearProjection.remainingTransfers) }}<template v-if="data.yearProjection.minimumWeeklyTransfer !== null"> — about {{ fmt(data.yearProjection.minimumWeeklyTransfer) }}/week over {{ data.yearProjection.remainingTransferCount }} weeks</template>, to cover Dec 20 and start {{ YEAR + 1 }} with a safe buffer) plus SBA principal still due ({{ fmt(data.yearProjection.remainingSbaPrincipal) }}). Falls as you transfer ahead of schedule. Your {{ fmt(data.yearProjection.weeklyTransferAmount) }}/week plan would move {{ fmt(data.yearProjection.plannedRemainingTransfers) }}. Cash already paid this year isn't counted. Interest is already inside Net Income.</div>
+            <div class="caption">Going forward only, through Dec 31: the least the loan reserve still needs ({{ fmt(data.yearProjection.remainingTransfers) }}<template v-if="data.yearProjection.minimumWeeklyTransfer !== null"> — about {{ fmt(data.yearProjection.minimumWeeklyTransfer) }}/week over {{ data.yearProjection.remainingTransferCount }} weeks</template>, to cover Dec 20 and start {{ YEAR + 1 }} with a safe buffer) <template v-if="data.yearProjection.remainingSbaPrincipal > 0">plus SBA principal still paid directly ({{ fmt(data.yearProjection.remainingSbaPrincipal) }}, the Oct 12 payment). </template>This includes the SBA payments from Nov 12 on, which now run through the reserve. Falls as you transfer ahead of schedule. Your {{ fmt(data.yearProjection.weeklyTransferAmount) }}/week plan would move {{ fmt(data.yearProjection.plannedRemainingTransfers) }}. Cash already paid this year isn't counted. Interest is already inside Net Income.</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
