@@ -402,7 +402,7 @@ export default defineEventHandler((event) => {
       onPaceForCatchUp,
       catchUpShortfall,
       complete: remaining <= 0,
-      transfers: toDate.map(t => ({ date: t.transfer_date, amount: t.amount, note: t.note })),
+      transfers: toDate.map(t => ({ id: t.id, date: t.transfer_date, amount: t.amount, note: t.note })),
       sustainability
     }
   }

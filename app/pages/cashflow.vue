@@ -9,7 +9,7 @@ type PeriodFigures = {
   debtService: { principal: number, interest: number, catchUpInterest: number, totalCashOut: number, payments: Payment[] }
   freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, preOpeningNonCashAddBack: number, nonCashAdjustments: { label: string, amount: number }[], reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
-type ReserveTransfer = { date: string, amount: number, note: string | null }
+type ReserveTransfer = { id: number, date: string, amount: number, note: string | null }
 type ReserveSustainability = {
   sustainYear: number
   totalDraws: number
@@ -157,6 +157,17 @@ async function submitTransfer() {
     transferError.value = err?.data?.statusMessage || err?.message || 'Failed to record transfer'
   } finally {
     transferSubmitting.value = false
+  }
+}
+
+async function deleteTransfer(t: ReserveTransfer) {
+  if (!confirm(`Delete the ${fmtDate(t.date)} transfer of ${fmt(t.amount)}?`)) return
+  transferError.value = null
+  try {
+    await $fetch('/api/cashflow/reserve-transfer', { method: 'DELETE', query: { id: t.id } })
+    await load()
+  } catch (err: any) {
+    transferError.value = err?.data?.statusMessage || err?.message || 'Failed to delete transfer'
   }
 }
 
@@ -486,12 +497,15 @@ async function submitPlan() {
               {{ showTransferHistory ? 'Hide' : 'Show' }} {{ data.reserve.transfers.length }} recorded transfer{{ data.reserve.transfers.length === 1 ? '' : 's' }}
             </span>
             <table v-if="showTransferHistory" class="cf-table transfers">
-              <thead><tr><th>Date</th><th>Amount</th><th>Note</th></tr></thead>
+              <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="(t, i) in data.reserve.transfers" :key="i">
                   <td>{{ fmtDate(t.date) }}</td>
                   <td :class="t.amount < 0 ? 'negative' : ''">{{ fmt(t.amount) }}</td>
                   <td class="note">{{ t.note || '—' }}</td>
+                  <td class="delete-cell">
+                    <button v-if="i === data.reserve.transfers.length - 1" type="button" class="delete-link" @click="deleteTransfer(t)">Delete</button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -596,6 +610,7 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cf-table.transfers th, .cf-table.transfers td { padding: 6px 10px; font-size: 12px; white-space: normal; }
 .cf-table.transfers td.negative { color: var(--critical-text); }
 .cf-table.transfers td.note { color: var(--ink-3); }
+.cf-table.transfers .delete-link { background: none; border: 0; padding: 0; font-size: 12px; font-weight: 600; color: var(--critical-text); cursor: pointer; }
 
 .transfer-form {
   display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--hair); padding-top: 12px;
