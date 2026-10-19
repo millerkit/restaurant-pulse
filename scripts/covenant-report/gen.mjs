@@ -15,14 +15,16 @@ const pct=(n,d=1)=>(n*100).toFixed(d)+'%'
 const CH='Chef’s Counter',DR='Dining Room',BR='Bar',SA='Salon'
 
 // ---------- P&L snapshot (production, read 2026-10-19) ----------
+// Section 179 depreciation on the 1281 Cambridge St assets, budgeted for Dec 2026 (the user's estimate on 2026-10-19; the accountant must confirm what is allowed). Non-cash; EBITDA adds it back.
+const depAddBack=300000
 const proceeds=100000, nbv=nbvAssets, gainReal=proceeds-nbv
 const ytd={revenue:1344108.22,cogs:310887.31,labor:785985.83,opex:455727.04,oi:176048.11,oe:14750}
-const proj={revenue:1212069.68+644236.15,cogs:277586.59+175130.72,labor:701823.81+361959.08,opex:422441.06+141744.26,oi:131491.11+168900-nbv,oe:14750}
+const proj={revenue:1212069.68+644236.15,cogs:277586.59+175130.72,labor:701823.81+361959.08,opex:422441.06+141744.26,oi:131491.11+168900-nbv,oe:14750+depAddBack}
 const ni=x=>x.revenue-x.cogs-x.labor-x.opex+x.oi-x.oe
 const ytdNI=ni(ytd), projNI=ni(proj)
 const interestAddBack=80015.30   // account 7020, Jan–Sep posted + Oct–Dec budget
-const neededNI=req-interestAddBack
-const ebitda=projNI+interestAddBack, ratioNow=ebitda/debt, cushion=ebitda-req
+const neededNI=req-interestAddBack-depAddBack
+const ebitda=projNI+interestAddBack+depAddBack, ratioNow=ebitda/debt, cushion=ebitda-req
 const assetSale=gainReal, noSale=ebitda-assetSale, noSaleRatio=noSale/debt, gap=req-noSale
 const ratio=v=>(noSale+v)/debt
 const allLoansDebt=128439.96, allLoansRatio=ebitda/allLoansDebt, allLoansShort=1.25*allLoansDebt-ebitda
@@ -71,7 +73,7 @@ const html=`<!doctype html><html><head><meta charset="utf-8"><title>Urban Hearth
 :root{--ink:#1c1c1e;--mute:#666;--line:#e2e0da;--panel:#f7f5ef;--blue:#1f5f8b;--blue-l:#cfe3f1;--or:#b4510f;--or-l:#fbe2d1}
 body{font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:var(--ink);margin:0}
 h1{font-size:23px;margin:0}.meta{color:var(--mute);margin:2px 0 14px}
-h2{font-size:15px;margin:14px 0 3px}.lead{color:var(--mute);margin:0 0 8px}
+h2{font-size:15px;margin:11px 0 3px}.lead{color:var(--mute);margin:0 0 8px}
 .page2{break-before:page}
 .tiles{display:flex;gap:10px}.tile{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 .tv{font-size:26px;font-weight:700}.tl{font-size:11px;color:var(--mute)}
@@ -84,7 +86,7 @@ h2{font-size:15px;margin:14px 0 3px}.lead{color:var(--mute);margin:0 0 8px}
 table{border-collapse:collapse;width:100%}
 th{text-align:left;font-size:10.5px;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:2px solid var(--line)}
 th.c,td.c{text-align:center}
-td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+td{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
 td.nm{font-weight:600;width:150px}.sub{font-weight:400;font-size:10px;color:var(--mute)}
 td.sh{color:var(--mute);width:60px;font-size:11px}
 .bc{display:flex;align-items:center;gap:6px;height:20px}.bc span{font-variant-numeric:tabular-nums;font-weight:600;font-size:12px}
@@ -105,7 +107,7 @@ tr.tot td{border-top:2px solid #999;border-bottom:0;font-weight:700}
 .sckey b{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:4px}
 .notes{font-size:10px;color:#444;line-height:1.45;padding-left:16px;margin-top:10px}.notes li{margin-bottom:3px}
 .cg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.grp{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:9px 12px}
+.grp{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 12px}
 .grp.bad{border-color:var(--or);background:var(--or-l)}.grp.good{border-color:var(--blue);background:var(--blue-l)}.v.pos{color:var(--blue)}
 .grp h3{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}.grp h3 span{text-transform:none;letter-spacing:0;font-weight:400}
 .pair{display:flex;gap:12px}.pair>div{flex:1}.pair>div+div{border-left:1px solid var(--line);padding-left:12px}
@@ -118,15 +120,15 @@ tr.tot td{border-top:2px solid #999;border-bottom:0;font-weight:700}
 <div class="meta">Prepared for Erin · Oct 19, 2026 · Toast covers and spend, trailing 3 months (Aug 1 – Oct 18)</div>
 <div class="cg">
 <div class="grp"><h3>Revenue</h3><div class="pair"><div><div class="v">${$(ytd.revenue)}</div><div class="l">So far this year<br>(through Oct 18)</div></div><div><div class="v">${$(proj.revenue)}</div><div class="l">Projected for 2026</div></div></div></div>
-<div class="grp"><h3>Other income <span>grants &amp; asset sale</span></h3><div class="pair"><div><div class="v">${$(ytd.oi)}</div><div class="l">So far (almost all grants)</div></div><div><div class="v">${$(proj.oi)}</div><div class="l">Projected, incl. a ${K(gainReal)} gain on the old location’s assets and ${K(68600-44557)} more grant money not yet received</div></div></div></div>
-<div class="grp"><h3>Profit</h3><div class="pair"><div><div class="v ${ytdNI<0?'neg':''}">${ytdNI<0?'−':''}${$(Math.abs(ytdNI))}</div><div class="l">So far · ${pct(ytdNI/ytd.revenue)} margin</div></div><div><div class="v">${$(projNI)}</div><div class="l">Projected · ${pct(projNI/proj.revenue)} margin</div></div></div></div>
-<div class="grp good"><h3>Loan covenant</h3><div class="pair"><div><div class="v">${$(neededNI)}</div><div class="l">Profit we need for 2026</div></div><div><div class="v pos">+${$(projNI-neededNI)}</div><div class="l">Projected cushion · ${ratioNow.toFixed(2)}x vs 1.25x required ✓</div></div></div></div>
+<div class="grp"><h3>Other income <span>grants &amp; asset sale</span></h3><div class="pair"><div><div class="v">${$(ytd.oi)}</div><div class="l">So far (almost all grants)</div></div><div><div class="v">${$(proj.oi)}</div><div class="l">Projected, incl. a ${K(gainReal)} asset-sale gain and ${K(68600-44557)} of grants not yet received</div></div></div></div>
+<div class="grp"><h3>Profit</h3><div class="pair"><div><div class="v ${ytdNI<0?'neg':''}">${ytdNI<0?'−':''}${$(Math.abs(ytdNI))}</div><div class="l">So far · ${pct(ytdNI/ytd.revenue)} margin</div></div><div><div class="v ${projNI<0?'neg':''}">${projNI<0?'−':''}${$(Math.abs(projNI))}</div><div class="l">Projected · ${pct(projNI/proj.revenue)} margin; includes $300K non-cash depreciation</div></div></div></div>
+<div class="grp good"><h3>Loan covenant</h3><div class="pair"><div><div class="v">${$(req)}</div><div class="l">Earnings we need for 2026, before interest and depreciation</div></div><div><div class="v pos">+${$(projNI-neededNI)}</div><div class="l">Projected cushion · ${ratioNow.toFixed(2)}x vs 1.25x required ✓</div></div></div></div>
 </div>
-<p class="sub" style="margin:6px 0 0">So far this year includes only part of October’s bills, so it reads a little better than it will once October closes. Without the grants and asset sale, 2026 is projected at a <b>${$(Math.abs(projOpsNI))} loss</b>: the year’s profit comes from that other income.</p>
+<p class="sub" style="margin:6px 0 0">So far this year includes only part of October’s bills, so it reads a little better than it will once October closes. Operations alone, before grants, the asset sale, depreciation and other expenses, are projected at a <b>${$(Math.abs(projOpsNI))} loss</b>.</p>
 
 <h2>What the covenant requires, in plain terms</h2>
 <div class="callout blue">Our Eastern Bank loan has a rule we have to pass once a year: <b>for every $1 we pay on our loans, the restaurant has to earn at least $1.25</b> before loan interest is paid. This is the bank’s way of checking that we earn comfortably more than we owe, with a 25% cushion.<br>
-<span style="display:block;margin-top:5px">For 2026 the loans counted (the SBA loan plus five investor notes) cost <b>${$(debt)}</b> in payments, so we need <b>${$(req)}</b> of earnings before interest (1.25 × ${$(debt)}). Because the ${$(interestAddBack)} of loan interest on our books this year gets added back, that works out to only about <b>${$(neededNI)} of profit</b>. We’re projected at ${$(projNI)}, so <b>we pass with about ${$(cushion)} to spare</b> (${ratioNow.toFixed(2)}x).</span>
+<span style="display:block;margin-top:5px">For 2026 the loans counted (the SBA loan plus five investor notes) cost <b>${$(debt)}</b> in payments, so we need <b>${$(req)}</b> of earnings before interest and depreciation (1.25 × ${$(debt)}). Loan interest (${$(interestAddBack)}) and the $300K Section 179 depreciation (non-cash) are both added back, so even a projected loss of ${$(Math.abs(projNI))} works out to <b>${$(ebitda)}</b> of covenant earnings. <b>We pass with about ${$(cushion)} to spare</b> (${ratioNow.toFixed(2)}x).</span>
 <span style="display:block;margin-top:5px"><b>The catch:</b> that projection counts a ${K(gainReal)} gain from selling the old location for $100K (equipment, the lease and the liquor license). Those are still carried at ${K(nbv)} on the books after catch-up depreciation, so the gain is $100K less that. If the sale slips into 2027, or the bank won’t count a one-time gain as earnings, we’d be at <b>${noSaleRatio.toFixed(2)}x, about ${$(gap)} short</b>. Page 2 looks at that risk.</span></div>
 <div class="gauge"><div class="mk risk" style="left:${noSaleRatio/2*100}%"><b style="color:var(--or)">Without asset sale ${noSaleRatio.toFixed(2)}x</b></div><div class="mk cov" style="left:${1.25/2*100}%"><b class="lft" style="color:var(--blue)">Needed 1.25x</b></div><div class="mk" style="left:${ratioNow/2*100}%"><b class="rgt">Projected ${ratioNow.toFixed(2)}x</b></div></div>
 <div class="scale"><span style="left:0">0x</span><span style="left:25%">0.5x</span><span style="left:50%">1.0x</span><span style="left:75%">1.5x</span><span style="left:100%">2.0x</span></div>
@@ -164,9 +166,9 @@ ${scRows}
 </div>
 
 <ul class="notes">
-<li><b>Baseline:</b> the Revenue Modeling projection — real results through September plus the budget for Oct–Dec, with the rest of October assumed to land on plan. The covenant counts the SBA loan and the Chen, Savage, Schaefer, Gilreath and Mis notes: ${$(debt)} of payments in 2026, so required EBITDA is 1.25 × that = ${$(req)}. Projected EBITDA = ${$(projNI)} profit + ${$(interestAddBack)} loan interest on the books (actual Jan–Sep, budget Oct–Dec) + $0 depreciation = ${$(ebitda)}. If the bank counts all 10 loans (${$(allLoansDebt)} of payments) we’d be at ${allLoansRatio.toFixed(2)}x, about ${K(allLoansShort)} short, even with the asset sale.</li>
+<li><b>Baseline:</b> the Revenue Modeling projection — real results through September plus the budget for Oct–Dec, with the rest of October assumed to land on plan. The covenant counts the SBA loan and the Chen, Savage, Schaefer, Gilreath and Mis notes: ${$(debt)} of payments in 2026, so required EBITDA is 1.25 × that = ${$(req)}. Projected EBITDA = ${projNI<0?'−':''}${$(Math.abs(projNI))} profit + ${$(interestAddBack)} loan interest on the books (actual Jan–Sep, budget Oct–Dec) + ${$(depAddBack)} depreciation (budgeted for December: Section 179 on about $300K of 1281 Cambridge St furniture and equipment, estimate pending the accountant) = ${$(ebitda)}. If the bank counts all 10 loans (${$(allLoansDebt)} of payments) we’d be at ${allLoansRatio.toFixed(2)}x, about ${K(allLoansShort)} short, even with the asset sale.</li>
 <li><b>Value of an extra cover:</b> recent spend per cover × (1 − ${pct(cogsPct)} food &amp; drink cost − ${pct(opexVarPct)} variable operating costs) − about ${$(laborVarPerCover,2)} of hourly labor. That labor figure is a restaurant-wide average; 2 more seats at Chef’s Counter probably add less, so Chef’s is, if anything, understated. The Salon adds almost nothing per cover at about $38 of spend.</li>
-<li><b>Other income:</b> the projection includes ${$(proj.oi)} of other income, ${K(68600-44557)} of it grant money and the ${K(gainReal)} gain on the asset sale not yet received. Every dollar of it that slips comes straight off the cushion. Depreciation is $0 in the projection, so no add-back is being taken for it.</li>
+<li><b>Other income:</b> the projection includes ${$(proj.oi)} of other income, ${K(68600-44557)} of it grant money and the ${K(gainReal)} gain on the asset sale not yet received. Every dollar of it that slips comes straight off the cushion. The $300K depreciation figure is an estimate; Section 179 is limited to business income for the year, so the allowed amount may be lower. Depreciation does not change the covenant ratio, because it is added back.</li>
 </ul>
 </body></html>`
 fs.writeFileSync(new URL('../../reports/covenant-scenarios-2026-10.html',import.meta.url).pathname,html)
