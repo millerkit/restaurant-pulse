@@ -4320,13 +4320,14 @@ the app's synced data changes.
   Summary for the accountant: `reports/depreciation-catch-up/accountant-summary-2025-amendment-and-2026-return.txt`.
 - Section 179 on the 1281 Cambridge St purchase (2026-10-19): the accountant plans to elect it on
   all (or as much as allowed of) the new location's furniture and equipment; the user estimates
-  about $300K (QBO's new-location furniture/equipment is far larger than the $112,765 appraisal list
-  on the worksheet, which covered only the assets conveyed with the property; some conveyed assets
-  were also disposed of, disposal records still to do). To go in the 2026 budget on account 7910
-  Depreciation (other_expense), December. It lowers projected net income by that amount but not
-  EBITDA: the covenant add-back sums the year's budgeted 'Depreciation'. Section 179 is limited to
-  business income for the year, so the allowed amount may be lower. The covenant report assumes
-  $300K (`depAddBack` in `scripts/covenant-report/gen.mjs`) and now shows a projected loss.
+  up to about $300K (QBO's new-location furniture/equipment is far larger than the $112,765 appraisal
+  list on the worksheet, which covered only the assets conveyed with the property; some conveyed
+  assets were also disposed of, disposal records still to do). **On hold:** Section 179 is limited
+  to business income for the year (the excess carries forward), and the amount, and whether the
+  books mirror it, will be decided at 2026 tax prep in early 2027. Nothing is budgeted on account
+  7910 Depreciation (other_expense) and the covenant report assumes $0 depreciation. When it is
+  decided: it lowers net income but not EBITDA, since the covenant add-back sums the year's
+  budgeted 'Depreciation' (switch it to read actuals if the entry is booked).
 - `budgetedDepreciationForYear` (covenant add-back) is budget-only and is $0. If 2026
   depreciation is ever booked in QBO, that add-back must read actuals like
   `loanInterestExpenseForYear` does, or EBITDA will be understated.
