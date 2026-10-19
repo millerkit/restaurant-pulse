@@ -1,0 +1,168 @@
+URBAN HEARTH LLC - DEPRECIATION CATCH-UP SUMMARY
+For: Kit and our accountant
+Prepared: October 19, 2026 (draft for the accountant's review)
+
+IMPORTANT: Everything below is a reconstruction from the tax-return depreciation totals, the QuickBooks
+asset registers, the 2016 purchase documents and the 2024 and 2025 depreciation worksheets. It is meant
+to save the accountant time, not to replace their judgment. Please confirm or correct before anything is
+filed. Items marked "ACCOUNTANT" are open questions.
+
+
+1. WHAT HAPPENED
+
+- 2263 Mass Ave was purchased in May 2016 for $85,000. The Bill of Sale shows $83,000 for personal
+  property (equipment, furniture, inventory); the rest is lease, license and goodwill. No Form 8594
+  exists, so QuickBooks now follows the Bill of Sale: $73,000 equipment, $10,000 furniture,
+  $2,000 leasehold interest.
+- Depreciation claimed on the tax returns: 2016 $20,168; 2017 $32,632; 2018 $20,200; 2019 $12,563;
+  2020 $11,771; 2021 $74,052; 2022 $0; 2023 $0; 2024 $5,181; 2025 $3,317.
+- Books had no depreciation at all. A catch-up entry (journal DEP-CATCHUP-12-31-2025) was imported to
+  QuickBooks on 12/31/2025, as a prior-period adjustment to Retained Earnings. It does not touch the
+  2026 P&L.
+- Nothing was depreciated for 2022 and 2023 even though equipment was bought in those years. The
+  bookkeeping apparently stopped tracking fixed assets around 2022.
+- A high-temp dishwasher ($4,574.06, in service 1/1/2024) was replaced 8/9/2025 but still shows a full
+  year of 2025 depreciation and no disposal on the 2025 return.
+
+
+2. WHAT THE 2022-2025 RETURNS MAY HAVE MISSED
+
+Method used for the estimate: 7-year, 200% declining balance, half-year convention for items of $2,500
+or more (what the 2024 return used); items under $2,500 expensed in the year bought (de minimis).
+ACCOUNTANT: bonus depreciation or Section 179 may apply instead and would change these amounts.
+
+Year   Not claimed                                                                  Amount
+2022   Sandwich unit refrigerator $5,644.53 (8/13/2022), year 1                       $806.60
+2023   Refrigerator year 2 $1,382.30; refrigerator 12-pan $1,972.83 (5/30/2023);
+       Peter Ungar $1,200.00 (6/26/2023, equipment?); A/C repair $1,218.13 (5/12/23) $5,773.26
+2024   Refrigerator year 3 $987.20; espresso machine $455.81 (1/26/2024);
+       shelving and lumber/materials (Iron Abode, Home Depot, 2/2024-6/2024)
+       $3,826.07                                                                    $5,269.08
+2025   Refrigerator year 4 $705.00; ice machine $1,000.00 (2/9/2025); new
+       dishwasher $3,143.75 (8/9/2025) first-year $449.24                           $2,154.24
+2025   Disposal of the old dishwasher: remaining basis after depreciation claimed
+       ($4,574.06 - $1,773.66)                                                      $2,800.40
+       TOTAL 2022-2025 (about)                                                     $16,803.63
+
+Possible extra for 2025: a Section 179 election on the new dishwasher ($3,143.75 instead of $449.24)
+would add about $2,695. ACCOUNTANT: can the election be made on an amended return?
+
+Items on the 2024 return that were correctly claimed: $2,181 Section 179 (small items, not in
+QuickBooks), $1,935 on the four large items ($13,544 basis), $1,065 on the Honda CRV (a personal
+vehicle at 43.29% business use; the 2024 report shows 45%; not part of this work).
+The 2025 return's $3,317 equals 24.49% of the same $13,544 (year 2).
+
+
+3. OPTIONS FOR THE MISSED DEPRECIATION
+
+A. Amend 2025 (Form 1040-X). 2025 is open.
+   Candidates: the old dishwasher disposal (about $2,800 more deduction), the new dishwasher
+   ($449, or up to $3,144 with Section 179), and the ice machine ($1,000) if not deducted elsewhere.
+   Roughly $4,300 to $6,900 of added deductions. At a combined 25-40% rate (federal, Massachusetts and
+   self-employment tax, if the Schedule C had profit), roughly $1,100 to $2,800 of tax.
+
+B. Years 2022-2024.
+   Depreciation missed for two or more consecutive years is normally treated as an impermissible
+   accounting method, corrected with Form 3115 (automatic method change, with a Section 481(a)
+   adjustment), not by amended returns. The adjustment is taken in the year of change.
+   Timing: a 2022 refund claim is probably closed (3 years from filing, which ended April-October 2026).
+   2023 and 2024 are still open for 1040-X.
+   ACCOUNTANT: can the change still be made for 2025, or should it go on the 2026 return? Do assets
+   sold in 2026 qualify for the method change?
+
+C. Do nothing on the missed items.
+   Basis is reduced by depreciation "allowed or allowable", so unclaimed depreciation does not help us:
+   it only increases the taxable gain when the assets are sold.
+
+WORTH KNOWING: for assets that are being sold in 2026, claiming missed depreciation mostly shifts income
+between years. Each dollar of added deduction becomes a dollar of extra depreciation recapture (ordinary
+income) on the sale. The lasting savings come from rate differences, self-employment tax (recapture on
+Form 4797 is not subject to it), the dishwasher loss, and any asset the buyer does not take. This may
+decide how much effort the amendments are worth.
+
+
+4. THE 2026 SALE OF THE OLD LOCATION
+
+- Terms per the August 29, 2026 listing: $100,000 for the business assets, the existing 5-year lease
+  (from June 1, 2026, $2,950 per month) and the Cambridge liquor license. Landlord, City and state
+  alcohol commission fees and deposits are not included. Transfer of the lease and license needs
+  approvals, so closing is unlikely in October. It is now budgeted for November 2026 at $88,000.
+- Book value of what is being sold after the catch-up and the inventory write-off: $11,949.78
+  ($9,949.78 of kitchen equipment bought 2022-2025 and $2,000 for the lease and license).
+  Book gain: $100,000 - $11,949.78 = about $88,050.
+- Items already booked: the old dishwasher retired ($2,800.40 loss) and $9,769.36 of 2016 inventory
+  written off (cost through 2021 on the new split exceeded the returns' depreciation by that amount, and the
+  2016 agreement included inventory). Both went through Retained Earnings; the accountant agreed.
+- Erin's asset list (8/26/2026): equipment original cost $92,929, estimated resale value $39,000.
+  That suggests about $39,000 of the price is equipment and about $61,000 is lease, license and goodwill.
+- ACCOUNTANT, for the 2026 return:
+  1. Purchase price allocation between buyer and seller (Form 8594). It decides how much is ordinary
+     depreciation recapture (equipment, Section 1245) versus capital gain (goodwill, license, lease).
+  2. Basis by asset class at the sale date, including 2026 depreciation to the closing date.
+  3. Reporting on Form 4797 and Form 8594, and the effect on self-employment tax and estimated payments
+     for the year of sale.
+  4. How the $2,000 of 2016 lease and goodwill basis, and any amortization, should be treated.
+
+
+5. NEW LOCATION (1281 CAMBRIDGE ST) - 2026 RETURN
+
+- Equipment, furniture and technology placed in service June 20, 2026 (opening day), not December 2025.
+  The 2025 return should not include any of it. Appraisal values: kitchen and bar equipment about
+  $112,765 including 3 rooftop HVAC units ($10,500); furniture and fixtures $12,600; POS and technology
+  $3,700. The depreciation worksheet (Urban_Hearth_Kitchen_Equipment_Depreciation_Worksheet.xlsx) has the
+  asset-level detail.
+- ACCOUNTANT: Section 179 versus bonus depreciation for 2026 (a large deduction in the same year as
+  the sale gain), and the HVAC classification (7-year equipment versus a building component).
+- The 1330 Kitchen Equipment balance in QuickBooks ($278,179 per the October 2026 account list) is more than the assets we
+  have identified. The worksheet shows an unexplained residual that needs a sub-ledger review.
+
+
+6. ENTRIES TO BOOK IN QUICKBOOKS (NOT TAX FILINGS)
+
+Already done (or in the files in this folder):
+- Rewrite of the 2016 purchase entry (1405 $2,000, 1330 $73,000, 1320 $10,000).
+- DEP-CATCHUP-12-31-2025: debit Retained Earnings $203,211.03; credit accumulated depreciation on
+  furniture $32,394.05, kitchen equipment $92,143.56 and leasehold improvements $64,330.00; credit
+  Kitchen Equipment $4,574.06 (retired dishwasher) and $9,769.36 (2016 inventory).
+
+Still to do:
+- 2026 depreciation on the old-location assets from January 1 to the closing date (debit Depreciation,
+  credit the same accumulated accounts). It lowers book value and raises the gain by the same amount.
+- 2026 depreciation on the new-location assets from June 20, 2026, with separate accumulated depreciation
+  accounts for 1281 Cambridge St (for example 1326 and 1336). This lowers profit but does not change
+  EBITDA, which adds depreciation back.
+- Sale entry at closing: debit cash $100,000; debit each accumulated depreciation account above; credit
+  each asset account at cost (including 1405); credit 8010 Gain on Asset Sale for the difference.
+  Any fees the seller pays are separate expenses.
+- If the accountant files a Form 3115 or 1040-X, keep the tax adjustments in the tax workpapers. They
+  are book-tax differences and do not need to be booked again in QuickBooks.
+
+
+7. WHY THIS MATTERS FOR THE EASTERN BANK COVENANT
+
+- The covenant (1.25x EBITDA to debt service, tested on 2026) currently projects to 1.45x with the sale
+  gain counted ($17.9K of cushion) and 0.46x without it. Depreciation does not change EBITDA, but the
+  size and timing of the gain does. If closing slips into 2027, the 2026 ratio falls to 0.46x.
+- ACCOUNTANT / BANK: confirm with Eastern Bank whether a one-time gain on asset sale counts in EBITDA,
+  and whether the covenant counts the SBA loan alone, the six loans used here, or all ten.
+
+
+8. QUESTIONS FOR THE ACCOUNTANT (SHORT LIST)
+
+ 1. Amend 2025, or use a Form 3115 on the 2026 return (or both)? Which items go where?
+ 2. Are the 2022-2023 misses eligible for Form 3115 if the assets are sold in 2026?
+ 3. Bonus depreciation or Section 179 for the 2022-2025 items and for the new location in 2026?
+ 4. How to allocate the $100,000 between equipment, lease, license and goodwill (Form 8594)?
+ 5. Was any amortization claimed on the 2016 lease or license (Form 4562, Part VI)?
+ 6. Should the prior-period adjustments stay in Retained Earnings, or be moved to the specific years?
+ 7. What is the estimated 2026 tax on the sale, and should estimated payments change?
+ 8. Treatment of the A/C repair and lumber/materials (about $5,000 booked as leasehold improvements in
+    2023-2024): repairs, de minimis expense, or improvements?
+ 9. What is the $1,200 payment to Peter Ungar on 6/26/2023?
+
+FILES IN THIS FOLDER
+- saasant-depreciation-catch-up-je.csv (the catch-up entry, with the dishwasher and inventory)
+- saasant-inventory-writeoff-only.csv (the $9,769.36 write-off on its own)
+- depreciation-catch-up-schedule.csv (the item-by-item workings)
+- README.md (import steps and assumptions)
+- ../covenant-scenarios-2026-10.pdf (report for Erin)

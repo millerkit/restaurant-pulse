@@ -1,0 +1,7 @@
+Journal No,Journal Date,Account,Debit Amount,Credit Amount,Description,Name
+DEP-CATCHUP-12-31-2025,12/31/25,Retained Earnings,203211.03,,"Catch-up depreciation 2016-2025, 2263 Mass Ave assets (prior-period adjustment)",
+DEP-CATCHUP-12-31-2025,12/31/25,"Furniture, Fixtures & Equipment (FFE):Accumulated Depreciation - Furniture & Fixtures (2263 Mass Ave)",,32394.05,"Accumulated depreciation, furniture & fixtures",
+DEP-CATCHUP-12-31-2025,12/31/25,"Furniture, Fixtures & Equipment (FFE):Accumulated Depreciation - Kitchen Equipment (2263 Mass Ave)",,92143.56,"Accumulated depreciation, kitchen equipment",
+DEP-CATCHUP-12-31-2025,12/31/25,Leasehold Improvements:Accumulated Depreciation - Mass Ave Leasehold Improvements,,64330.00,"Accumulated depreciation, Mass Ave leasehold improvements",
+DEP-CATCHUP-12-31-2025,12/31/25,"Furniture, Fixtures & Equipment (FFE):Kitchen Equipment (Fixed Assets)",,4574.06,Retire high-temp dishwasher replaced 08/2025 (not part of sale),
+DEP-CATCHUP-12-31-2025,12/31/25,"Furniture, Fixtures & Equipment (FFE):Kitchen Equipment (Fixed Assets)",,9769.36,"Write off 2016 inventory included in purchase price, never depreciable",

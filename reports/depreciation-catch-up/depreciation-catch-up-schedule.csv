@@ -1,0 +1,31 @@
+Year,Source,Asset account,Asset,Method / note,Amount
+2016,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,20168.00
+2017,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,32632.00
+2018,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,20200.00
+2019,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,12563.00
+2020,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,11771.00
+2021,Tax return (as filed),All Mass Ave assets,2016–2021 depreciation per tax returns,As claimed,74052.00
+2022,Reconstructed,1330,"Sandwich unit refrigerator (B&G, 08/13/2022)",7-yr MACRS yr 1,806.60
+2023,Reconstructed,1330,"Sandwich unit refrigerator (B&G, 08/13/2022)",7-yr MACRS yr 2,1382.35
+2023,Reconstructed,1330,"Sandwich unit refrigerator, 12 pan (B&G, 05/30/2023)","de minimis, expensed when placed in service",1972.83
+2023,Reconstructed,1330,Peter Ungar (06/26/2023),"de minimis, expensed when placed in service",1200.00
+2023,Reconstructed,1361,"A/C repair (Central Cooling & Heating, 05/12/2023)","de minimis, expensed when placed in service",1218.13
+2024,Reconstructed,1330,"Sandwich unit refrigerator (B&G, 08/13/2022)",7-yr MACRS yr 3,987.23
+2024,Reconstructed,1330,"Range 60"" (B&G, 05/07/2024)",7-yr MACRS yr 1,522.10
+2024,Reconstructed,1330,"Worktop freezer (B&G, 05/07/2024)",7-yr MACRS yr 1,252.64
+2024,Reconstructed,1330,"Back bar refrigerated cabinet (B&G, 05/07/2024)",7-yr MACRS yr 1,506.79
+2024,Reconstructed,1330,"Espresso machine (Whole Latte Love, 01/26/2024)","de minimis, expensed when placed in service",455.81
+2024,Reconstructed,1361,"Shelving (Iron Abode, 02/12/2024)","de minimis, expensed when placed in service",1252.95
+2024,Reconstructed,1361,"Lumber/materials (Home Depot, Mar–Apr 2024, 4 purchases)","de minimis, expensed when placed in service",1188.50
+2024,Reconstructed,1361,Home Depot (06/24/2024),"de minimis, expensed when placed in service",1198.96
+2024,Reconstructed,1361,"Millwork/paint/materials (Home Depot, 06/26/2024)","de minimis, expensed when placed in service",185.66
+2025,Reconstructed,1330,"Sandwich unit refrigerator (B&G, 08/13/2022)",7-yr MACRS yr 4,705.00
+2025,Reconstructed,1330,"Range 60"" (B&G, 05/07/2024)",7-yr MACRS yr 2,895.00
+2025,Reconstructed,1330,"Worktop freezer (B&G, 05/07/2024)",7-yr MACRS yr 2,433.08
+2025,Reconstructed,1330,"Back bar refrigerated cabinet (B&G, 05/07/2024)",7-yr MACRS yr 2,868.74
+2025,Reconstructed,1330,Ice machine (02/09/2025),"de minimis, expensed when placed in service",1000.00
+2025,Reconstructed,1330,"Dishwasher (Total Restaurant Solutions, 08/09/2025)",7-yr MACRS yr 1,449.24
+2025,Disposal,1330,"Retired dishwasher ($4,574.06 cost, replaced 08/09/2025): written off, not sold",Depreciation already claimed on it (1773.66) is not booked; loss 2800.40,4574.06
+2016,Write-off,1330,Inventory included in the 2016 purchase price (accountant agreed 2026-10-19),Cost never depreciated; not an asset to be sold,9769.36
+,,,,TOTAL accumulated depreciation booked through 12/31/2025,188867.61
+,,,,Debit to Retained Earnings (accumulated + retired dishwasher + 2016 inventory write-off),203211.03
