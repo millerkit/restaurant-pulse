@@ -524,6 +524,44 @@ export default defineEventHandler((event) => {
   `).get(year) as { total: number | null }
   const budgetedDepreciationForYear = depBudgetRow.total ?? 0
 
+  // Projected full-year loan interest expense (account 7020), for the
+  // covenant's EBITDA add-back. Built month by month the same way the
+  // client's projected Net Income is (hybridYearTotalsPastActual in
+  // useBudgetData.ts): a closed month uses its real posted 7020 if that month
+  // has synced at all, else its budget; the current and future months use
+  // budget. EBITDA adds back the interest expense actually on the P&L, so
+  // this is the real 7020 figure, not the loan_schedule's computed interest
+  // (until 2026-10-19 the add-back was loan_schedule regular interest for the
+  // scoped loans only, $21.5K, which left out the catch-up interest and any
+  // other loan interest posted to 7020, roughly $80K for 2026 in total).
+  const nowParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric' })
+    .formatToParts(new Date())
+  const nowYear = Number(nowParts.find(p => p.type === 'year')!.value)
+  const nowMonth = Number(nowParts.find(p => p.type === 'month')!.value)
+  const asOfMonth = year < nowYear ? 13 : year > nowYear ? 1 : nowMonth
+  const interestActualByMonth = new Map((db.prepare(`
+    SELECT CAST(strftime('%m', dli.date) AS INTEGER) AS month, SUM(dli.amount) AS total
+    FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+    WHERE a.account_number = '7020' AND strftime('%Y', dli.date) = ?
+    GROUP BY month
+  `).all(String(year)) as { month: number, total: number }[]).map(r => [r.month, r.total]))
+  const monthsWithActuals = new Set((db.prepare(`
+    SELECT DISTINCT CAST(strftime('%m', date) AS INTEGER) AS month
+    FROM daily_line_items WHERE strftime('%Y', date) = ?
+  `).all(String(year)) as { month: number }[]).map(r => r.month))
+  const interestBudgetByMonth = new Map((db.prepare(`
+    SELECT bt.month AS month, SUM(bt.amount) AS total
+    FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+    WHERE a.account_number = '7020' AND a.is_active = 1 AND bt.year = ?
+    GROUP BY bt.month
+  `).all(year) as { month: number, total: number }[]).map(r => [r.month, r.total]))
+  let loanInterestExpenseForYear = 0
+  for (let m = 1; m <= 12; m++) {
+    loanInterestExpenseForYear += m < asOfMonth && monthsWithActuals.has(m)
+      ? (interestActualByMonth.get(m) ?? 0)
+      : (interestBudgetByMonth.get(m) ?? 0)
+  }
+
   // Reserve transfers for the full year: actual net transfers already made
   // (through today) plus every remaining Monday through Dec 31 at the
   // currently-declared weekly plan — same fallback reserveProgress() uses
@@ -607,14 +645,11 @@ export default defineEventHandler((event) => {
     // Inputs for the client's full-year projected EBITDA (which also needs
     // projectedNetIncomeForYear, computed client-side the same way the
     // Year-End Projection section above already does — see cashflow.vue).
-    // scheduledInterestForYear deliberately uses the loan amortization
-    // schedule for these 10 loans (not account 7020's real postings, which
-    // may include interest from debt outside this brief's scope — see
-    // actualsFor()'s own comment above) so the interest add-back and the
-    // debt-service denominator both come from the same source and can't
-    // drift apart from each other.
+    // The interest add-back is the year's real loan interest expense on the
+    // P&L (loanInterestExpenseForYear above), as a standard EBITDA would
+    // compute it, regardless of which loans the denominator counts.
     fullYearProjectionInputs: {
-      scheduledInterestForYear: fullYearAllLoans.interest,
+      loanInterestExpenseForYear,
       budgetedDepreciationForYear
     }
   }
@@ -622,8 +657,8 @@ export default defineEventHandler((event) => {
   // Second, narrower view of the same covenant (user's call 2026-10-06):
   // only the SBA, Chen, Savage, Schaefer, Gilreath and Mis loans — the other
   // investor notes (Jones, Miller, Price, Reid) are outside this calculation's
-  // scope. Same EBITDA inputs; only the debt-service denominator and the
-  // interest add-back (both from loan_schedule) narrow.
+  // scope. Same EBITDA inputs (including the full P&L interest add-back);
+  // only the debt-service denominator narrows.
   const COVENANT_SCOPED_LOAN_KEYS = new Set(['sba', 'chen', 'savage', 'schaefer', 'gilreath', 'mis'])
   const scopedYear = summarizeDebtService(fullYearRows.filter(r => COVENANT_SCOPED_LOAN_KEYS.has(r.loan_key)))
   const covenantScoped = {
@@ -638,7 +673,7 @@ export default defineEventHandler((event) => {
       total: scopedYear.totalCashOut
     },
     fullYearProjectionInputs: {
-      scheduledInterestForYear: scopedYear.interest,
+      loanInterestExpenseForYear,
       budgetedDepreciationForYear
     }
   }

@@ -365,13 +365,13 @@ const annualImpact = computed(() => {
 // currentAnnual above, so "current" here equals what Cash Flow shows — and
 // the simulation's own net-income change (which already flexes COGS,
 // variable labor and variable opex with revenue, see annualImpact) is
-// layered on top. EBITDA = net income + scheduled interest + budgeted
+// layered on top. EBITDA = net income + loan interest expense + budgeted
 // depreciation; ratio = EBITDA / annual debt service.
 type ScopedCovenant = {
   minimumRatio: number
   testYear: number
   annualDebtService: { total: number }
-  fullYearProjectionInputs: { scheduledInterestForYear: number, budgetedDepreciationForYear: number }
+  fullYearProjectionInputs: { loanInterestExpenseForYear: number, budgetedDepreciationForYear: number }
 }
 const { data: cashflowData } = useFetch<{ covenantScoped: ScopedCovenant | null }>('/api/cashflow', {
   query: { year: YEAR }, key: 'revenue-modeling-covenant', lazy: true, server: false
@@ -383,7 +383,7 @@ const covenantImpact = computed(() => {
   const denom = c.annualDebtService.total
   if (denom <= 0) return null
   const baseNetIncome = netIncome(hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
-  const addBacks = c.fullYearProjectionInputs.scheduledInterestForYear + c.fullYearProjectionInputs.budgetedDepreciationForYear
+  const addBacks = c.fullYearProjectionInputs.loanInterestExpenseForYear + c.fullYearProjectionInputs.budgetedDepreciationForYear
   const baseEbitda = baseNetIncome + addBacks
   const simEbitda = baseEbitda + (ai.netIncome.sim - ai.netIncome.base)
   const required = c.minimumRatio * denom

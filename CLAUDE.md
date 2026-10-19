@@ -4254,6 +4254,33 @@ accounts, so no P&L effect in QBO.
   (local dev is behind Basic Auth). Check the Cash Flow page after deploy:
   the reserve cards should show the larger 2027 rate and the Nov/Dec draws.
 
+## DSCR covenant EBITDA now adds back all loan interest expense — 2026-10-19
+
+Found while building a covenant report for Erin (`reports/covenant-scenarios-2026-10.*`,
+generated from scratchpad scripts, not app code): the covenant's EBITDA added
+back only `loan_schedule`'s regular interest for the counted loans ($21.5K for
+the 6-loan scope), while the denominator included the one-time catch-up
+interest ($43.9K). Standard EBITDA adds back the interest expense actually on
+the P&L, which for 2026 is about $80K in account 7020. At the user's direction:
+
+- `server/api/cashflow.get.ts` computes `loanInterestExpenseForYear`: account
+  7020 month by month, real posted amount for a closed month that has synced,
+  budget for the current and future months (the same rule as the client's
+  `hybridYearTotalsPastActual`, so it matches the projected Net Income it's
+  added to). Both `covenant` and `covenantScoped` use it; the field replaced
+  `scheduledInterestForYear`. Cash Flow and Revenue Modeling read the new name.
+- Only 7020 (loan interest). 7010 Credit Card Interest (~$2.7K in 2026) and
+  7025 Non-Cash Investor Consideration are not added back; revisit if the bank
+  defines EBITDA more broadly.
+- Effect on production numbers: the 6-loan ratio moves from 0.93x (short
+  $28.6K) to about 1.58x (about $29.9K of cushion). The all-10-loans reading
+  is about 1.10x, still short about $19.3K. Without the budgeted $100K Oct
+  gain on asset sale, the 6-loan ratio falls to about 0.46x — whether the
+  sale lands in 2026 and whether the bank counts a one-time gain is now the
+  covenant's main open question.
+- Verified by running the new SQL read-only against production ($80,015.30)
+  and by typecheck (no new errors); not deployed or clicked through yet.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

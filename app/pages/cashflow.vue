@@ -29,7 +29,7 @@ type Covenant = {
   testYear: number
   debtScopeAssumption: string
   annualDebtService: { principal: number, interest: number, catchUpInterest: number, total: number }
-  fullYearProjectionInputs: { scheduledInterestForYear: number, budgetedDepreciationForYear: number }
+  fullYearProjectionInputs: { loanInterestExpenseForYear: number, budgetedDepreciationForYear: number }
 }
 type CashFlowResponse = {
   year: number
@@ -86,12 +86,10 @@ const projectedFreeCashFlowForYear = computed<number | null>(() => {
 
 // ---- Eastern Bank DSCR covenant (informational only) -------------------
 // EBITDA = projected full-year Net Income (the same actual-for-elapsed-
-// months + budget-for-the-rest projection used above) + the loan
-// amortization schedule's own full-year interest for these 10 loans (not
-// account 7020's real postings, which may include interest from debt
-// outside this brief's scope) + budgeted Depreciation for the year. See
-// server/api/cashflow.get.ts's covenant.fullYearProjectionInputs comment
-// for why interest comes from the schedule rather than actuals here.
+// months + budget-for-the-rest projection used above) + the year's loan
+// interest expense on the P&L (account 7020, projected the same way) +
+// budgeted Depreciation for the year — a standard EBITDA. See
+// server/api/cashflow.get.ts's loanInterestExpenseForYear.
 // Deliberately NOT adjusted for the pre-opening reclass entries (see the
 // Free Cash Flow breakdown above) — the user's own call 2026-09-28, since
 // EBITDA's own definition (Interest/Depreciation/Amortization only)
@@ -100,8 +98,8 @@ const projectedFreeCashFlowForYear = computed<number | null>(() => {
 // to what the bank will actually see.
 const projectedEbitdaForYear = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
-  const { scheduledInterestForYear, budgetedDepreciationForYear } = data.value.covenant.fullYearProjectionInputs
-  return projectedNetIncomeForYear.value + scheduledInterestForYear + budgetedDepreciationForYear
+  const { loanInterestExpenseForYear, budgetedDepreciationForYear } = data.value.covenant.fullYearProjectionInputs
+  return projectedNetIncomeForYear.value + loanInterestExpenseForYear + budgetedDepreciationForYear
 })
 const dscrRaw = computed<number | null>(() => {
   if (projectedEbitdaForYear.value === null || !data.value) return null
@@ -110,8 +108,8 @@ const dscrRaw = computed<number | null>(() => {
 })
 const projectedEbitdaScoped = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
-  const { scheduledInterestForYear, budgetedDepreciationForYear } = data.value.covenantScoped.fullYearProjectionInputs
-  return projectedNetIncomeForYear.value + scheduledInterestForYear + budgetedDepreciationForYear
+  const { loanInterestExpenseForYear, budgetedDepreciationForYear } = data.value.covenantScoped.fullYearProjectionInputs
+  return projectedNetIncomeForYear.value + loanInterestExpenseForYear + budgetedDepreciationForYear
 })
 const dscrScoped = computed<number | null>(() => {
   if (projectedEbitdaScoped.value === null || !data.value) return null
@@ -303,7 +301,7 @@ async function submitPlan() {
         </div>
         <div class="fcf-breakdown">
           <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
-          <div class="fcf-row"><span>+ Interest (loan amortization schedule, all 10 loans, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.scheduledInterestForYear) }}</span></div>
+          <div class="fcf-row"><span>+ Loan interest expense (account 7020, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.loanInterestExpenseForYear) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
           <div class="fcf-row total"><span>= EBITDA</span><span>{{ projectedEbitdaForYear !== null ? fmt(projectedEbitdaForYear) : '—' }}</span></div>
           <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenant.annualDebtService.total) }}</span></div>
@@ -335,7 +333,7 @@ async function submitPlan() {
         </div>
         <div class="fcf-breakdown">
           <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
-          <div class="fcf-row"><span>+ Interest (loan amortization schedule, 6 loans, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.scheduledInterestForYear) }}</span></div>
+          <div class="fcf-row"><span>+ Loan interest expense (account 7020, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.loanInterestExpenseForYear) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
           <div class="fcf-row total"><span>= EBITDA</span><span>{{ projectedEbitdaScoped !== null ? fmt(projectedEbitdaScoped) : '—' }}</span></div>
           <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenantScoped.annualDebtService.total) }}</span></div>
