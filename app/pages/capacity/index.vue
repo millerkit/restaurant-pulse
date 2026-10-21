@@ -533,7 +533,18 @@ function actualsPreviewTotal(): number | null {
   if (known.length === 0) return null
   return known.reduce((sum, a) => sum + (a.actualCoversPerNight ?? 0), 0)
 }
+// True once every area's covers input already equals its real average
+// (rounded the way applySetByActuals writes it), so the button can say
+// "applied" and disable itself instead of looking like a silent no-op.
+function actualsAlreadyApplied(s: MonthlyDraft): boolean {
+  const bd = currentMonthAreaBreakdown()
+  if (!bd) return false
+  return bd
+    .filter(row => row.actualCoversPerNight != null)
+    .every(row => s.areaCoversInput[row.areaId] === String(roundCovers(row.actualCoversPerNight as number)))
+}
 function setByActualsTooltip(s: MonthlyDraft): string {
+  if (canSetByActuals(s) && actualsAlreadyApplied(s)) return `Already applied — every area's covers match its real average so far this month (through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
   if (paceData.value?.asOfMonth !== s.month) return `Only available for the current month (${paceData.value?.asOfMonth != null ? MONTH_NAMES[paceData.value.asOfMonth - 1] : '—'}).`
   if (!canSetByActuals(s)) return `No real Toast covers data synced yet for ${MONTH_NAMES[s.month - 1]}.`
   return `Set each area's covers to its real average covers/night so far this month (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
@@ -951,13 +962,13 @@ async function save() {
                         <button
                           type="button"
                           class="apply-pct-btn"
-                          :disabled="!canSetByActuals(s)"
+                          :disabled="!canSetByActuals(s) || actualsAlreadyApplied(s)"
                           :title="setByActualsTooltip(s)"
                           @click="applySetByActuals(s)"
                         >Set by Actuals</button>
                         <span class="setpct-arrow" aria-hidden="true">→</span>
                       </span>
-                      <span v-if="canSetByActuals(s)" class="setpct-result">≈{{ fmtCoversPerNight(actualsPreviewTotal()) }}/night</span>
+                      <span v-if="canSetByActuals(s)" class="setpct-result">{{ actualsAlreadyApplied(s) ? '✓ Applied · ' : '' }}≈{{ fmtCoversPerNight(actualsPreviewTotal()) }}/night</span>
                     </span>
                   </td>
                   <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>
