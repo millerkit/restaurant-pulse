@@ -95,6 +95,10 @@ const hiddenCount = computed(() => accounts.value.filter(a => a.isHidden).length
 // means the same thing next to every account it's shown for.
 const trailingWindowMonths = ref<string[]>([])
 const trailingActuals = ref<Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>>({})
+// 6-month window for the flat Other Labor accounts (see labor-settings.get.ts) — lumpy items
+// like a quarterly bonus or a catering payout need a longer average than the 3-month one.
+const trailingWindowMonths6 = ref<string[]>([])
+const trailingActuals6 = ref<Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>>({})
 const trailingTaxRates = ref<Record<string, number | null>>({ medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null })
 // First–last month only (e.g. "Jul–Sep"), not every month in between ("Jul–Aug–Sep") —
 // shortened at the user's request; the window is always contiguous months, so naming the
@@ -105,6 +109,20 @@ const trailingWindowLabel = computed(() => {
   return names.length > 1 ? `${names[0]}–${names[names.length - 1]}` : names[0]
 })
 
+const trailingWindowLabel6 = computed(() => {
+  if (trailingWindowMonths6.value.length === 0) return null
+  const names = [...trailingWindowMonths6.value].reverse().map(ym => MONTH_NAMES[Number(ym.slice(5, 7)) - 1])
+  return names.length > 1 ? `${names[0]}–${names[names.length - 1]}` : names[0]
+})
+// Combined 6-month average of every flat Other Labor account (hidden ones too) against what's
+// budgeted for them — the three accounts overlap in what they hold (a payout can be coded to
+// any of them), so the total is the number that doesn't depend on how a line was coded.
+const otherLaborAvg6 = computed(() => accounts.value.filter(a => a.groupKey === 'other' && a.payType === 'flat')
+  .reduce((s, a) => s + (trailingActuals6.value[a.accountId]?.avgMonthlyDollars ?? 0), 0))
+const otherLaborBudgeted = computed(() => accounts.value.filter(a => a.groupKey === 'other' && a.payType === 'flat')
+  .reduce((s, a) => s + (a.flatAmount ?? 0), 0))
+const hiddenInOther = computed(() => accounts.value.filter(a => a.groupKey === 'other' && a.isHidden).length)
+
 async function loadAll() {
   loading.value = true
   loadError.value = null
@@ -112,7 +130,8 @@ async function loadAll() {
     const [settingsRes, historyRes, actualsRes] = await Promise.all([
       $fetch<{
         accounts: any[], taxRates: TaxRates | null,
-        trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null
+        trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>,
+        trailingWindow6?: { months: string[] }, trailingActuals6?: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null
       }>('/api/budget/labor-settings'),
       $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] })),
       $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } }).catch(() => ({ accounts: [] }))
@@ -125,6 +144,8 @@ async function loadAll() {
     impliedTipsPerPayroll.value = settingsRes.impliedTaxableTipsPerPayroll ?? null
     trailingWindowMonths.value = settingsRes.trailingWindow?.months ?? []
     trailingActuals.value = settingsRes.trailingActuals ?? {}
+    trailingWindowMonths6.value = settingsRes.trailingWindow6?.months ?? []
+    trailingActuals6.value = settingsRes.trailingActuals6 ?? {}
     trailingTaxRates.value = settingsRes.trailingTaxRates ?? { medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null }
     monthlyIndex.value = historyRes.monthlyIndex ?? []
     globalScaleSeasonally.value = accounts.value.some(a => (a.payType === 'hourly' || a.payType === 'overtime') && a.scalesWithSeasonality)
@@ -914,6 +935,11 @@ async function save() {
                 <button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button>
               </div>
               <div v-if="trailingActuals[acc.accountId] !== undefined" class="simple-hint">trailing {{ trailingWindowLabel }} avg: {{ fmt(trailingActuals[acc.accountId].avgMonthlyDollars) }}/mo</div>
+              <div v-if="group === 'other' && trailingActuals6[acc.accountId] !== undefined" class="simple-hint">{{ trailingWindowMonths6.length }}-month avg ({{ trailingWindowLabel6 }}): {{ fmt(trailingActuals6[acc.accountId].avgMonthlyDollars) }}/mo</div>
+            </div>
+            <div v-if="group === 'other'" class="simple-note quiet-note small">
+              All of Other Labor combined: {{ trailingWindowMonths6.length }}-month avg {{ fmt(otherLaborAvg6) }}/mo vs. {{ fmt(otherLaborBudgeted) }}/mo budgeted
+              <template v-if="hiddenInOther > 0"> &middot; {{ hiddenInOther }} hidden account{{ hiddenInOther === 1 ? '' : 's' }} (e.g. Employee Bonus) <button type="button" class="hide-toggle" @click="showHidden = !showHidden">{{ showHidden ? 'Hide' : 'Show' }}</button></template>
             </div>
           </div>
 

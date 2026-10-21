@@ -507,6 +507,14 @@ an existing zone, isolated from the site's own root/www/MX records:
    Let's Encrypt's validation can't complete while Cloudflare is proxying,
    temporarily flip that one record to "DNS only," let the cert issue, then
    flip it back to "Proxied."
+   **Also add two DNS-only (grey cloud) records, or the cert silently
+   fails to renew ~90 days later** (found 2026-10-21 — the cert expired and
+   Cloudflare served error 525 "SSL handshake failed"; Fly can't validate a
+   proxied domain on its own): `CNAME _acme-challenge.pulse` →
+   `pulse.urbanhearth.net.93gxm22.flydns.net`, and `TXT
+   _fly-ownership.pulse` → `app-93gxm22` (exact values come from `fly certs
+   setup pulse.urbanhearth.net`). Both are now in place; Fly renews via DNS
+   validation and `fly certs show` should read "Issued" with a future expiry.
 3. In the Cloudflare dashboard, go to Zero Trust → Access → Applications,
    add an application for `pulse.urbanhearth.net`, add "One-time PIN" as
    the login method, and add a policy allowing exactly the two email

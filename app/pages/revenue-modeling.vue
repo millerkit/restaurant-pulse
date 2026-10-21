@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
-import { YEAR, hybridYearTotals, hybridYearTotalsPastActual, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { YEAR, hybridYearTotalsPastActual, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Revenue Modeling` })
 
@@ -55,7 +55,11 @@ const annualDataLoading = computed(() => budgetLoading.value || monthlyActuals.v
 function getMonthCategoryBudgetLive(month: number, cat: Category): number | null {
   return monthCategoryBudget(yearBudgetData.value[month - 1], cat)
 }
-const currentAnnual = computed(() => hybridYearTotals(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+// Real actuals for closed, synced months; budget for this and every future month — the same
+// "what will the year actually total" baseline as Edit Budget's Total tab and the Cash Flow
+// covenant card (changed from the budget-first hybridYearTotals 2026-10-21, which carried a
+// stale past budget into the baseline and disagreed with both).
+const currentAnnual = computed(() => hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
 
 // ---- per-area simulation drafts (Covers Δ / Spend Δ, both default 0) ----
 // Whole-number deltas — a whole extra cover/night and a whole extra dollar
@@ -361,7 +365,7 @@ const annualImpact = computed(() => {
 // coverage covenant, in the narrower scope the Cash Flow tab's "SBA + 5
 // investor loans" card uses. The baseline deliberately matches that card
 // exactly — real actuals for closed months, budget for this and every
-// future month (hybridYearTotalsPastActual), NOT the budget-first
+// future month (hybridYearTotalsPastActual), the same baseline as
 // currentAnnual above, so "current" here equals what Cash Flow shows — and
 // the simulation's own net-income change (which already flexes COGS,
 // variable labor and variable opex with revenue, see annualImpact) is
@@ -382,7 +386,7 @@ const covenantImpact = computed(() => {
   if (!c || !ai || annualDataLoading.value) return null
   const denom = c.annualDebtService.total
   if (denom <= 0) return null
-  const baseNetIncome = netIncome(hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+  const baseNetIncome = netIncome(currentAnnual.value)
   const addBacks = c.fullYearProjectionInputs.loanInterestExpenseForYear + c.fullYearProjectionInputs.budgetedDepreciationForYear
   const baseEbitda = baseNetIncome + addBacks
   const simEbitda = baseEbitda + (ai.netIncome.sim - ai.netIncome.base)

@@ -58,13 +58,13 @@ function currentMonthLocal(): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit' }).formatToParts(new Date())
   return `${parts.find(p => p.type === 'year')!.value}-${parts.find(p => p.type === 'month')!.value}`
 }
-function trailingWindowMonths(db: ReturnType<typeof useDb>): string[] {
+function trailingWindowMonths(db: ReturnType<typeof useDb>, count = 3): string[] {
   return (db.prepare(`
     SELECT DISTINCT strftime('%Y-%m', dli.date) AS ym
     FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
     WHERE a.category = 'labor' AND strftime('%Y-%m', dli.date) < ?
-    ORDER BY ym DESC LIMIT 3
-  `).all(currentMonthLocal()) as { ym: string }[]).map(r => r.ym)
+    ORDER BY ym DESC LIMIT ?
+  `).all(currentMonthLocal(), count) as { ym: string }[]).map(r => r.ym)
 }
 
 // avgMonthlyDollars backs the flat accounts' (Other Labor/Benefits) "$/mo" hint directly.
@@ -219,12 +219,19 @@ export default defineEventHandler(() => {
   `).get() as any
 
   const trailingMonths = trailingWindowMonths(db)
+  // A second, longer window (6 months) for the flat Other Labor accounts, added 2026-10 at
+  // the user's request: Additional Pay, Employee Bonus and Catering Profit Share are lumpy
+  // (a quarterly bonus, a catering payout) so a 3-month average swings too much to budget from.
+  // Months with $0 count toward the average (total / months in the window), same as the 3-month one.
+  const trailingMonths6 = trailingWindowMonths(db, 6)
 
   return {
     accounts,
     taxRates: taxRow ?? null,
     trailingWindow: { months: trailingMonths },
     trailingActuals: trailingActualsByAccount(db, trailingMonths),
+    trailingWindow6: { months: trailingMonths6 },
+    trailingActuals6: trailingActualsByAccount(db, trailingMonths6),
     trailingTaxRates: trailingTaxRates(db, trailingMonths),
     impliedTaxableTipsPerPayroll: impliedTaxableTipsPerPayroll(db, trailingMonths)
   }

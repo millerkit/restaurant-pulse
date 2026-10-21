@@ -20,7 +20,7 @@
 // The simulation itself (applying the user's typed Covers Δ%/Spend Δ% per
 // area, then annualizing) lives client-side in revenue-modeling.vue,
 // alongside the existing useBudgetYear()/useActualsYear() composables and
-// hybridYearTotals() — the same real current-year revenue/COGS/labor/opex
+// hybridYearTotalsPastActual() — the same real current-year revenue/COGS/labor/opex
 // figures the Labor tab and Budget Pace already treat as canonical (see
 // CLAUDE.md's 2026-09-22 Labor tab fix) — rather than this route deriving
 // its own separate notion of "this year's revenue."
