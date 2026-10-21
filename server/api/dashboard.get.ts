@@ -270,11 +270,15 @@ export default defineEventHandler((event) => {
       actualCovers: hasHappened ? (coversByDate.get(date) ?? null) : null
     }
   })
-  // An event night is neither a hit nor a miss against the dine-in goal, so it's left out of
-  // both sides of the week-to-date comparison (actual and expected-by-now).
-  const elapsedThisWeek = thisWeekDays.filter(d => d.hasHappened && !d.eventNight)
+  // An event night has no per-day hit/miss (see the day cards), but its event revenue does count
+  // toward the week's progress: the event night's own target stays in the expected-by-now figure
+  // and its event income is added to the actual, so the night replaces regular service in the
+  // week-to-date total instead of silently dropping out. Event income on an ordinary night is
+  // not added (the goal is built from core dine-in revenue).
+  const elapsedThisWeek = thisWeekDays.filter(d => d.hasHappened)
   const weekToDate = {
-    actualRevenue: elapsedThisWeek.reduce((s, d) => s + (d.actualRevenue ?? 0), 0),
+    actualRevenue: elapsedThisWeek.reduce((s, d) => s + (d.actualRevenue ?? 0) + (d.eventNight ? d.eventRevenue : 0), 0),
+    eventRevenue: elapsedThisWeek.reduce((s, d) => s + (d.eventNight ? d.eventRevenue : 0), 0),
     targetRevenue: elapsedThisWeek.reduce((s, d) => s + (d.dollarTarget ?? 0), 0),
     actualCovers: elapsedThisWeek.reduce((s, d) => s + (d.actualCovers ?? 0), 0),
     targetCovers: elapsedThisWeek.reduce((s, d) => s + (d.coversTarget ?? 0), 0)

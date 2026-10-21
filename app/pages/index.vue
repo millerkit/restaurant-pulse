@@ -265,11 +265,11 @@ function meterStatusLabel(status: string | null) {
             </div>
             <div class="figure">${{ Math.round(weeklyTargets.thisWeek.toDate.actualRevenue).toLocaleString() }}</div>
             <div class="caption">
-              Core dine-in revenue, week-to-date
+              Core dine-in revenue{{ eventNightsThisWeek.length ? ' + event nights' : '' }}, week-to-date
               <template v-if="weeklyTargets.benchmarkAmount">— vs ${{ Math.round(weeklyTargets.thisWeek.toDate.targetRevenue).toLocaleString() }} expected by now this week (full week goal: ${{ Math.round(weeklyTargets.thisWeek.fullWeekTarget).toLocaleString() }})</template>
               <template v-else>— set a weekly goal below to see a target here</template>
             </div>
-            <div v-if="eventNightsThisWeek.length" class="caption">★ Event night{{ eventNightsThisWeek.length === 1 ? '' : 's' }} ({{ eventNightsThisWeek.map(d => formatWeekdayDate(d.date)).join(', ') }}) not counted in this comparison.</div>
+            <div v-if="eventNightsThisWeek.length" class="caption">★ Includes ${{ Math.round(weeklyTargets.thisWeek.toDate.eventRevenue).toLocaleString() }} of event revenue from {{ eventNightsThisWeek.map(d => formatWeekdayDate(d.date)).join(', ') }} (event night{{ eventNightsThisWeek.length === 1 ? '' : 's' }}, not scored day by day).</div>
           </div>
         </div>
 
