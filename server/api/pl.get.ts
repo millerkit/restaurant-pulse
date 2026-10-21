@@ -32,6 +32,8 @@ type Period = 'month' | 'year'
 const REVENUE_COMPARISON_LABEL = "that weekday's revenue goal"
 const REVENUE_COMPARISON_SHORT_LABEL = 'goal'
 
+const EVENT_NIGHT_MAX_CORE_SHARE = 0.25
+
 export default defineEventHandler((event) => {
   const db = useDb()
 
@@ -69,6 +71,18 @@ export default defineEventHandler((event) => {
     return new Map(rows.map(r => [r.date, r.total]))
   }
 
+  // Event Sales (4100s) by day — not part of the weekday goal, but needed to recognize an
+  // "event night" (see EVENT_NIGHT_MAX_CORE_SHARE below) instead of scoring it as a $0 miss.
+  function eventRevenueByDayForRange(start: string, end: string) {
+    const rows = db.prepare(`
+      SELECT dli.date AS date, SUM(dli.amount) AS total
+      FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+      WHERE a.account_number >= ? AND a.account_number < ? AND a.is_active = 1 AND dli.date BETWEEN ? AND ?
+      GROUP BY dli.date
+    `).all(EVENT_REVENUE_RANGE.from, EVENT_REVENUE_RANGE.toExclusive, start, end) as { date: string, total: number }[]
+    return new Map(rows.map(r => [r.date, r.total]))
+  }
+
   function periodRange(period: Period): { start: string, end: string } {
     if (period === 'month') return { start: `${asOfYear}-${String(asOfMonth).padStart(2, '0')}-01`, end: asOfDate }
     return { start: `${asOfYear}-01-01`, end: asOfDate }
@@ -91,7 +105,7 @@ export default defineEventHandler((event) => {
   const weeklyTargets = computeWeeklyRevenueTargets()
 
   const revenue: Record<Period, {
-    days: { date: string, actual: number, comparison: number }[]
+    days: { date: string, actual: number, comparison: number, eventRevenue: number, eventNight: boolean }[]
     comparisonLabel: string
     comparisonShortLabel: string
   }> = {} as any
@@ -105,13 +119,22 @@ export default defineEventHandler((event) => {
     // to leave those blank rather than judge the old, smaller location
     // against a goal scaled for the new space.
     const actualByDay = revenueByDayForRange(start, end)
-    const days: { date: string, actual: number, comparison: number }[] = []
-    for (const [date, actual] of actualByDay) {
+    const eventByDay = eventRevenueByDayForRange(start, end)
+    const days: { date: string, actual: number, comparison: number, eventRevenue: number, eventNight: boolean }[] = []
+    // Union of both maps: an event night can have no core rows at all.
+    const dates = new Set([...actualByDay.keys(), ...eventByDay.keys()])
+    for (const date of dates) {
       if (date < NEW_LOCATION_START) continue
       const dow = new Date(`${date}T00:00:00Z`).getUTCDay()
       const target = weeklyTargets.targetByDow.get(dow)?.dollarTarget
       if (target == null) continue
-      days.push({ date, actual, comparison: target })
+      const actual = actualByDay.get(date) ?? 0
+      const eventRevenue = eventByDay.get(date) ?? 0
+      // Event night: real event income, and regular dine-in service clearly didn't run
+      // (core under a quarter of that weekday's goal). Event income alongside a normal
+      // service is left as an ordinary day, scored on core alone.
+      const eventNight = eventRevenue > 0 && actual < target * EVENT_NIGHT_MAX_CORE_SHARE
+      days.push({ date, actual, comparison: target, eventRevenue, eventNight })
     }
     days.sort((a, b) => a.date.localeCompare(b.date))
 

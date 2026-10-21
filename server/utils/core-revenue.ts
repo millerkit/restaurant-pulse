@@ -11,6 +11,12 @@
 // per-day or per-weekday pattern built from this list.
 export const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4026', '4028']
 
+// Event Sales (the 4100s: on-site and off-site events). Used by the Revenue Calendar to
+// recognize an "event night" — a day whose revenue is almost all event income and whose
+// regular dine-in service didn't run — so it isn't scored as a 100% core shortfall.
+// Compared as strings (account_number is text), so '4100' <= n < '4200'.
+export const EVENT_REVENUE_RANGE = { from: '4100', toExclusive: '4200' }
+
 // A day needs at least this many Toast covers to count as genuinely open —
 // found by checking the real distribution rather than assuming covers > 0
 // was good enough (it wasn't). ~95 local days show covers between 1-13,

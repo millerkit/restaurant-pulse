@@ -66,12 +66,16 @@ const pageDescription = computed(() => view.value === 'revenue'
 // that moved to Budget Pace instead. See CLAUDE.md's "Budget Pace /
 // Drill-Downs consolidation" section.
 const revenueDaysMap = computed(() => new Map((data.value?.revenue[period.value]?.days ?? []).map(d => [d.date, d])))
-type RevDayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'no-data' | 'future'
+type RevDayStatus = 'good' | 'neutral' | 'bad' | 'critical' | 'event' | 'no-data' | 'future'
 // A hover-card row: label/value pair, table-aligned via a 2-col CSS grid.
 // `strong` bumps weight+size for the one number worth scanning for; `tone`
 // colors the value good/bad the same way the rest of this page's chips do.
 type TipRow = { label: string, value: string, strong?: boolean, tone?: 'good' | 'bad' }
-type RevDayCell = { date: string, day: number, status: RevDayStatus, deltaPct: number | null, actual: number | null, comparison: number | null, tip: TipRow[] | null }
+type RevDayCell = { date: string, day: number, status: RevDayStatus, deltaPct: number | null, actual: number | null, comparison: number | null, eventRevenue: number | null, tip: TipRow[] | null }
+function capGoalLabel() {
+  const shortLabel = revenueComparisonShortLabel.value
+  return shortLabel.charAt(0).toUpperCase() + shortLabel.slice(1)
+}
 function buildRevTip(actual: number, comparison: number, deltaPct: number): TipRow[] {
   const shortLabel = revenueComparisonShortLabel.value
   const capShortLabel = shortLabel.charAt(0).toUpperCase() + shortLabel.slice(1)
@@ -87,17 +91,29 @@ function buildRevTip(actual: number, comparison: number, deltaPct: number): TipR
 // stands out from a merely-soft one.
 function revDayStatus(dateStr: string): RevDayCell {
   const asOf = data.value?.asOfDate
-  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null, tip: null }
+  if (!asOf || dateStr > asOf) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'future', deltaPct: null, actual: null, comparison: null, eventRevenue: null, tip: null }
   const entry = revenueDaysMap.value.get(dateStr)
   // No entry means either no target exists for this day (before the
   // location move, or no weekly_revenue_benchmark configured — see
   // pl.get.ts) or a $0 goal, which can't support a percentage either way.
   // Rendered the same as "no data" — either way there's nothing meaningful
   // to compare.
-  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null, tip: null }
+  if (!entry || entry.comparison === 0) return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'no-data', deltaPct: null, actual: null, comparison: null, eventRevenue: null, tip: null }
+  // Event night: scored on nothing — shown with the event dollars instead of a ▼100% miss.
+  if (entry.eventNight) {
+    return {
+      date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status: 'event', deltaPct: null, actual: null, comparison: entry.comparison, eventRevenue: entry.eventRevenue,
+      tip: [
+        { label: 'Event night', value: 'Not scored', strong: true },
+        { label: 'Event revenue', value: `$${Math.round(entry.eventRevenue).toLocaleString()}` },
+        { label: 'Dine-in revenue', value: `$${Math.round(entry.actual).toLocaleString()}` },
+        { label: capGoalLabel(), value: `$${Math.round(entry.comparison).toLocaleString()}` }
+      ]
+    }
+  }
   const deltaPct = ((entry.actual - entry.comparison) / entry.comparison) * 100
   const status: RevDayStatus = deltaPct <= -18.75 ? 'critical' : deltaPct <= -5 ? 'bad' : deltaPct >= 5 ? 'good' : 'neutral'
-  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison, tip: buildRevTip(entry.actual, entry.comparison, deltaPct) }
+  return { date: dateStr, day: parseIsoDate(dateStr).getUTCDate(), status, deltaPct, actual: entry.actual, comparison: entry.comparison, eventRevenue: null, tip: buildRevTip(entry.actual, entry.comparison, deltaPct) }
 }
 // Year-view mini-cells get a day number only when there's a real result to
 // label — good/neutral/bad/critical. no-data and future stay bare (a
@@ -106,7 +122,7 @@ function revDayStatus(dateStr: string): RevDayCell {
 // target (see weekly-targets.ts), so it's always 'no-data' and never hits
 // this list — no separate Monday check needed.
 function showMiniDayNum(status: RevDayStatus | MarginDayStatus): boolean {
-  return status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical' || status === 'severe'
+  return status === 'event' || status === 'good' || status === 'neutral' || status === 'bad' || status === 'critical' || status === 'severe'
 }
 function buildRevMonthGrid(year: number, month1: number) {
   const dim = daysInMonthUTC(year, month1)
@@ -129,7 +145,17 @@ const revCalendarView = computed<RevCalendarView | null>(() => {
   return { kind: 'year', months: Array.from({ length: 12 }, (_, i) => buildRevMonthGrid(data.value!.asOfYear, i + 1)) }
 })
 
-const revenueDays = computed(() => data.value?.revenue[period.value]?.days ?? [])
+// Event nights are neither a hit nor a miss against the dine-in goal, so they're left out of the
+// shortfall math and the "N of M days" count, and listed separately in the callout.
+const allRevenueDays = computed(() => data.value?.revenue[period.value]?.days ?? [])
+const revenueDays = computed(() => allRevenueDays.value.filter(d => !d.eventNight))
+const eventNightDays = computed(() => allRevenueDays.value.filter(d => d.eventNight))
+const eventNightNote = computed(() => {
+  const n = eventNightDays.value.length
+  if (!n) return ''
+  const list = eventNightDays.value.map(d => `${formatWeekdayDate(d.date)} (${fmtMoney0(d.eventRevenue)})`).join(', ')
+  return `${n} event night${n === 1 ? '' : 's'} not scored against the dine-in goal: ${list}.`
+})
 const shortfallDays = computed(() => revenueDays.value.filter(d => d.actual < d.comparison))
 const revenueFlagged = computed(() => shortfallDays.value.length > 0)
 const revenueGapTotal = computed(() => shortfallDays.value.reduce((sum, d) => sum + (d.comparison - d.actual), 0))
@@ -308,6 +334,7 @@ function refreshBoth() {
         <div v-if="revCalendarView" class="drill-card">
           <div v-if="revenueFlagged" class="callout">{{ revenueCallout }}</div>
           <div v-else class="quiet-inline"><span class="chip good">Nothing unusual</span><span class="quiet-note">All days this {{ period }} met or beat {{ revenueComparisonLabel }}.</span></div>
+          <div v-if="eventNightNote" class="quiet-inline"><span class="chip event">★ Event</span><span class="quiet-note">{{ eventNightNote }}</span></div>
 
           <template v-if="revCalendarView.kind === 'month'">
             <div class="calendar-weekday-header-row">
@@ -323,7 +350,11 @@ function refreshBoth() {
               >
                 <template v-if="cell">
                   <div class="day-num">{{ cell.day }}</div>
-                  <template v-if="cell.actual !== null">
+                  <template v-if="cell.status === 'event'">
+                    <span class="cell-delta">★ Event</span>
+                    <div class="cell-amount">${{ Math.round(cell.eventRevenue ?? 0).toLocaleString() }}</div>
+                  </template>
+                  <template v-else-if="cell.actual !== null">
                     <span class="cell-delta">{{ (cell.deltaPct ?? 0) >= 0 ? '▲' : '▼' }} {{ Math.abs(cell.deltaPct ?? 0).toFixed(0) }}%</span>
                     <div class="cell-amount">${{ Math.round(cell.actual).toLocaleString() }}</div>
                   </template>
@@ -344,7 +375,7 @@ function refreshBoth() {
                     @mouseenter="tooltip.show($event, cell?.tip)"
                     @mouseleave="tooltip.hide()"
                   >
-                    <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.day }}</span>
+                    <span v-if="cell && showMiniDayNum(cell.status)" class="mini-day-num">{{ cell.status === 'event' ? '★' : cell.day }}</span>
                   </div>
                 </div>
               </div>
@@ -356,6 +387,7 @@ function refreshBoth() {
             <span class="legend-chip bad">▼ Below {{ revenueComparisonShortLabel }}</span>
             <span class="legend-chip critical">▼ Well below {{ revenueComparisonShortLabel }}</span>
             <span class="legend-chip neutral">Within normal range</span>
+            <span class="legend-chip event">★ Event night (not scored)</span>
             <span class="legend-chip no-data">No data / closed</span>
           </div>
         </div>
@@ -574,6 +606,7 @@ function refreshBoth() {
 .calendar-cell.good { background: color-mix(in srgb, var(--good) 45%, var(--surface-alt)); }
 .calendar-cell.bad { background: color-mix(in srgb, var(--shortfall) 45%, var(--surface-alt)); }
 .calendar-cell.critical { background: color-mix(in srgb, var(--shortfall-deep) 45%, var(--surface-alt)); }
+.calendar-cell.event { background: color-mix(in srgb, var(--accent) 22%, var(--surface-alt)); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .calendar-cell.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .calendar-cell.good .cell-delta,
 .calendar-cell.good .day-num,
@@ -598,11 +631,13 @@ function refreshBoth() {
 .calendar-cell.mini.good { background: var(--good); }
 .calendar-cell.mini.bad { background: var(--shortfall); }
 .calendar-cell.mini.critical { background: var(--shortfall-deep); }
+.calendar-cell.mini.event { background: var(--accent); }
 .calendar-cell.mini.severe { background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .mini-day-num { font-size: 9px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); }
 .calendar-cell.mini.good .mini-day-num,
 .calendar-cell.mini.bad .mini-day-num { color: #0b0b0b; text-shadow: none; }
 .calendar-cell.mini.critical .mini-day-num,
+.calendar-cell.mini.event .mini-day-num,
 .calendar-cell.mini.severe .mini-day-num { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); }
 
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; border-top: 1px solid var(--hair); }
@@ -617,6 +652,8 @@ function refreshBoth() {
 .legend-chip.good { color: var(--ink); background: color-mix(in srgb, var(--good) 32%, var(--surface-alt)); }
 .legend-chip.bad { color: var(--ink); background: color-mix(in srgb, var(--shortfall) 32%, var(--surface-alt)); }
 .legend-chip.critical { color: var(--ink); background: color-mix(in srgb, var(--shortfall-deep) 38%, var(--surface-alt)); }
+.chip.event { color: var(--ink); background: color-mix(in srgb, var(--accent) 22%, var(--surface-alt)); }
+.legend-chip.event { color: var(--ink); background: color-mix(in srgb, var(--accent) 22%, var(--surface-alt)); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .legend-chip.severe { color: #fff; background: color-mix(in srgb, var(--shortfall-deep) 80%, black); }
 .legend-chip.no-data { border: 1px dashed var(--hair); background: transparent; }
 

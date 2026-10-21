@@ -4343,6 +4343,18 @@ the app's synced data changes.
   `scripts/covenant-report/` (hard-coded production figures as of 2026-10-19; `dep.mjs` also writes the
   SaasAnt CSVs in `reports/depreciation-catch-up/`; the header of `gen.mjs` has the PDF command).
 
+## Revenue Calendar "Event night" status — 2026-10-21
+
+The Mushroom Dinner (Tue 2026-10-20, ticketed on-site event) posted to 4145/4150 (Event Sales), outside
+`CORE_REVENUE_ACCOUNT_NUMBERS`, so the calendar read it as core $0 / ▼100% against Tuesday's dine-in goal.
+`pl.get.ts` now also sums Event Sales (account_number 4100–4199, `EVENT_REVENUE_RANGE` in
+`server/utils/core-revenue.ts`) per day and flags `eventNight` when event revenue is positive and core is under
+25% of that weekday's goal (`EVENT_NIGHT_MAX_CORE_SHARE`). Event nights render as a blue "★ Event" cell with the
+event dollars, are left out of the shortfall callout and the "N of M days" count (listed separately under it), and
+never get a ▲/▼ score. Event income alongside a normal service stays an ordinary, core-scored day. The Margin tab
+(`nightly-margin.get.ts`) was not changed. Verified against local dev by seeding a synthetic event night
+(reverted afterward); not yet deployed.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
