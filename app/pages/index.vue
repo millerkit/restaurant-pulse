@@ -141,14 +141,15 @@ const salesPerLaborHour = computed(() => lastNightLaborHours.value ? lastNightRe
 // Check cards at the user's request.
 const weeklyTargets = computed(() => data.value?.weeklyTargets ?? null)
 
-function dayStatus(d: { hasHappened: boolean, dollarTarget: number | null, actualRevenue: number | null }): string | null {
-  if (!d.hasHappened || d.dollarTarget == null || !(d.dollarTarget > 0) || d.actualRevenue == null) return null
+function dayStatus(d: { hasHappened: boolean, eventNight: boolean, dollarTarget: number | null, actualRevenue: number | null }): string | null {
+  if (!d.hasHappened || d.eventNight || d.dollarTarget == null || !(d.dollarTarget > 0) || d.actualRevenue == null) return null
   return paceStatus((d.actualRevenue / d.dollarTarget) * 100, 100, 'higher-is-better')
 }
 function dayStatusLabel(status: string | null): string {
   if (status === null) return 'No data yet'
   return status === 'good' ? 'Hit target' : 'Below target'
 }
+const eventNightsThisWeek = computed(() => weeklyTargets.value?.thisWeek.days.filter(d => d.eventNight) ?? [])
 const weekToDateStatus = computed(() => {
   const wt = weeklyTargets.value
   if (!wt || !wt.benchmarkAmount || !(wt.thisWeek.toDate.targetRevenue > 0)) return null
@@ -268,6 +269,7 @@ function meterStatusLabel(status: string | null) {
               <template v-if="weeklyTargets.benchmarkAmount">— vs ${{ Math.round(weeklyTargets.thisWeek.toDate.targetRevenue).toLocaleString() }} expected by now this week (full week goal: ${{ Math.round(weeklyTargets.thisWeek.fullWeekTarget).toLocaleString() }})</template>
               <template v-else>— set a weekly goal below to see a target here</template>
             </div>
+            <div v-if="eventNightsThisWeek.length" class="caption">★ Event night{{ eventNightsThisWeek.length === 1 ? '' : 's' }} ({{ eventNightsThisWeek.map(d => formatWeekdayDate(d.date)).join(', ') }}) not counted in this comparison.</div>
           </div>
         </div>
 
@@ -275,7 +277,11 @@ function meterStatusLabel(status: string | null) {
           <div v-for="d in weeklyTargets.thisWeek.days" :key="d.key" :class="['day-card', !d.hasHappened && 'upcoming']">
             <div class="day-label">{{ formatWeekdayDate(d.date) }}</div>
             <div class="day-target">Target ${{ d.dollarTarget != null ? Math.round(d.dollarTarget).toLocaleString() : '—' }}<span v-if="d.coversTarget != null"> &middot; {{ d.coversTarget }} covers</span></div>
-            <template v-if="d.hasHappened">
+            <template v-if="d.eventNight">
+              <div class="day-actual">${{ Math.round(d.eventRevenue).toLocaleString() }}<span v-if="d.actualCovers != null"> &middot; {{ d.actualCovers }} covers</span></div>
+              <span class="chip event">★ Event night</span>
+            </template>
+            <template v-else-if="d.hasHappened">
               <div class="day-actual">${{ d.actualRevenue != null ? Math.round(d.actualRevenue).toLocaleString() : '—' }}<span v-if="d.actualCovers != null"> &middot; {{ d.actualCovers }} covers</span></div>
               <span :class="['chip', dayStatus(d) ?? 'warning']">{{ dayStatusLabel(dayStatus(d)) }}</span>
             </template>
@@ -519,6 +525,7 @@ function meterStatusLabel(status: string | null) {
   gap: 6px;
 }
 .day-card.upcoming { opacity: 0.85; }
+.chip.event { color: var(--ink); background: color-mix(in srgb, var(--accent) 22%, var(--surface-alt)); }
 .day-card .day-label {
   font-size: 11px;
   font-weight: 700;

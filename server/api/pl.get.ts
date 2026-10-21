@@ -32,7 +32,6 @@ type Period = 'month' | 'year'
 const REVENUE_COMPARISON_LABEL = "that weekday's revenue goal"
 const REVENUE_COMPARISON_SHORT_LABEL = 'goal'
 
-const EVENT_NIGHT_MAX_CORE_SHARE = 0.25
 
 export default defineEventHandler((event) => {
   const db = useDb()
@@ -130,10 +129,7 @@ export default defineEventHandler((event) => {
       if (target == null) continue
       const actual = actualByDay.get(date) ?? 0
       const eventRevenue = eventByDay.get(date) ?? 0
-      // Event night: real event income, and regular dine-in service clearly didn't run
-      // (core under a quarter of that weekday's goal). Event income alongside a normal
-      // service is left as an ordinary day, scored on core alone.
-      const eventNight = eventRevenue > 0 && actual < target * EVENT_NIGHT_MAX_CORE_SHARE
+      const eventNight = isEventNight(actual, eventRevenue, target)
       days.push({ date, actual, comparison: target, eventRevenue, eventNight })
     }
     days.sort((a, b) => a.date.localeCompare(b.date))

@@ -4351,7 +4351,7 @@ The Mushroom Dinner (Tue 2026-10-20, ticketed on-site event) posted to 4145/4150
 `server/utils/core-revenue.ts`) per day and flags `eventNight` when event revenue is positive and core is under
 25% of that weekday's goal (`EVENT_NIGHT_MAX_CORE_SHARE`). Event nights render as a blue "★ Event" cell with the
 event dollars, are left out of the shortfall callout and the "N of M days" count (listed separately under it), and
-never get a ▲/▼ score. Event income alongside a normal service stays an ordinary, core-scored day. The Margin tab
+never get a ▲/▼ score. The 25% rule is `isEventNight()` in `server/utils/core-revenue.ts`, shared with the Dashboard: its This Week's Targets day cards show a blue "★ Event night" chip with the event dollars, and the night is dropped from both sides of the week-to-date actual-vs-expected comparison (a note under the hero card names it). Event income alongside a normal service stays an ordinary, core-scored day. The Margin tab
 (`nightly-margin.get.ts`) was not changed. Verified against local dev by seeding a synthetic event night
 (reverted afterward); not yet deployed.
 

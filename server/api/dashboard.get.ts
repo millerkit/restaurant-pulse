@@ -235,6 +235,16 @@ export default defineEventHandler((event) => {
   `).all(...CORE_REVENUE_ACCOUNT_NUMBERS, NEW_LOCATION_START) as { date: string, revenue: number }[]
   const coreRevenueByDate = new Map(coreRevenueRows.map(r => [r.date, r.revenue]))
 
+  // Event Sales (4100s) by day, only to recognize event nights (see isEventNight) — a night
+  // like a ticketed dinner posts to these accounts, not core, and shouldn't read as a $0 miss.
+  const eventRevenueRows = db.prepare(`
+    SELECT dli.date AS date, SUM(dli.amount) AS revenue
+    FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+    WHERE a.account_number >= ? AND a.account_number < ? AND a.is_active = 1 AND dli.date >= ?
+    GROUP BY dli.date
+  `).all(EVENT_REVENUE_RANGE.from, EVENT_REVENUE_RANGE.toExclusive, NEW_LOCATION_START) as { date: string, revenue: number }[]
+  const eventRevenueByDate = new Map(eventRevenueRows.map(r => [r.date, r.revenue]))
+
   const coversSinceMoveRows = db.prepare('SELECT date, covers FROM daily_toast_metrics WHERE date >= ?').all(NEW_LOCATION_START) as { date: string, covers: number }[]
   const coversByDate = new Map(coversSinceMoveRows.map(r => [r.date, r.covers]))
 
@@ -248,15 +258,21 @@ export default defineEventHandler((event) => {
   const thisWeekDays = dayTargets.map((target, i) => {
     const date = addDaysIso(thisWeekMonday, i + 1) // Tue = Monday+1 .. Sun = Monday+6
     const hasHappened = date <= asOfDate
+    const eventRevenue = hasHappened ? (eventRevenueByDate.get(date) ?? 0) : 0
+    const eventNight = hasHappened && target.dollarTarget != null && isEventNight(coreRevenueByDate.get(date) ?? 0, eventRevenue, target.dollarTarget)
     return {
       ...target,
       date,
       hasHappened,
+      eventNight,
+      eventRevenue,
       actualRevenue: hasHappened ? (coreRevenueByDate.get(date) ?? null) : null,
       actualCovers: hasHappened ? (coversByDate.get(date) ?? null) : null
     }
   })
-  const elapsedThisWeek = thisWeekDays.filter(d => d.hasHappened)
+  // An event night is neither a hit nor a miss against the dine-in goal, so it's left out of
+  // both sides of the week-to-date comparison (actual and expected-by-now).
+  const elapsedThisWeek = thisWeekDays.filter(d => d.hasHappened && !d.eventNight)
   const weekToDate = {
     actualRevenue: elapsedThisWeek.reduce((s, d) => s + (d.actualRevenue ?? 0), 0),
     targetRevenue: elapsedThisWeek.reduce((s, d) => s + (d.dollarTarget ?? 0), 0),
