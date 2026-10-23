@@ -483,6 +483,11 @@ async function submitPlan() {
                   rest of {{ data.reserve.catchUpDate!.slice(0, 4) }} would still get there safely, freeing roughly
                   <strong>{{ fmt(data.reserve.sustainability.operatingCashFreedTotal!) }}</strong> of operating cash between now and year end.
                 </template>
+                <template v-else-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null && Math.round(data.reserve.currentWeeklyAmount) >= Math.round(data.reserve.sustainability.suggestedRemainderOfYearRate)">
+                  The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week is enough — it's right at the
+                  <strong>{{ fmt(data.reserve.sustainability.suggestedRemainderOfYearRate) }}/week</strong> needed for the rest of
+                  {{ data.reserve.catchUpDate!.slice(0, 4) }} to be {{ data.reserve.sustainability.sustainYear }}-ready.
+                </template>
                 <template v-else-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null">
                   The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week isn't quite enough — at least
                   <strong>{{ fmt(data.reserve.sustainability.suggestedRemainderOfYearRate) }}/week</strong> for the rest of
