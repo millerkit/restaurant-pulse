@@ -534,14 +534,17 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
               </div>
             </div>
             <div v-if="covenantImpact" class="assumption-card">
-              <div class="card-head"><span class="period-name">Loan Covenant (DSCR)</span></div>
+              <div class="card-head"><span class="period-name">EBITDA (loan covenant)</span></div>
               <div class="metric primary">
                 <div class="metric-top">
-                  <div class="metric-figure">{{ covenantImpact.simRatio.toFixed(2) }}x</div>
+                  <div class="metric-figure">
+                    {{ fmtMoneyFull(covenantImpact.simEbitda) }}
+                    <span class="ratio-small">{{ covenantImpact.simRatio.toFixed(2) }}x</span>
+                  </div>
                   <span :class="['chip', covenantImpact.meets ? 'good' : 'critical']">{{ covenantImpact.meets ? '✓ Meets' : '▲ Below' }} {{ covenantImpact.minimumRatio.toFixed(2) }}x</span>
                 </div>
                 <div class="metric-sub">
-                  vs. {{ covenantImpact.baseRatio.toFixed(2) }}x current &middot; SBA + 5 investor loans &middot;
+                  EBITDA &middot; {{ covenantImpact.baseRatio.toFixed(2) }}x current &middot; SBA + 5 investor loans &middot;
                   {{ covenantImpact.meets ? `${fmtMoneyFull(-covenantImpact.gap)} of EBITDA headroom` : `${fmtMoneyFull(covenantImpact.gap)} of EBITDA short` }}
                 </div>
               </div>
@@ -900,6 +903,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .metric-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .metric-figure { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--ink); }
 .metric.primary .metric-figure { font-size: 22px; }
+.metric-figure .ratio-small { font-size: 13px; font-weight: 600; color: var(--ink-soft, var(--ink)); letter-spacing: 0; margin-left: 4px; }
 .metric-sub { font-size: 11px; color: var(--ink-3); }
 
 @media (max-width: 900px) {
