@@ -4355,6 +4355,31 @@ never get a ▲/▼ score. The 25% rule is `isEventNight()` in `server/utils/cor
 (`nightly-margin.get.ts`) was not changed. Verified against local dev by seeding a synthetic event night
 (reverted afterward); not yet deployed.
 
+## Budget row shading — 2026-10-24
+
+The Edit Budget and Revenue tabs' Projected (current month) and closed-month Actual
+variance indicators were just colored text plus a ✓/▲/▼ icon, too subtle to scan for the
+real divergences. Rows now get a whole-row gradient fill: unshaded = no meaningful delta,
+pale pink -> bright red -> deep red = running worse than budget (over on costs, under on
+revenue), pale green = running better. Logic is `varianceTint()` in
+[`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts), styles are
+`.var-bad`/`.var-good` in [`app/assets/css/main.css`](app/assets/css/main.css).
+
+- **Strength = geometric mean of percent-off and dollars-off**, since neither alone is a
+  fair materiality test (a $24 miss on a $100 line, or $2K on a $100K category). Under 3%
+  or $50 off is never shaded. Full strength is 30% off and $500 off.
+- **Red is a real bright red and darkens as it strengthens; green is deliberately paler
+  and capped**, so the two differ in lightness, not just hue (user has red-green CVD). The
+  ✓/▲/▼ icon and dollar delta stay on every row; shading is reinforcement. Strong red rows
+  flip to white text.
+- **Applied to**: category and account rows on Edit Budget (current month with actuals, and
+  closed months), account rows and the Total Revenue row on the Revenue tab. Not applied to
+  the Year Total tabs or Budget Pace's pace cards (no per-row projection there).
+- **Known quirk, unchanged**: a bill not yet posted (cash basis) reads as a big green
+  underrun until it lands, same as the old ✓ did.
+- Verified by rendering the real CSS and the real `varianceTint` output headlessly in light
+  and dark; not clicked through in the live app (local dev is behind Basic Auth).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

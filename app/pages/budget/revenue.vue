@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, varianceTint } from '~/composables/useBudgetData'
 
 // Mirrors server/utils/core-revenue.ts's CORE_REVENUE_ACCOUNT_NUMBERS — duplicated rather
 // than imported since server/utils isn't part of the client bundle (see this file's other
@@ -251,16 +251,23 @@ const totalRevenueProjected = computed(() => {
 })
 
 // Revenue is always "higher is better" — no direction table needed for a single-category page.
-function varianceFor(budget: number, actual: number): { kind: 'no-budget' } | { kind: 'value', delta: number, status: ReturnType<typeof paceStatus> } {
+function varianceFor(budget: number, actual: number): { kind: 'no-budget' } | { kind: 'value', delta: number, status: ReturnType<typeof paceStatus>, tint: ReturnType<typeof varianceTint> } {
   if (!budget) return { kind: 'no-budget' }
   const actualPct = (actual / budget) * 100
   const status = paceStatus(actualPct, 100, 'higher-is-better')
-  return { kind: 'value', delta: actual - budget, status }
+  return { kind: 'value', delta: actual - budget, status, tint: varianceTint('higher-is-better', budget, actual) }
 }
 type Variance = ReturnType<typeof varianceFor> | { kind: 'no-actuals' }
 function varianceIcon(v?: Variance): string {
   if (!v || v.kind !== 'value') return ''
   return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
+}
+// Whole-row shading (see varianceTint in useBudgetData.ts and .var-bad/.var-good in main.css).
+function rowTintClass(v?: Variance): string {
+  return v && v.kind === 'value' ? tintRowClass(v.tint) : ''
+}
+function rowTintStyle(v?: Variance) {
+  return v && v.kind === 'value' ? tintRowStyle(v.tint) : undefined
 }
 function varianceClass(v?: Variance): string {
   if (!v || v.kind !== 'value') return ''
@@ -940,6 +947,11 @@ async function saveRevenue() {
               @click="selectYearTotal"
             >Total</button>
           </div>
+          <div v-if="!viewingYearTotal && selectedMonthIsCurrent && selectedMonthHasActuals" class="tint-legend">
+            Row shading vs. budget:
+            <span>worse</span><span class="tint-bar" aria-hidden="true"></span><span>better</span>
+            <span>— darker red = bigger shortfall; unshaded = within a normal range</span>
+          </div>
           <table class="pl-table edit-table">
             <thead v-if="viewingYearTotal">
               <tr class="col-head-row">
@@ -986,7 +998,11 @@ async function saveRevenue() {
               </template>
             </tbody>
             <tbody v-else>
-              <tr v-for="acc in sortedRevenueAccounts" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+              <tr
+                v-for="acc in sortedRevenueAccounts" :key="acc.accountId" class="account-row"
+                :class="[{ 'group-header': !isLeafAccount(acc) }, rowTintClass(accountProjectedVarianceById.get(acc.accountId))]"
+                :style="rowTintStyle(accountProjectedVarianceById.get(acc.accountId))"
+              >
                 <th scope="row" :style="{ paddingLeft: (16 + accountDepth(acc) * 16) + 'px' }">
                   <button v-if="!isLeafAccount(acc)" type="button" class="expand-toggle account-label" @click="toggleAccountCollapsed(acc.accountId)">
                     {{ collapsedAccountIds.has(acc.accountId) ? '▸' : '▾' }} {{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}
@@ -1022,7 +1038,7 @@ async function saveRevenue() {
                   </span>
                 </td>
               </tr>
-              <tr class="net-income-row">
+              <tr class="net-income-row" :class="rowTintClass(totalRevenueProjectedVariance)" :style="rowTintStyle(totalRevenueProjectedVariance)">
                 <th scope="row">Total Revenue</th>
                 <td><span class="amount-cell"><span class="amount-input readonly"><strong>${{ Math.round(totalRevenueBudget).toLocaleString() }}</strong></span></span></td>
                 <td v-if="selectedMonthIsCurrent">

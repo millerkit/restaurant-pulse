@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, varianceTint } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -398,7 +398,8 @@ function budgetActualVariance(category: Category, budget: number, actual: number
   const actualPct = (actual / budget) * 100
   const referencePct = (reference / budget) * 100
   const status = paceStatus(actualPct, referencePct, CATEGORY_DIRECTION[category])
-  return { kind: 'value' as const, budget, actual, delta: actual - reference, status }
+  const tint = varianceTint(CATEGORY_DIRECTION[category], budget, actual)
+  return { kind: 'value' as const, budget, actual, delta: actual - reference, status, tint }
 }
 
 // Renders variance as a colored dollar-figure directly on the Actual/
@@ -415,6 +416,13 @@ type Variance = ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }
 function varianceIcon(v?: Variance): string {
   if (!v || v.kind !== 'value') return ''
   return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
+}
+// Whole-row shading (see varianceTint in useBudgetData.ts and .var-bad/.var-good in main.css).
+function rowTintClass(v?: Variance): string {
+  return v && v.kind === 'value' ? tintRowClass(v.tint) : ''
+}
+function rowTintStyle(v?: Variance) {
+  return v && v.kind === 'value' ? tintRowStyle(v.tint) : undefined
 }
 function varianceClass(v?: Variance): string {
   if (!v || v.kind !== 'value') return ''
@@ -1398,6 +1406,11 @@ function exportForQuickBooks() {
               @click="selectAnnualTotal"
             >Total</button>
           </div>
+          <div v-if="!viewingAnnualTotal && (selectedMonthClosed || (selectedMonthIsCurrent && selectedMonthHasActuals))" class="tint-legend">
+            Row shading vs. budget:
+            <span>worse</span><span class="tint-bar" aria-hidden="true"></span><span>better</span>
+            <span>— darker red = bigger overrun; unshaded = within a normal range</span>
+          </div>
           <div class="edit-table-scroll">
           <table class="pl-table edit-table">
             <thead v-if="viewingAnnualTotal">
@@ -1471,7 +1484,7 @@ function exportForQuickBooks() {
             </tbody>
             <tbody v-else-if="!selectedMonthClosed">
               <template v-for="cat in CATEGORIES" :key="cat">
-                <tr>
+                <tr :class="selectedMonthIsCurrent && selectedMonthHasActuals ? rowTintClass(categoryProjectedVarianceByCat.get(cat)) : ''" :style="selectedMonthIsCurrent && selectedMonthHasActuals ? rowTintStyle(categoryProjectedVarianceByCat.get(cat)) : undefined">
                   <th scope="row">
                     <button class="expand-toggle" @click="toggleCategoryExpanded(cat)">
                       {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
@@ -1495,7 +1508,11 @@ function exportForQuickBooks() {
                   </td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
-                  <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                  <tr
+                    v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row"
+                    :class="[{ 'group-header': !isLeafAccount(acc) }, selectedMonthIsCurrent && selectedMonthHasActuals ? rowTintClass(accountProjectedVarianceById.get(acc.accountId)) : '']"
+                    :style="selectedMonthIsCurrent && selectedMonthHasActuals ? rowTintStyle(accountProjectedVarianceById.get(acc.accountId)) : undefined"
+                  >
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
@@ -1592,7 +1609,7 @@ function exportForQuickBooks() {
                  reviewing what already happened). -->
             <tbody v-else>
               <template v-for="cat in CATEGORIES" :key="cat">
-                <tr>
+                <tr :class="rowTintClass(categoryVarianceByCat.get(cat))" :style="rowTintStyle(categoryVarianceByCat.get(cat))">
                   <th scope="row">
                     <button class="expand-toggle" @click="toggleCategoryExpanded(cat)">
                       {{ expandedCategories.has(cat) ? '▾' : '▸' }} {{ CATEGORY_LABEL[cat] }}
@@ -1612,7 +1629,11 @@ function exportForQuickBooks() {
                   </td>
                 </tr>
                 <template v-if="expandedCategories.has(cat)">
-                  <tr v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row" :class="{ 'group-header': !isLeafAccount(acc) }">
+                  <tr
+                    v-for="acc in accountsForCategory(cat)" :key="acc.accountId" class="account-row"
+                    :class="[{ 'group-header': !isLeafAccount(acc) }, rowTintClass(accountVarianceById.get(acc.accountId))]"
+                    :style="rowTintStyle(accountVarianceById.get(acc.accountId))"
+                  >
                     <th scope="row" :style="{ paddingLeft: (28 + accountDepth(acc) * 16) + 'px' }">
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>

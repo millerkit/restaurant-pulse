@@ -369,6 +369,47 @@ export function paceStatus(actualPct: number, expectedPct: number, direction: Di
   return 'critical'
 }
 
+// Row shading for budget-vs-projected/actual tables (Edit Budget, Revenue):
+// a continuous red/neutral/green scale instead of paceStatus's four steps, so
+// the biggest divergences visibly outrank the merely-off ones. Strength
+// blends two things on purpose — percent off budget AND dollars off — because
+// either alone misleads: a $24 miss on a $100 line is a huge percentage but
+// immaterial, while $2K over on a $100K category is material-looking dollars
+// but only 2%. Geometric mean of the two, so a row needs to be meaningfully
+// large on both to reach full shade. `bad` = running worse than budget in
+// this category's direction (over on costs, under on revenue); `good` = better.
+const TINT_FULL_PCT = 0.30 // 30% off budget counts as full percent-strength
+const TINT_MIN_PCT = 0.03 // under 3% off is noise, never shaded
+const TINT_MIN_DOLLARS = 50 // under $50 off is immaterial, never shaded
+const TINT_FULL_DOLLARS = 500 // $500 off (beyond the minimum) is full dollar-strength
+const TINT_MIN_STRENGTH = 0.12 // below this the shade is indistinguishable from neutral
+export type VarianceTint = { tone: 'bad' | 'good' | 'neutral', strength: number }
+export function varianceTint(direction: Direction, budget: number, compared: number): VarianceTint {
+  const neutral: VarianceTint = { tone: 'neutral', strength: 0 }
+  if (!budget) return neutral
+  const worse = direction === 'higher-is-worse' ? compared - budget : budget - compared
+  const dollars = Math.abs(worse)
+  const pct = dollars / Math.abs(budget)
+  if (pct < TINT_MIN_PCT || dollars < TINT_MIN_DOLLARS) return neutral
+  const pctFactor = Math.min(1, pct / TINT_FULL_PCT)
+  const dollarFactor = Math.min(1, (dollars - TINT_MIN_DOLLARS) / (TINT_FULL_DOLLARS - TINT_MIN_DOLLARS))
+  const strength = Math.sqrt(pctFactor * dollarFactor)
+  if (strength < TINT_MIN_STRENGTH) return neutral
+  return { tone: worse > 0 ? 'bad' : 'good', strength }
+}
+// Strong bad rows (past this strength) flip to white text — see .var-strong in main.css.
+const TINT_STRONG_AT = 0.7
+export function tintRowClass(tint?: VarianceTint): string {
+  if (!tint || tint.tone === 'neutral') return ''
+  return tint.tone === 'bad'
+    ? `var-bad${tint.strength >= TINT_STRONG_AT ? ' var-strong' : ''}`
+    : 'var-good'
+}
+export function tintRowStyle(tint?: VarianceTint): Record<string, string> | undefined {
+  if (!tint || tint.tone === 'neutral') return undefined
+  return { '--tint': tint.strength.toFixed(3) }
+}
+
 export type CategoryBenchmark = { category: string, targetPct: number, warningPct: number, seriousPct: number, criticalPct: number }
 
 // Cost-ratio status (COGS/labor/prime-cost % of revenue) against
