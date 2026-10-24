@@ -346,11 +346,39 @@ function projectFromActual(actual: number, category?: Category): number {
   if (fraction <= 0) return actual
   return actual / fraction
 }
-function categoryProjectedTotal(cat: Category): number {
-  return projectFromActual(categoryActualTotal(cat), cat)
+// Which projection rule a leaf account gets. Only some costs accrue at a steady
+// rate; most opex posts as one or two lumps a month (rent, utilities, insurance,
+// subscriptions), so straight-lining a half-month of actuals either invents an
+// overrun that isn't real (rent paid on the 1st, "projected" to double) or an
+// underrun (a bill not posted yet). Rules, per the user (2026-10-24):
+//   - 'steady'  — COGS, revenue (this page's read-only revenue rows), and the
+//                 sales-driven processing fees (6200 family: Stripe, Toast): constant-rate
+//                 projection from actuals.
+//   - 'payroll' — labor except ICHRA: the Friday-payroll-cycle projection above
+//                 (wages, payroll taxes, PTO all post with the Friday runs).
+//   - 'lump'    — everything else, incl. ICHRA (monthly charges) and other
+//                 income/expense: projected = the larger of actual-to-date and the
+//                 budget. A real overrun already posted still flags; an unposted bill
+//                 is assumed to land at budget, so it never shows a false underrun.
+const STEADY_OPEX_ACCOUNT_NUMBERS = new Set(['6200', '6210', '6220'])
+const LUMP_LABOR_ACCOUNT_NUMBERS = new Set(['6065', '6066'])
+type ProjectionRule = 'steady' | 'payroll' | 'lump'
+function projectionRule(acc: BudgetAccount): ProjectionRule {
+  if (acc.category === 'cogs' || acc.category === 'revenue') return 'steady'
+  if (acc.category === 'labor') return acc.accountNumber && LUMP_LABOR_ACCOUNT_NUMBERS.has(acc.accountNumber) ? 'lump' : 'payroll'
+  if (acc.category === 'opex' && acc.accountNumber && STEADY_OPEX_ACCOUNT_NUMBERS.has(acc.accountNumber)) return 'steady'
+  return 'lump'
 }
 function computedAccountProjected(acc: BudgetAccount): number {
-  return projectFromActual(computedAccountActual(acc), acc.category)
+  const children = directChildren(acc.accountId)
+  if (children.length > 0) return children.reduce((sum, c) => sum + computedAccountProjected(c), 0)
+  const actual = computedAccountActual(acc)
+  if (projectionRule(acc) === 'lump') return Math.max(actual, computedAccountAmount(acc))
+  return projectFromActual(actual, acc.category)
+}
+function categoryProjectedTotal(cat: Category): number {
+  const roots = (editMonthData.value?.accounts || []).filter(a => a.category === cat && a.parentAccountId === null)
+  return roots.reduce((sum, a) => sum + computedAccountProjected(a), 0)
 }
 
 // Payroll-cycle fraction of the current month elapsed, for labor only:
@@ -1410,6 +1438,9 @@ function exportForQuickBooks() {
             Row shading vs. budget:
             <span>worse</span><span class="tint-bar" aria-hidden="true"></span><span>better</span>
             <span>— darker red = bigger overrun; unshaded = within a normal range</span>
+          </div>
+          <div v-if="!viewingAnnualTotal && selectedMonthIsCurrent && selectedMonthHasActuals" class="tint-legend">
+            Projected: COGS and processing fees run at a steady rate, payroll follows the Friday runs, and every other expense (rent, utilities, insurance, ICHRA…) is projected at its budget unless actuals have already exceeded it.
           </div>
           <div class="edit-table-scroll">
           <table class="pl-table edit-table">

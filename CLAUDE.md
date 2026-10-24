@@ -4375,8 +4375,14 @@ revenue), pale green = running better. Logic is `varianceTint()` in
 - **Applied to**: category and account rows on Edit Budget (current month with actuals, and
   closed months), account rows and the Total Revenue row on the Revenue tab. Not applied to
   the Year Total tabs or Budget Pace's pace cards (no per-row projection there).
-- **Known quirk, unchanged**: a bill not yet posted (cash basis) reads as a big green
-  underrun until it lands, same as the old ✓ did.
+- **Projection rules per account (2026-10-24, Edit Budget only)**: straight-line projection
+  only fits steady costs. `projectionRule()` in `app/pages/budget/edit.vue`: COGS, revenue and
+  processing fees (6200/6210/6220) project at a constant rate; labor uses the Friday-payroll
+  fraction, except ICHRA (6065/6066, monthly charges); everything else (most opex, other
+  income/expense) is a *lump*: projected = max(actual to date, budget). So a posted overrun
+  flags (rent $17.6K vs $11.5K) but an unposted bill never shows a false underrun/green.
+  Parent and category projections sum their children. Account numbers are hand-set, revisit
+  if new steady accounts appear (e.g. 6305 reservation fees were left as a lump).
 - Verified by rendering the real CSS and the real `varianceTint` output headlessly in light
   and dark; not clicked through in the live app (local dev is behind Basic Auth).
 
