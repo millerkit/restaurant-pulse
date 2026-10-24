@@ -4427,9 +4427,25 @@ one transaction, accounts matched by `account_number` (asserted exactly one acti
     over — catering profit share $5.3K, Business Manager at $60K for four paychecks, bonuses/PTO above
     budget, OT, and pre-start hourly pay, none of which the model can express. Left as an explained
     variance.
-  - **Open:** the Labor tab still budgets Service Captain at $672/mo for Nov and Dec, which looks like a
-    double count once the Wine Director is salaried (unless a new captain is being hired). Employee
-    Bonus left at $500 (actual $1,500 Sep / $1,700 Oct) — the user's call.
+  - **Hourly-hours check, same day:** comparing each hourly account's modeled $/week to its last 8
+    payrolls (QBO posts by account, not person, so only account totals can be checked) found the tab
+    mostly accurate. A red Pastry Prep Cook row on Edit Budget was an artifact: the 10/2 payroll was
+    $1,860 (~$780 above normal), and the projection scales actual-to-date by 5/4, carrying that spike
+    forward; ex-spike the projection (~$5,200) matches the $5,265 budget. The user saved: Prep Cook
+    slot 2 30 → 37 hrs/wk (modeled $1,939/wk vs. $1,933 actual mean); Concierge 24 + 24 hrs (was
+    21 × 25/33; modeled $1,008/wk vs. $878–$1,102 actual); Mario (Pastry Prep) 39 → 40 hrs; Elijah
+    (Line Cook) first paycheck 10/23 → 10/30 (the 10/23 payroll still looked like two cooks).
+    Result: labor Oct $122.4K / Nov $107.1K / Dec $108.7K, basically unchanged, since the edits mostly
+    shift mix. Modeled BOH hourly is ~3% above recent actual plus Elijah (Sous Chef at full hours is
+    the cushion); FOH hourly is within ~4%. Caveats from the user: other cooks may log hours under
+    Line Cook, Magdalene works some hours as a server (posts to Server, which is on target), and the
+    $25/hr on the anonymous Prep Cook slot is a guess — only the account's weekly dollars matter to the
+    budget, but if Elijah's hours are really already in Line Cook actuals, his $1,040/wk double counts.
+  - **Open:** the Labor tab still budgets Service Captain (Katie, $12 × 14 hrs) at $672/mo for Nov and
+    Dec, which double counts once the Wine Director is salaried (no other captain is being hired).
+    Zero the slot's hours on or after Nov 1 — a Save rewrites the current month through December, so
+    saving earlier would also zero Oct's $840 against ~$900 of real pay. Employee Bonus left at $500
+    (actual $1,500 Sep / $1,700 Oct) — the user's call.
 - **Left alone on purpose:** Toast fees (user said fine; Nov $6,400 is ~$900 above 3.0% of Nov core
   sales), electricity, marketing PR, loan interest 7020. Optional, not applied: Dec hood cleaning
   (6610) ~$1,000 (last one was $1,002 in Sep, guessing a quarterly cycle).
