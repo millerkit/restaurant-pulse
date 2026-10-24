@@ -397,12 +397,10 @@ export function varianceTint(direction: Direction, budget: number, compared: num
   if (strength < TINT_MIN_STRENGTH) return neutral
   return { tone: worse > 0 ? 'bad' : 'good', strength }
 }
-// Strong bad rows (past this strength) flip to white text — see .var-strong in main.css.
-const TINT_STRONG_AT = 0.7
 export function tintRowClass(tint?: VarianceTint): string {
   if (!tint || tint.tone === 'neutral') return ''
   return tint.tone === 'bad'
-    ? `var-bad${tint.strength >= TINT_STRONG_AT ? ' var-strong' : ''}`
+    ? 'var-bad'
     : 'var-good'
 }
 export function tintRowStyle(tint?: VarianceTint): Record<string, string> | undefined {
