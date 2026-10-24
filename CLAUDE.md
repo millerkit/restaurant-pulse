@@ -4386,6 +4386,57 @@ revenue), pale green = running better. Logic is `varianceTint()` in
 - Verified by rendering the real CSS and the real `varianceTint` output headlessly in light
   and dark; not clicked through in the live app (local dev is behind Basic Auth).
 
+## Oct–Dec 2026 non-labor budget corrections, round 2 — 2026-10-24
+
+Second recalibration pass (after 2026-10-05), from production data synced through 2026-10-23.
+Read-only queries via disposable `.cjs` scripts over `fly ssh console`; the write ran only after
+the user approved the table. Backup first (`/app/data/backup-pre-octdec-fix-2026-10-24T15-45-31-590Z.sqlite`),
+one transaction, accounts matched by `account_number` (asserted exactly one active row), re-read to verify.
+
+- **Applied to `budget_targets` (2026):** 5010 Food Costs Nov $33,570 → $37,270 (27.3% of the $136,511
+  Nov food revenue budget; Aug/Sep ran 27.0%/27.8%); 6522 Gas Nov $460 → $900, Dec $460 → $1,300 (no
+  winter history at this location, so estimates); 6210 Stripe Fees Nov/Dec $1,500 → $2,000 (~$2.2K/mo
+  actual); 7920 Mass Ave closed-location rent Oct $2,950 / Nov $0 / Dec $0 (new rows — 10/22 check
+  posted; user does not expect to write Nov 25 or Dec 25 checks). Net income effect: Oct −$2,950,
+  Nov −$4,640, Dec −$1,340.
+- **Catering Profit Share (6004):** no catering in Nov/Dec, so it stays $0 (budget row and Labor-tab
+  flat amount both already 0). The Oct 2 payment ($5,268) is unbudgeted: the Labor tab's `flat_amount`
+  is the same every month, so a one-month figure can't live there and a raw write would be reverted by
+  the next Labor Save. Left as an explained variance.
+- **Labor was edited by the user on the Labor tab, never written by Claude.** They unchecked "scale
+  hourly wages & overtime with seasonal demand" and saved (Dec $121.6K → $109.0K = Nov; Oct $128.6K).
+  Comparing the modeled rates to the last 8 payrolls surfaced more inputs; what happened to each:
+  - **Business Manager:** I suggested $769.23 → $1,153.85/wk (it had been paid $1,154/wk since 9/18),
+    but the user then **cut their own salary from $60K to $40K through year end** to help cash flow —
+    $769.23/wk, exactly what the tab already had, so no change. Oct still over (first four paychecks
+    were at $60K) and the tab can't model a mid-month change.
+  - **Wine Director:** the 10/16 first-paycheck date was premature. Start is TBD, assumed Nov 2 → first
+    paycheck **Nov 13** (a 10/12 start produced a 10/23 first paycheck, ~11-day payroll lag). Budget
+    now Oct $0 / Nov $4,327 / Dec $5,769. She previously worked hourly as Wine Director ($30/hr) and as
+    Service Captain ($12/hr plus tips), so the Service Captain line ends when she goes salaried; the
+    pre-start hourly pay (~$470, one payroll) isn't modeled.
+  - **SUTA rate** 2.19% → ~1.1% (wage-base caps are being hit; last 4 payrolls averaged $255 vs. $510
+    modeled; **revert for 2027**). FUTA left alone (~$90/mo).
+  - **BOH OT left at 24 hrs/wk** (~$930/wk), since the user is working to lower it. Last 8 payrolls
+    (9/4–10/23): $375, $1,808, $608, $385, $2,398, $510, $1,993, $1,029 (avg $1,138, median ~$820).
+  - **PTO left at $700/mo.** Oct's $1,971 is an outlier; closed-month actuals in production are
+    Apr $1,015, May $864, Jun $0, Jul $880, Aug $360, Sep $1,050 (no rows before April), averaging
+    $695, so $700 already is the average.
+  - **Result** (read back from production after the saves): labor Oct $123.6K / Nov $107.2K /
+    Dec $108.7K. Nov/Dec match the payroll run-rate (~$105–109K); Oct will likely land ~$134K, ~$10K
+    over — catering profit share $5.3K, Business Manager at $60K for four paychecks, bonuses/PTO above
+    budget, OT, and pre-start hourly pay, none of which the model can express. Left as an explained
+    variance.
+  - **Open:** the Labor tab still budgets Service Captain at $672/mo for Nov and Dec, which looks like a
+    double count once the Wine Director is salaried (unless a new captain is being hired). Employee
+    Bonus left at $500 (actual $1,500 Sep / $1,700 Oct) — the user's call.
+- **Left alone on purpose:** Toast fees (user said fine; Nov $6,400 is ~$900 above 3.0% of Nov core
+  sales), electricity, marketing PR, loan interest 7020. Optional, not applied: Dec hood cleaning
+  (6610) ~$1,000 (last one was $1,002 in Sep, guessing a quarterly cycle).
+- **Cleanup due:** delete the backup above once numbers are trusted — it contains QBO tokens
+  (`fly ssh console -a restaurant-pulse -C "sh -c 'rm /app/data/backup-pre-*'"`; the 2026-10-05 backups
+  may still be there too).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
