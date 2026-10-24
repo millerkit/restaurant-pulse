@@ -322,15 +322,19 @@ footer {
    good fills are capped at a gentler green so red always dominates. Neutral
    rows get no class and keep their normal background. Strong-bad rows flip
    to white text; the color overrides need !important to beat the pages'
-   scoped .variance-text/.group-header color rules. */
-.edit-table tbody tr.var-bad {
+   scoped .variance-text/.group-header color rules. The .account-row
+   variants are needed because the pages' scoped `.edit-table tr.account-row` gray background
+   outranks a plain tr.var-* rule. */
+.edit-table tbody tr.var-bad,
+.edit-table tbody tr.account-row.var-bad {
   /* red also darkens as strength rises (not just more opaque), so a strong row stays
      readable with white text instead of sitting at a mid-red where neither ink works */
   background: color-mix(in srgb,
     color-mix(in srgb, var(--tint-bad) calc(100% - var(--tint) * var(--tint-darken)), #000) calc(var(--tint) * 90%),
     var(--surface));
 }
-.edit-table tbody tr.var-good { background: color-mix(in srgb, var(--tint-good) calc(var(--tint) * 30%), var(--surface)); }
+.edit-table tbody tr.var-good,
+.edit-table tbody tr.account-row.var-good { background: color-mix(in srgb, var(--tint-good) calc(var(--tint) * 30%), var(--surface)); }
 .edit-table tbody tr.var-bad .amount-input.readonly.variance-text,
 .edit-table tbody tr.var-good .amount-input.readonly.variance-text,
 .edit-table tbody tr.var-bad .amount-input.readonly,
