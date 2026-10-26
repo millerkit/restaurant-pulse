@@ -3803,6 +3803,15 @@ The remaining single DSCR card and EBITDA breakdown are unchanged except
 for losing the "(as reported)" qualifier on the `= EBITDA` row, since
 there's no longer a second version to distinguish it from.
 
+## DSCR card: only the SBA + 5 original investor loans — 2026-10-26
+
+The Cash Flow tab's all-10-loans DSCR card (the first of the two) was removed
+at the user's request; the page now shows only the scoped card (SBA, Chen,
+Savage, Schaefer, Gilreath, Mis). `app/pages/cashflow.vue` lost the card and
+its `dscrRaw`/`projectedEbitdaForYear` computeds. The server's `covenant`
+(all-loans) block in `server/api/cashflow.get.ts` was left in place, unused by
+the UI, in case the all-10 reading is wanted again.
+
 ## Reserve sustainability past the catch-up: a real 2027+ target and weekly rate — 2026-09-28
 
 Closes the gap flagged in "Real running-balance reserve projection"

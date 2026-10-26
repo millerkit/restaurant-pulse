@@ -96,16 +96,6 @@ const projectedFreeCashFlowForYear = computed<number | null>(() => {
 // doesn't add those back automatically and Eastern Bank hasn't agreed to
 // treat them as non-recurring, so a reclass-adjusted ratio isn't relevant
 // to what the bank will actually see.
-const projectedEbitdaForYear = computed<number | null>(() => {
-  if (projectedNetIncomeForYear.value === null || !data.value) return null
-  const { loanInterestExpenseForYear, budgetedDepreciationForYear } = data.value.covenant.fullYearProjectionInputs
-  return projectedNetIncomeForYear.value + loanInterestExpenseForYear + budgetedDepreciationForYear
-})
-const dscrRaw = computed<number | null>(() => {
-  if (projectedEbitdaForYear.value === null || !data.value) return null
-  const denom = data.value.covenant.annualDebtService.total
-  return denom > 0 ? projectedEbitdaForYear.value / denom : null
-})
 const projectedEbitdaScoped = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
   const { loanInterestExpenseForYear, budgetedDepreciationForYear } = data.value.covenantScoped.fullYearProjectionInputs
@@ -290,41 +280,10 @@ async function submitPlan() {
 
       <!-- Eastern Bank's Debt Service Coverage Ratio covenant (Loan
            Agreement §5.24) — informational tracking only, not a live
-           covenant test. First tested at FY{{ data.covenant.testYear }}
+           covenant test. First tested at FY{{ data.covenantScoped.testYear }}
            year-end, not quarterly, despite Eastern Bank's periodic
-           financial requests. -->
-      <section v-if="data.covenant">
-        <div class="section-head">
-          <div class="section-label">Debt Service Coverage Ratio (Eastern Bank Covenant)</div>
-          <div class="section-note">{{ data.covenant.minimumRatio.toFixed(2) }}x minimum, first tested at FY{{ data.covenant.testYear }} year-end</div>
-        </div>
-        <div class="hero-row">
-          <div class="hero-card">
-            <div class="hero-top">
-              <span class="period">Projected FY{{ data.covenant.testYear }} DSCR</span>
-              <span v-if="dscrRaw !== null" :class="['chip', dscrRaw >= data.covenant.minimumRatio ? 'good' : 'critical']">
-                {{ dscrRaw >= data.covenant.minimumRatio ? 'Meets covenant' : 'Below covenant' }}
-              </span>
-            </div>
-            <div class="figure">{{ dscrRaw !== null ? fmtRatio(dscrRaw) : '—' }}</div>
-            <div class="caption">EBITDA ÷ annual principal + interest, as reported — no adjustment for the pre-opening reclass entries.</div>
-          </div>
-        </div>
-        <div class="fcf-breakdown">
-          <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
-          <div class="fcf-row"><span>+ Loan interest expense (account 7020, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.loanInterestExpenseForYear) }}</span></div>
-          <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenant.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
-          <div class="fcf-row total"><span>= EBITDA</span><span>{{ projectedEbitdaForYear !== null ? fmt(projectedEbitdaForYear) : '—' }}</span></div>
-          <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenant.annualDebtService.total) }}</span></div>
-        </div>
-        <div class="section-note">
-          {{ data.covenant.debtScopeAssumption }}
-        </div>
-        <div class="section-note">
-          Not a live compliance check — Eastern Bank tests this once, against FY{{ data.covenant.testYear }}'s actual year-end financials, not on a running or quarterly basis. This projection uses this year's actual results so far plus budget for the remaining months, the same way the Year-End Projection above does. Doesn't adjust for the pre-opening reclass entries (see the Free Cash Flow breakdown above) — EBITDA's own definition (Interest/Depreciation/Amortization only) doesn't add those back automatically, and they aren't relevant to what Eastern Bank will actually see.
-        </div>
-      </section>
-
+           financial requests. Scoped to the SBA + 5 original investor
+           loans only (the all-10-loans version was removed 2026-10-26). -->
       <section v-if="data.covenantScoped">
         <div class="section-head">
           <div class="section-label">Debt Service Coverage Ratio (SBA + 5 investor loans)</div>
