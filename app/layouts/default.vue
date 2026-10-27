@@ -16,6 +16,7 @@ import site from '~/config/site.json'
       <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
       <NuxtLink to="/budget/revenue" exact-active-class="active">Revenue</NuxtLink>
       <NuxtLink to="/budget/labor" exact-active-class="active">Labor</NuxtLink>
+      <NuxtLink to="/kitchen-labor" exact-active-class="active">Kitchen Labor</NuxtLink>
       <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
       <NuxtLink to="/capacity" exact-active-class="active">Capacity</NuxtLink>
       <NuxtLink to="/historical" exact-active-class="active">Historical</NuxtLink>

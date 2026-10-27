@@ -4462,6 +4462,28 @@ one transaction, accounts matched by `account_number` (asserted exactly one acti
   (`fly ssh console -a restaurant-pulse -C "sh -c 'rm /app/data/backup-pre-*'"`; the 2026-10-05 backups
   may still be there too).
 
+## Kitchen Labor tab — 2026-10-27
+
+New top-level **Kitchen Labor** tab ([`app/pages/kitchen-labor.vue`](app/pages/kitchen-labor.vue), route
+`/kitchen-labor`, data from [`server/api/kitchen-labor.get.ts`](server/api/kitchen-labor.get.ts)): BOH wages as
+a percent of food revenue, per Mon–Sun week, with latest week, trailing 4- and 13-week (weighted, not
+averaged percents) cards.
+
+- **Alignment**: payroll posts Friday F for the week F−11 to F−5 (10/23 payroll = Oct 12–18), matched against
+  that same week's revenue. A labor posting is assigned to the first Friday on/after its date (so an early
+  holiday payroll still lands in its own cycle); non-Friday dollars are reported on the page. A week shows
+  "Awaiting payroll" until its payroll Friday is in synced data.
+- **Labor** = accounts under 6010 BOH Wages (incl. inactive per-role OT accounts, whose history remains on
+  them) except names starting "Porter", plus the Executive Chef (6054), which the page toggles (default off;
+  salaried owner comp). Wages only: payroll taxes, benefits and bonuses are not allocated.
+- **Food revenue** = 4010 restaurant food, 4150 + 4180 event food, 4230 catering food, 4320 retail food.
+  Beverage, service/equipment fees, books and contra-income (comps/discounts can't be split food vs. bev) are
+  excluded, so revenue is before comps.
+- Only the last 4 months of weeks are shown (`HISTORY_MONTHS`), so pre-opening weeks (huge labor, tiny revenue) don't blow out the chart scale.
+- No benchmark/status coloring: nothing in `category_benchmarks` covers kitchen labor yet.
+- Verified only against local dev, whose labor is posted daily (stale accrual-era data), so the percentages
+  there are not meaningful; check against production, where payroll posts on Fridays. No schema change.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
