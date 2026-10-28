@@ -4088,7 +4088,9 @@ flat $3,000, PTO $700, ICHRA $2,350 (all saved in `labor_position_settings`, so
 they survive a Labor-tab Save). Result: Oct net +$98.6K, Nov +$13.8K, Dec −$1.6K.
 **Without the one-time other income Oct is about −$26.7K and Nov about −$28.1K.**
 
-**Labor overrides that a Labor-tab Save will silently revert.** Wine Director Oct
+**Labor overrides that a Labor-tab Save will silently revert** (resolved by the 2026-10-07
+Labor tips/first-paycheck work; the Floor Manager one was confirmed overwritten 2026-10-28).
+Wine Director Oct
 ($4,112.22: start Oct 12, first salaried paycheck Oct 23), Floor Manager Oct
 ($6,634.62: raise to $75K on the Oct 23 paycheck), and all of 6083/6084/6086/6087
 (payroll taxes, Oct–Dec; SS/Medicare computed on modeled wages **plus an
@@ -4165,9 +4167,10 @@ Oct–Dec recalibration section above, for two of its three causes:
   lags: start Oct 12 → first paycheck Oct 23). Only Fridays on/after it are budgeted for that
   person (`slotFridays` in labor.vue). Date input on each hourly person row and each
   management row.
-- **Still hand-written, not modeled**: a raise effective mid-month (Floor Manager's $65K→$75K
-  from the Oct 23 paycheck). Re-apply it after a Labor-tab Save, or add an effective-dated
-  salary later. Also, `monthExpectedToDateFraction` still prorates by all Fridays, so a
+- **Not modeled**: a raise effective mid-month (Floor Manager's $65K→$75K from the Oct 16
+  paycheck). The hand-written October figure for it was overwritten by a later Labor-tab Save
+  (confirmed 2026-10-28, see below); don't re-apply it. An effective-dated salary would fix it
+  properly. Also, `monthExpectedToDateFraction` still prorates by all Fridays, so a
   current-month new hire's "projected" figure is slightly off.
 - **The overrides were not removed from production.** After deploying, enter the real tips
   figure and first-paycheck dates in the UI and confirm a Save reproduces the hand-written
@@ -4182,12 +4185,15 @@ Oct–Dec recalibration section above, for two of its three causes:
   actuals implied ~$10,114), Wine Director first paycheck **2026-10-16** (salaried start Oct 5,
   payroll lags ~11 days). A Save then recomputed Oct–Dec payroll taxes (6083/6084/6086/6087)
   and the Wine Director from the model; Oct matched Edit Budget afterward.
-- **Floor Manager's raise is still a manual override.** $65K→$75K ($1,250→$1,442.31/wk) from the
-  Oct 16 paycheck; Oct has five Fridays, so Oct = 2×$1,250 + 3×$1,442.31 = **$6,826.92** (the Labor
-  tab would say $7,211.54). Written straight to `budget_targets` for 6058, with the Oct tax lines
-  adjusted by the $384.62 wage difference at their rates (now 6083 $215.09, 6084 $2,373.70,
-  6086 $10,149.63, 6087 $2,467.85). Nov/Dec ($5,769.23) are right as modeled. **A Labor-tab Save
-  reverts all of this** — re-apply it. The effective-dated salary change is still unmodeled.
+- **Floor Manager's raise was a manual override, since overwritten (2026-10-28).** $65K→$75K
+  ($1,250→$1,442.31/wk) from the Oct 16 paycheck; Oct has five Fridays, so Oct = 2×$1,250 +
+  3×$1,442.31 = $6,826.92, while the Labor tab says $7,211.54. It was written straight to
+  `budget_targets` for 6058 (with the Oct tax lines adjusted by the $384.62 difference), but a
+  later Labor-tab Save recomputed it: production's Oct 6058 budget is now $7,211.54, matching the
+  model, so there is nothing left to re-apply and saving reverts nothing. Net effect: October's
+  Floor Manager budget runs about $385 above actual, since the tab applies the new salary to
+  all five Fridays. Nov/Dec ($5,769.23) are right as modeled. The effective-dated salary change
+  is still unmodeled.
 - Backups taken during the rollout contain QBO tokens; delete `/app/data/backup-pre-*` once
   numbers are trusted.
 
@@ -4583,6 +4589,27 @@ averaged percents) cards.
 - No benchmark/status coloring: nothing in `category_benchmarks` covers kitchen labor yet.
 - Verified only against local dev, whose labor is posted daily (stale accrual-era data), so the percentages
   there are not meaningful; check against production, where payroll posts on Fridays. No schema change.
+
+## Labor-tab hours recalibrated from Toast hours/earnings — 2026-10-28
+
+Toast's "Hours & Earnings by Range" CSV (Sep 1–Oct 26) was compared with production's Labor settings.
+It reconciles to QBO within ~2% (BOH regular $9.85K vs $10.0K posted per week; BOH OT $1.27K vs
+$1.14K), and **QBO posts labor by Toast job**, so a person's hours land on whichever account their
+Toast job maps to. Hourly rates already matched everywhere; only hours changed. Applied to
+production `labor_position_slots` / `labor_position_settings` directly (one transaction, after a
+backup; `budget_targets` untouched, so the budget only moves on the next Labor-tab Save):
+Lauren and Anna Grace 38→40; Jesse 39→38; the anonymous Prep Cook slot 37→0 (Luis moved to Sous
+Chef the week of Oct 13); Rebeca 40→38; Porters 23/32/28; Concierge 27/25; Servers
+34/28/16/19/15/8/13; Bartenders 30/10/9/27/5; Server Trainee 2→4; **BOH OT 10→32 hrs/wk** (actual
+~30 hrs ≈ $1,270/wk; the tab's blended rate is lower than the $42/OT-hr actually paid, hence 32).
+Net effect on weekly dollars is roughly zero (prep-cook vacancy offsets the OT increase).
+- **Name mapping is assumed**, since Toast exports legal names: Jay = Jason Guo, Mario = Vicente
+  Coronado, Coco = Luis Maggiolo, Skye = Savannah Walker, Magdalene = Landon Nethercott.
+- Gabriel Peterson (Sous Chef, last shift Oct 11), Ningyin Zhao, Peter Nelson Jr and Jillian
+  Osborne have left or dropped off and aren't in the Labor tab. Bar Prep (~4 hrs/wk at $18) and
+  Cater-Waiter shifts are not modeled.
+- Cleanup: `/app/data/backup-pre-labor-hours-2026-10-28T16-40-53-368Z.sqlite` holds QBO tokens;
+  delete it once the numbers are trusted.
 
 ## Not yet done
 
