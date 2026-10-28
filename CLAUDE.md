@@ -4611,6 +4611,31 @@ Net effect on weekly dollars is roughly zero (prep-cook vacancy offsets the OT i
 - Cleanup: `/app/data/backup-pre-labor-hours-2026-10-28T16-40-53-368Z.sqlite` holds QBO tokens;
   delete it once the numbers are trusted.
 
+## Gift card cash timing — 2026-10-28
+
+The Mass Ave sale won't close in 2026 (the $88K gain was removed from the Nov budget), which makes
+cash for the loans tight. Gift card sales (about $27K last year) are cash in the bank but a
+balance-sheet liability, so they never reach the P&L or Net Income.
+
+- **`gift_card_plan`** (schema.sql): single-row editable "gift card cash still expected before Dec 31",
+  saved via `POST /api/cashflow/gift-card-plan`, entered on the Cash Flow tab under the Year-End
+  Projection. It is added to projected year-end Free Cash Flow only (shown as a second figure, "including
+  $X of gift card cash"); Net Income, the "Profit needed" card and the DSCR covenant are unchanged,
+  since EBITDA never sees gift card cash.
+- **Cards updated too (same day):** the "Profit needed to cover the loans" card and the "Profit projected"
+  pace chip use `breakevenNetIncomeAfterGiftCards` (server `breakevenNetIncome` minus gift card cash,
+  computed client-side), so the cards agree with the Free Cash Flow line. The server value stays
+  gift-card-free so the "including gift card cash" line doesn't double count. "Cash still needed" and the
+  YTD Free Cash Flow section are deliberately unchanged (YTD could get a "gift card cash sold to date" row).
+- It is a timing benefit: redemptions (mostly 2027) bring revenue with no new cash, so it should not be
+  counted on for the 2027 reserve plan. The page says so.
+- Starts at $0 (nothing assumed until entered). Only the portion still to be sold before Dec 31 belongs
+  here; cards already sold are already in the cash balance. No QBO liability balance is shown yet.
+- **Production rollout:** run `node scripts/add-gift-card-plan.mjs` on the volume (`fly ssh console`)
+  BEFORE `fly deploy`, or `/api/cashflow` 500s on the missing table. Local dev already migrated.
+- Verified: migration, typecheck (no new errors beyond the pre-existing ones). Not clicked through in a
+  browser (local dev is behind Basic Auth).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

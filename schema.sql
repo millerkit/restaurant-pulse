@@ -430,6 +430,19 @@ CREATE TABLE reserve_plan (
   updated_at     TEXT NOT NULL
 );
 
+-- Gift card cash still expected before year end (added 2026-10-28). Gift
+-- card sales are cash in the bank but a balance-sheet liability, not
+-- revenue, so they never reach daily_line_items or Net Income; the Cash
+-- Flow tab's Year-End Projection adds this on top of projected Free Cash
+-- Flow as a cash-timing benefit. The cash is borrowed from future revenue:
+-- redemptions later show up as revenue with no new cash. Single-row
+-- (id is always 1), same shape as reserve_plan.
+CREATE TABLE gift_card_plan (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  expected_cash  REAL NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
 -- The user's currently-declared "good week" revenue benchmark — a single
 -- dollar target for one full operating week (Tue-Sun), added 2026-08-19 to
 -- back the Dashboard's Weekly Performance section (see

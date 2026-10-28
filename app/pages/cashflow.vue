@@ -23,7 +23,7 @@ type ReserveSustainability = {
   operatingCashFreedPerWeek: number | null
   operatingCashFreedTotal: number | null
 }
-type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number, giftCardCash: number }
 type Covenant = {
   minimumRatio: number
   testYear: number
@@ -82,6 +82,19 @@ const projectedNetIncomeForYear = computed<number | null>(() => {
 const projectedFreeCashFlowForYear = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
   return projectedNetIncomeForYear.value - data.value.yearProjection.breakevenNetIncome
+})
+
+// Gift card cash is cash in without revenue (a liability until redeemed),
+// so it counts toward covering the loans but never toward Net Income.
+// Net Income needed once expected gift card cash is counted as a source of
+// cash: drives the "Profit needed" card and the pace chip.
+const breakevenNetIncomeAfterGiftCards = computed<number | null>(() => {
+  if (!data.value) return null
+  return data.value.yearProjection.breakevenNetIncome - data.value.yearProjection.giftCardCash
+})
+const projectedFreeCashFlowWithGiftCards = computed<number | null>(() => {
+  if (projectedFreeCashFlowForYear.value === null || !data.value) return null
+  return projectedFreeCashFlowForYear.value + data.value.yearProjection.giftCardCash
 })
 
 // ---- Eastern Bank DSCR covenant (informational only) -------------------
@@ -158,6 +171,32 @@ async function deleteTransfer(t: ReserveTransfer) {
     await load()
   } catch (err: any) {
     transferError.value = err?.data?.statusMessage || err?.message || 'Failed to delete transfer'
+  }
+}
+
+// ---- Gift card cash expected before year end ----------------------------
+const giftCardAmount = ref<number | null>(null)
+watch(() => data.value?.yearProjection.giftCardCash ?? null, (v) => { if (giftCardAmount.value === null) giftCardAmount.value = v }, { immediate: true })
+const giftCardSubmitting = ref(false)
+const giftCardError = ref<string | null>(null)
+const giftCardSaved = ref(false)
+
+async function submitGiftCard() {
+  giftCardError.value = null
+  giftCardSaved.value = false
+  if (giftCardAmount.value === null || !Number.isFinite(giftCardAmount.value) || giftCardAmount.value < 0) {
+    giftCardError.value = 'Enter an amount of 0 or more'
+    return
+  }
+  giftCardSubmitting.value = true
+  try {
+    await $fetch('/api/cashflow/gift-card-plan', { method: 'POST', body: { expectedCash: giftCardAmount.value } })
+    giftCardSaved.value = true
+    await load()
+  } catch (err: any) {
+    giftCardError.value = err?.data?.statusMessage || err?.message || 'Failed to save'
+  } finally {
+    giftCardSubmitting.value = false
   }
 }
 
@@ -259,14 +298,14 @@ async function submitPlan() {
             <div class="hero-top">
               <span class="period">Profit needed to cover the loans</span>
             </div>
-            <div class="figure">{{ fmt(data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation).</div>
+            <div class="figure">{{ fmt(breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) }}</div>
+            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue)</template>.</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
               <span class="period">Profit projected this year</span>
-              <span v-if="projectedNetIncomeForYear !== null" :class="['chip', projectedNetIncomeForYear >= data.yearProjection.breakevenNetIncome ? 'good' : 'critical']">
-                {{ projectedNetIncomeForYear >= data.yearProjection.breakevenNetIncome ? 'On pace to cover it' : 'Short of covering it' }}
+              <span v-if="projectedNetIncomeForYear !== null" :class="['chip', projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'good' : 'critical']">
+                {{ projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'On pace to cover it' : 'Short of covering it' }}
               </span>
             </div>
             <div class="figure">{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</div>
@@ -275,7 +314,19 @@ async function submitPlan() {
         </div>
         <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
           Projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
+          <template v-if="data.yearProjection.giftCardCash > 0 && projectedFreeCashFlowWithGiftCards !== null">
+            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash
+          </template>
         </div>
+        <form class="transfer-form plan-form" @submit.prevent="submitGiftCard">
+          <div class="transfer-form-row">
+            <label>Gift card cash still expected before Dec 31<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
+            <button type="submit" :disabled="giftCardSubmitting">{{ giftCardSubmitting ? 'Saving…' : 'Update' }}</button>
+            <span v-if="giftCardError" class="chip critical">{{ giftCardError }}</span>
+            <span v-else-if="giftCardSaved" class="chip good">Saved</span>
+          </div>
+          <div class="section-note">Gift card sales are cash in the bank but not revenue, so they don't touch Net Income or the covenant. This is a timing benefit: when the cards are redeemed (mostly {{ YEAR + 1 }}), that revenue arrives with no new cash, so don't count on it for the {{ YEAR + 1 }} reserve plan.</div>
+        </form>
       </section>
 
       <!-- Eastern Bank's Debt Service Coverage Ratio covenant (Loan

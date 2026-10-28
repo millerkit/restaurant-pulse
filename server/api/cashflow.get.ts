@@ -250,6 +250,7 @@ export default defineEventHandler((event) => {
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
+  const giftCardPlan = db.prepare('SELECT expected_cash FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number } | undefined
 
   // Real, actual transfers only — see schema.sql's reserve_transfers
   // comment for why this replaced a fixed $/week schedule assumption (two
@@ -700,7 +701,10 @@ export default defineEventHandler((event) => {
       minimumWeeklyTransfer: reserveState.sustainability?.suggestedRemainderOfYearRate ?? null,
       plannedRemainingTransfers,
       weeklyTransferAmount: currentWeeklyAmountForProjection,
-      breakevenNetIncome: breakevenNetIncomeForYear
+      breakevenNetIncome: breakevenNetIncomeForYear,
+      // Gift card cash still expected before Dec 31 — cash in, not revenue
+      // (see schema.sql's gift_card_plan comment).
+      giftCardCash: giftCardPlan?.expected_cash ?? 0
     },
     covenant,
     covenantScoped,
