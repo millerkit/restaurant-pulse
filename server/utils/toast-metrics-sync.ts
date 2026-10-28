@@ -97,6 +97,8 @@ interface ToastTimeEntry {
   regularHours: number | null
   overtimeHours: number | null
   jobReference: { guid: string } | null
+  employeeReference: { guid: string } | null
+  deleted: boolean
 }
 
 interface ToastJob {
@@ -168,6 +170,10 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   const laborHours = timeEntries
     .filter(te => !salariedJobGuids.has(te.jobReference?.guid ?? ''))
     .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
+
+  // Per-employee hours for the Staff Hours report — from the same time
+  // entries, but unlike laborHours above, salaried jobs are included.
+  writeEmployeeHoursForDate(isoDate, timeEntries)
 
   const db = useDb()
   db.prepare(`

@@ -4462,6 +4462,106 @@ one transaction, accounts matched by `account_number` (asserted exactly one acti
   (`fly ssh console -a restaurant-pulse -C "sh -c 'rm /app/data/backup-pre-*'"`; the 2026-10-05 backups
   may still be there too).
 
+## Staff Hours report (ICHRA eligibility) — 2026-10-27
+
+New top-level **Staff Hours** tab ([`app/pages/staff-hours.vue`](app/pages/staff-hours.vue), route
+`/staff-hours`, data from [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts)): average hours
+per week per employee over the trailing 90 days, split into **full-time (30+ hrs/week, benefits eligible)**
+and **part-time**. Built for the company's ICHRA rule (average at least 30 hrs/week over 90 days).
+
+- **Unblocked by a new Toast scope**: the user added `labor.employees:read` to the `TOAST_*` credential
+  in Toast's developer console. That scope is for the Labor API's `GET /labor/v1/employees` (returns
+  `firstName`/`lastName`/`chosenName`, a `deleted` flag, and email/phone/passcode we deliberately don't
+  store) — separate from the standalone Employees API, which the Toast section above still says is
+  forbidden. Verified live before building. Each time entry carries `employeeReference.guid` to join on.
+- **Two new tables** ([`schema.sql`](schema.sql)): `daily_toast_employee_hours` (date, employee_guid, hours,
+  plus `auto_clocked_out_shifts`/`_hours`) and `toast_employees` (guid, names, `deleted`). Filled by
+  [`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts) from the same
+  `timeEntries` call `syncToastMetricsForDate` already makes (no extra call per day); employee names are
+  refreshed once per nightly run in `runNightlySync`. A name-sync failure only logs a warning, it doesn't
+  fail the covers/labor-hours sync. Each day's rows are replaced wholesale, so a corrected/deleted Toast
+  entry can't leave a stale employee-day behind.
+- **Unlike `daily_toast_metrics.labor_hours`, salaried jobs are included** — eligibility is about hours
+  worked, not pay type, and salaried staff clock in here (see the Toast section). Staff who never clock in
+  won't appear at all.
+- **Average = total hours ÷ (window days / 7)**, the policy's literal reading, with the window ending at
+  the last *synced* day (not today) so a lagging sync can't dilute everyone by a day of zeros. Classification
+  uses that full-window average only. A **recent hire** therefore lands in part-time even if they're
+  running 35+/week; rows whose first shift is >14 days into the window show "pace since first shift" as
+  context, not as a classification. If synced history starts >6 days after the window start, the page shows
+  an "Incomplete history" chip and averages over the days actually present.
+- **Revised 2026-10-27 (user's call)**: the **Salaried group is first and names-only** — no hours, shifts or
+  clock-in notes, since salaried staff's Toast clock-ins don't reliably reflect hours worked. Auto clock-outs
+  are **only flagged when one happened in the last 7 days** (`AUTO_CLOCKOUT_FLAG_DAYS`, counted back from the
+  last synced day); older ones are assumed corrected in payroll. The API fields are now
+  `recentAutoClockOutShifts`/`recentAutoClockOutHours`.
+- **Enrollment marks (2026-10-27, user's request)**: eligible people default to enrolled; each row in the
+  Salaried and Full-time groups has an Enrollment dropdown (Enrolled / Declined / Canceled — e.g. non-payment
+  or missing documents). Marking someone moves them to a new **"Eligible and not enrolled"** group (status,
+  how they're eligible, and an editable note, saved on blur); "Enrolled — remove mark" there clears it. The
+  eligible groups are now labeled **"Eligible and Enrolled · Salaried"** / **"· Full-time"**; part-time is
+  "Part-time — not eligible". Stored in `benefits_enrollment_status` (employee_guid, status, note), written by
+  `POST /api/staff-hours/enrollment`; no row means enrolled. A mark on someone who isn't currently eligible
+  (dropped to part-time) is ignored, not deleted. **The third table is in the same migration script**
+  (`add-toast-employee-hours-tables.mjs`), so the production rollout below is unchanged — it just creates
+  three tables now. Verified in the browser against local data (marks moved people between groups, note
+  persisted, clearing worked, bad input returns 400/404) and all test marks were removed afterward.
+- **Layout revised 2026-10-27 (user's call, after seeing production)**: the Salaried and Full-time groups are
+  **one table**, "Health Benefits Eligible · Enrolled" (salaried first, with "Salaried" in the hours columns);
+  "Eligible" is spelled out as health-benefits eligibility everywhere — "Health Benefits Eligible · Not
+  Enrolled" and "Not Health Benefits Eligible · Part-time". **Total hrs and Shifts columns are gone** (the API
+  still returns them). This supersedes the group names in the enrollment-marks bullet below.
+- **Enrollment now defaults to TBD, not enrolled (2026-10-27, user's call)**: every health-benefits-eligible
+  person with no recorded decision is **TBD** and shown in a green-shaded "Enrollment TBD · Needs follow-up"
+  group at the very top (the way to spot someone who newly qualified, or whom you're waiting to hear back
+  from). Status is now `enrolled` / `declined` / `canceled`, or no row = TBD; the per-row dropdown has all
+  four options (TBD clears the mark). Enrolled people are in "Health Benefits Eligible · Enrolled". **On
+  deploy, everyone currently eligible starts as TBD**, since "enrolled" used to be implicit and was never
+  stored — mark each person Enrolled once. `benefits_enrollment_status`'s CHECK had to widen to allow
+  `'enrolled'`, which SQLite can't do in place, so `add-toast-employee-hours-tables.mjs` now rebuilds an
+  old-shape table (keeping rows; no-op on a new-shape one). **Production already has the old-shape table, so
+  re-run that script on the volume BEFORE the next `fly deploy`** (same upload + run steps as before).
+  No notes on TBD people (a note needs a row); notes live on Declined/Canceled rows only.
+- **Failed saves are loud (2026-10-27)**: if an enrollment save fails, the dropdown reverts to what's stored
+  and a sticky red "Not saved" banner shows the reason. The one known cause — production's table still having
+  the old CHECK (declined/canceled only) because the migration wasn't re-run before deploy — returns an
+  explicit "enrollment table is out of date — run add-toast-employee-hours-tables.mjs" message.
+- **Auto clock-outs are flagged, not corrected.** Toast auto-clocks-out a forgotten clock-out, and those
+  shifts run long (a 30-day live sample: 10.8h avg vs. 7.4h for manual clock-outs, ~9% of all hours). A row
+  with any shows "⚠ N auto clock-outs (X of these hrs) — check Toast". This matters near the line: one
+  person at 30.1 hrs/week had 14 of them. Fix the clock-out in Toast and re-sync that date.
+- **Eligibility overrides (2026-10-27, from the user)**: former employees (`toast_employees.deleted`) are
+  omitted; **salaried** staff are always eligible and get their own "Salaried" group (hours shown for
+  reference, no 30-hr comparison) — Abigail Taylor, Shane Allerheiligen, Josh Sokol (listed as "Joshua" by
+  the user, "Josh" in Toast); **Katie Janik** is grandfathered into the full-time group whatever her average.
+  Names are constants in `staff-hours.get.ts` (`SALARIED_EMPLOYEES`, `GRANDFATHERED_EMPLOYEES`, matched on
+  Toast's lowercased "first last"). The salaried list is built from Toast employees, not from hours, because
+  Josh Sokol has no time entries at all (he doesn't clock in) and so never appeared in the hours-driven
+  report; a configured name that matches nobody shows a warning chip instead of vanishing.
+- **"Service Bar" is excluded** (`NON_PERSON_LOGIN_NAMES` in `staff-hours.get.ts`): a shared station login
+  (~9 hrs/day over 76 days, 46 auto clock-outs), not a person — it would have shown as a 55 hrs/week
+  full-timer. Always reported on the page under "Not listed" so the exclusion is visible. Add other shared
+  logins to that set by (lowercased) display name.
+- **Not built**: a per-week breakdown per employee, a configurable threshold/window (30 and 90 are
+  constants in the API), and any link to the ICHRA enrollment-timing question (eligibility is determined by
+  this average, but the MA Health Connector payment cutoff around the 22nd–23rd of the prior month means
+  coverage and reimbursement can't start before the following month — that's a policy/timing question this
+  page doesn't model).
+- **Production rollout (not done yet — migrate first, then deploy, or the nightly sync's employee-hours
+  write fails on the missing tables):**
+  1. `node scripts/add-toast-employee-hours-tables.mjs` on the production volume via `fly ssh console`
+     (idempotent; same upload-via-`fly ssh sftp shell` pattern as the other manual migrations).
+  2. `fly deploy`.
+  3. Backfill the 90-day window inside the container (the `npm run` wrapper expects `.env.local`, which
+     doesn't exist there, but the Toast secrets are already in the environment):
+     `fly ssh console -C "node scripts/backfill-toast-employee-hours.mjs"`.
+  Local dev already has both tables and the last 90 days backfilled (`npm run
+  db:add-toast-employee-hours-tables`, `npm run db:backfill-toast-employee-hours`).
+- Verified: live Toast API probe; the helpers against an in-memory DB with a stubbed Toast response
+  (multi-shift day, deleted/zero-hour/no-employee entries ignored, correction replaces stale rows, no PII
+  stored); the page in the browser at desktop and phone width; typecheck clean for the touched files.
+  `runNightlySync` itself wasn't run (it refuses outside production by design).
+
 ## Kitchen Labor tab — 2026-10-27
 
 New top-level **Kitchen Labor** tab ([`app/pages/kitchen-labor.vue`](app/pages/kitchen-labor.vue), route
@@ -4738,6 +4838,8 @@ was deployed:
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`) — Revenue is read-only here (see below)
 - [`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue) — Revenue tab: the real editable revenue projection, incl. the "Recompute from Capacity" sync (route `/budget/revenue`)
 - [`app/pages/budget/labor.vue`](app/pages/budget/labor.vue) — Labor tab: rates/hours/salaries modeling (route `/budget/labor`)
+- [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)
+- [`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts) / [`scripts/backfill-toast-employee-hours.mjs`](scripts/backfill-toast-employee-hours.mjs) — per-employee hours + names from Toast's Labor API
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
 - [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts) — Cash Flow tab's data route
 - [`server/api/cashflow/reserve-transfer.post.ts`](server/api/cashflow/reserve-transfer.post.ts) — records a real reserve transfer (or reversal)

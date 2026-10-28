@@ -142,6 +142,15 @@ export async function runNightlySync(dateOverride?: string) {
     let toastResult: { covers: number; laborHours: number; daysSynced: number } | null = null
     if (toast.clientId && toast.clientSecret && toast.apiHostname && toast.restaurantGuid) {
       toastResult = { covers: 0, laborHours: 0, daysSynced: 0 }
+      // Names for the Staff Hours report. A failure here (e.g. the
+      // labor.employees:read scope being removed) shouldn't block the
+      // covers/labor-hours sync the dashboard depends on — hours are still
+      // recorded by guid and the report falls back to "Unknown employee".
+      try {
+        await syncToastEmployees(toast)
+      } catch (err) {
+        console.warn(`syncToastEmployees failed — Staff Hours names may be stale: ${err instanceof Error ? err.message : err}`)
+      }
       for (let date = catchUpStartDate; date <= endDate; date = addDaysToIsoDate(date, 1)) {
         const dayResult = await syncToastMetricsForDate(toast, date)
         toastResult.covers += dayResult.covers

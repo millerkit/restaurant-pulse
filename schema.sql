@@ -187,6 +187,64 @@ CREATE TABLE daily_toast_area_metrics (
   PRIMARY KEY (date, area_id)
 );
 
+-- Per-employee hours for the Staff Hours report (added 2026-10-27), which
+-- answers "who averages 30+ hours a week over the last 90 days" for
+-- benefits (ICHRA) eligibility. hours is regularHours + overtimeHours summed
+-- across that employee's non-deleted Toast time entries for the business
+-- date, across every job — including salaried roles that clock in, unlike
+-- daily_toast_metrics.labor_hours (a $/labor-hour productivity input that
+-- deliberately excludes salaried jobs). Eligibility is about hours worked,
+-- not how someone is paid. Only dates an employee actually worked get a row
+-- (hours > 0). auto_clocked_out_shifts/_hours are the part of that day's
+-- hours that came from entries Toast clocked out automatically because the
+-- employee forgot to — those run long (a live 30-day sample averaged 10.8h
+-- vs. 7.4h for manual clock-outs), so the report flags them rather than
+-- silently counting them. Written by the same Toast sync that fills daily_toast_metrics
+-- (server/utils/toast-employee-hours.ts), plus
+-- scripts/backfill-toast-employee-hours.mjs for history.
+CREATE TABLE daily_toast_employee_hours (
+  date           TEXT NOT NULL,       -- ISO 8601 business date
+  employee_guid  TEXT NOT NULL,       -- Toast employeeReference.guid
+  hours          REAL NOT NULL,
+  auto_clocked_out_shifts  INTEGER NOT NULL DEFAULT 0,
+  auto_clocked_out_hours   REAL NOT NULL DEFAULT 0,
+  synced_at      TEXT NOT NULL,
+  PRIMARY KEY (date, employee_guid)
+);
+
+-- Names for the guids above, from Toast's Labor API /labor/v1/employees
+-- (needs the labor.employees:read scope, granted 2026-10-27 — the separate
+-- Employees API stays forbidden). Deliberately stores only what the report
+-- shows: the API also returns email, phone and a passcode, none of which
+-- are persisted. deleted = 1 means the employee was removed in Toast (a
+-- former employee); the row is kept so recent hours still resolve to a name.
+CREATE TABLE toast_employees (
+  guid         TEXT PRIMARY KEY,
+  first_name   TEXT,
+  last_name    TEXT,
+  chosen_name  TEXT,
+  deleted      INTEGER NOT NULL DEFAULT 0,
+  synced_at    TEXT NOT NULL
+);
+
+-- Benefits enrollment marks for the Staff Hours report (added 2026-10-27):
+-- the enrollment decision for someone who is health-benefits eligible. No row
+-- means TBD — eligible, but no decision recorded yet (newly qualified, or
+-- we're waiting to hear back); the report surfaces these at the top. Otherwise
+-- 'enrolled', or not enrolled because they 'declined' or their coverage was
+-- 'canceled' (e.g. non-payment, or missing documentation). Keyed by the Toast
+-- employee guid and set from the Staff Hours page. The mark only matters
+-- while the person is eligible — a marked person who later drops below the
+-- full-time line just shows as part-time. (Until 2026-10-27 evening the
+-- allowed values were only declined/canceled and no row meant enrolled;
+-- scripts/add-toast-employee-hours-tables.mjs rebuilds an old-shape table.)
+CREATE TABLE benefits_enrollment_status (
+  employee_guid  TEXT PRIMARY KEY,
+  status         TEXT NOT NULL CHECK (status IN ('enrolled', 'declined', 'canceled')),
+  note           TEXT,
+  updated_at     TEXT NOT NULL
+);
+
 -- The revenue-projection model behind the Capacity tab (added 2026-08-07):
 -- "how many covers, at what revenue per cover, are we assuming per seating
 -- area, and are we actually hitting that." One row per dining area (bar,
