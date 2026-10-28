@@ -8,8 +8,8 @@
 //
 // "Kitchen labor" = every account under 6010 BOH Wages (cooks, chefs, BOH OT,
 // service charge distribution) except Porter, plus the Executive Chef (6054,
-// under Management Salaries). The Executive Chef is returned separately so the
-// page can toggle it: it's salaried owner compensation and moves the ratio a
+// under Management Salaries). Overtime and the Executive Chef are returned
+// separately so the page can toggle them; the Executive Chef: it's salaried owner compensation and moves the ratio a
 // lot. Inactive accounts are kept on purpose — the old per-role OT accounts
 // (Line Cook OT, ...) were folded into BOH OT, but their history still sits
 // on them. Matched by account_number/parent, never raw id.
@@ -22,6 +22,11 @@
 const BOH_PARENT_ACCOUNT_NUMBER = '6010'
 const EXECUTIVE_CHEF_ACCOUNT_NUMBER = '6054'
 const PORTER_NAME_PATTERN = 'Porter%'
+// Overtime accounts under 6010 are named "<role> OT" (BOH OT, plus the old
+// per-role ones folded into it). Returned separately so the page can toggle
+// them (user's call 2026-10-27). Porter OT is already excluded by the Porter
+// pattern above; porters almost never have overtime.
+const OVERTIME_NAME_PATTERN = '% OT'
 
 const FOOD_STREAMS = [
   { key: 'restaurant', label: 'Restaurant', accountNumbers: ['4010'] },
@@ -66,6 +71,7 @@ interface WeekAcc {
   weekStart: string
   revenue: Record<StreamKey, number>
   laborBoh: number
+  laborOvertime: number
   laborExecChef: number
   laborRows: number
 }
@@ -80,7 +86,9 @@ export default defineEventHandler(() => {
 
   const laborRows = db.prepare(`
     SELECT d.date AS date,
-           CASE WHEN a.account_number = ? THEN 'exec' ELSE 'boh' END AS kind,
+           CASE WHEN a.account_number = ? THEN 'exec'
+                WHEN a.name LIKE ? THEN 'ot'
+                ELSE 'boh' END AS kind,
            SUM(d.amount) AS amount
     FROM daily_line_items d
     JOIN accounts a ON a.id = d.account_id
@@ -90,9 +98,10 @@ export default defineEventHandler(() => {
     GROUP BY d.date, kind
   `).all(
     EXECUTIVE_CHEF_ACCOUNT_NUMBER,
+    OVERTIME_NAME_PATTERN,
     EXECUTIVE_CHEF_ACCOUNT_NUMBER,
     BOH_PARENT_ACCOUNT_NUMBER, BOH_PARENT_ACCOUNT_NUMBER, PORTER_NAME_PATTERN
-  ) as { date: string, kind: 'boh' | 'exec', amount: number }[]
+  ) as { date: string, kind: 'boh' | 'ot' | 'exec', amount: number }[]
 
   const revenueNumbers = [...streamByAccountNumber.keys()]
   const revenueRows = db.prepare(`
@@ -107,7 +116,7 @@ export default defineEventHandler(() => {
   const weekFor = (weekStart: string) => {
     let w = weeks.get(weekStart)
     if (!w) {
-      w = { weekStart, revenue: { restaurant: 0, events: 0, catering: 0, retail: 0 }, laborBoh: 0, laborExecChef: 0, laborRows: 0 }
+      w = { weekStart, revenue: { restaurant: 0, events: 0, catering: 0, retail: 0 }, laborBoh: 0, laborOvertime: 0, laborExecChef: 0, laborRows: 0 }
       weeks.set(weekStart, w)
     }
     return w
@@ -125,6 +134,7 @@ export default defineEventHandler(() => {
     if (dow(r.date) !== 5) offCycleLabor += r.amount
     const w = weekFor(addDays(friday, -WEEK_START_BEFORE_PAYROLL_DAYS))
     if (r.kind === 'exec') w.laborExecChef += r.amount
+    else if (r.kind === 'ot') w.laborOvertime += r.amount
     else w.laborBoh += r.amount
     w.laborRows += 1
   }
@@ -149,6 +159,7 @@ export default defineEventHandler(() => {
       hasPayroll: w.laborRows > 0 && payrollDate <= asOf,
       revenue: { ...w.revenue, total: Object.values(w.revenue).reduce((s, v) => s + v, 0) },
       laborBoh: w.laborBoh,
+      laborOvertime: w.laborOvertime,
       laborExecChef: w.laborExecChef
     }
   })

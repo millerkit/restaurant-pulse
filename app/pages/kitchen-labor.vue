@@ -11,6 +11,7 @@ type Week = {
   hasPayroll: boolean
   revenue: Revenue
   laborBoh: number
+  laborOvertime: number
   laborExecChef: number
 }
 type KitchenLabor =
@@ -30,17 +31,25 @@ const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kit
 // The view (chart or table) defaults to chart. Both are per-viewer
 // conveniences only, so localStorage is optional.
 const includeExecChef = ref(false)
+// Overtime (BOH OT) defaults on, matching how the page counted labor before it
+// became a toggle.
+const includeOvertime = ref(true)
 const view = ref<'chart' | 'table'>('chart')
 onMounted(() => {
   try {
     const v = localStorage.getItem('kitchen-labor-include-exec-chef')
     if (v !== null) includeExecChef.value = v === '1'
+    const ot = localStorage.getItem('kitchen-labor-include-overtime')
+    if (ot !== null) includeOvertime.value = ot === '1'
     const w = localStorage.getItem('kitchen-labor-view')
     if (w === 'chart' || w === 'table') view.value = w
   } catch {}
 })
 watch(includeExecChef, (v) => {
   try { localStorage.setItem('kitchen-labor-include-exec-chef', v ? '1' : '0') } catch {}
+})
+watch(includeOvertime, (v) => {
+  try { localStorage.setItem('kitchen-labor-include-overtime', v ? '1' : '0') } catch {}
 })
 watch(view, (v) => {
   try { localStorage.setItem('kitchen-labor-view', v) } catch {}
@@ -54,9 +63,9 @@ function formatDate(s: string, withYear = false) {
 const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`
 
-const laborOf = (w: Week) => w.laborBoh + (includeExecChef.value ? w.laborExecChef : 0)
+const laborOf = (w: Week) => w.laborBoh + (includeOvertime.value ? w.laborOvertime : 0) + (includeExecChef.value ? w.laborExecChef : 0)
 
-type Row = Week & { labor: number, pct: number | null, deltaPts: number | null }
+type Row = Week & { labor: number, pct: number | null, otPct: number | null, deltaPts: number | null }
 
 // Newest first. Weeks without payroll (or without revenue) have no percent.
 const rows = computed<Row[]>(() => {
@@ -65,7 +74,8 @@ const rows = computed<Row[]>(() => {
   const out: Row[] = d.weeks.map((w) => {
     const labor = laborOf(w)
     const pct = w.hasPayroll && w.revenue.total > 0 ? labor / w.revenue.total : null
-    return { ...w, labor, pct, deltaPts: null }
+    const otPct = w.hasPayroll && w.revenue.total > 0 ? w.laborOvertime / w.revenue.total : null
+    return { ...w, labor, pct, otPct, deltaPts: null }
   })
   // Change vs. the prior week, only when both weeks have a percent.
   for (let i = 1; i < out.length; i++) {
@@ -81,6 +91,8 @@ const chartPoints = computed(() => [...rows.value].reverse().map(r => ({
   weekEnd: r.weekEnd,
   pct: r.pct,
   labor: r.labor,
+  otPct: r.otPct,
+  overtime: r.laborOvertime,
   revenue: r.revenue.total
 })))
 
@@ -179,6 +191,10 @@ function fmtDelta(v: number) {
           </div>
           <div class="controls">
             <label class="toggle">
+              <input v-model="includeOvertime" type="checkbox">
+              Include overtime (BOH OT)
+            </label>
+            <label class="toggle">
               <input v-model="includeExecChef" type="checkbox">
               Include Executive Chef (salaried, owner compensation)
             </label>
@@ -187,12 +203,22 @@ function fmtDelta(v: number) {
               <button type="button" :class="{ active: view === 'table' }" :aria-pressed="view === 'table'" @click="view = 'table'">Table</button>
             </div>
           </div>
-          <div v-if="view === 'chart'" class="table-card chart-card">
+          <template v-if="view === 'chart'">
+          <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
               label="Line chart of kitchen labor as a percent of food revenue, by week"
             />
           </div>
+          <div class="chart-title">Overtime alone (BOH OT), % of food revenue</div>
+          <div class="table-card chart-card">
+            <KitchenLaborChart
+              :points="chartPoints"
+              metric="overtime"
+              label="Line chart of BOH overtime as a percent of food revenue, by week"
+            />
+          </div>
+          </template>
           <div v-else class="table-card">
             <table class="pl-table">
               <caption>Kitchen labor as a percent of food revenue, by week</caption>
@@ -203,6 +229,8 @@ function fmtDelta(v: number) {
                   <th scope="col">Food revenue</th>
                   <th scope="col">Kitchen labor</th>
                   <th scope="col">Labor %</th>
+                  <th scope="col">Overtime</th>
+                  <th scope="col">Overtime %</th>
                   <th scope="col">vs. prior week</th>
                 </tr>
               </thead>
@@ -217,6 +245,9 @@ function fmtDelta(v: number) {
                   <td v-if="r.hasPayroll">{{ fmtMoney(r.labor) }}</td>
                   <td v-else class="muted">Awaiting payroll</td>
                   <td class="amount">{{ r.pct !== null ? fmtPct(r.pct) : '—' }}</td>
+                  <td v-if="r.hasPayroll">{{ fmtMoney(r.laborOvertime) }}</td>
+                  <td v-else class="muted">—</td>
+                  <td class="muted">{{ r.otPct !== null ? fmtPct(r.otPct) : '—' }}</td>
                   <td class="muted">{{ r.deltaPts !== null ? fmtDelta(r.deltaPts) : '—' }}</td>
                 </tr>
               </tbody>
@@ -227,7 +258,7 @@ function fmtDelta(v: number) {
         <section class="footnotes">
           <div class="section-label">What's counted</div>
           <ul>
-            <li><strong>Labor:</strong> wages under BOH Wages (cooks, chefs, sous and pastry, BOH overtime, service charge distribution), excluding Porter{{ includeExecChef ? ', plus the Executive Chef' : '' }}. Payroll taxes, benefits and bonuses are not included.</li>
+            <li><strong>Labor:</strong> wages under BOH Wages (cooks, chefs, sous and pastry, service charge distribution{{ includeOvertime ? ', BOH overtime' : '' }}), excluding Porter{{ includeExecChef ? ', plus the Executive Chef' : '' }}. Payroll taxes, benefits and bonuses are not included.</li>
             <li><strong>Food revenue:</strong> restaurant food, event food (on-site and off-site), catering food and retail food. Beverage, service and equipment fees, and retail non-food are left out, and discounts &amp; comps can't be split between food and beverage, so revenue is before them.</li>
             <li v-if="data.offCycleLabor > 0.5"><strong>Off-cycle postings:</strong> {{ fmtMoney(data.offCycleLabor) }} of kitchen labor was posted on days other than a Friday; each is counted with the next Friday's payroll.</li>
           </ul>
@@ -269,6 +300,7 @@ function fmtDelta(v: number) {
 .summary-figure { font-size: 34px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; margin: 4px 0; }
 .summary-sub { font-size: 12px; color: var(--ink-2); }
 
+.chart-title { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 14px 0 6px; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
 .view-switch { display: inline-flex; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }
