@@ -21,6 +21,11 @@ type RevenueModelingData = {
   asOfAreaDate: string | null
   trailingWindow: { start: string, end: string } | null
   areas: AreaTrailing[]
+  areaTrends: {
+    areaId: number, areaName: string, capacity: number | null,
+    recent4WeekCoversPerNight: number | null,
+    points: { weekStart: string, nights: number, coversPerNight: number | null }[]
+  }[]
   modelYear: number
   operatingNightsPerYear: number
   sinceDate: string | null
@@ -406,6 +411,46 @@ async function handleSynced() {
   await Promise.all([refresh(), loadYear(), loadActualsYear()])
 }
 
+// ---- weekly covers/night trend sparklines ----
+const TREND_W = 220
+const TREND_H = 48
+const trendRows = computed(() => {
+  const trends = data.value?.areaTrends ?? []
+  return trends.map((t) => {
+    const vals = t.points.map(p => p.coversPerNight).filter((v): v is number => v != null)
+    // Shared floor of 0 so a flat-looking line can't exaggerate small moves;
+    // ceiling is capacity when known (so "full" reads as the top of the box).
+    const yMax = Math.max(t.capacity ?? 0, ...vals, 1)
+    const pad = 5
+    const x = (i: number) => pad + (i * (TREND_W - 2 * pad)) / Math.max(t.points.length - 1, 1)
+    const y = (v: number) => TREND_H - pad - (v / yMax) * (TREND_H - 2 * pad)
+    const dots = t.points
+      .map((p, i) => ({ weekStart: p.weekStart, nights: p.nights, value: p.coversPerNight, x: x(i), y: p.coversPerNight == null ? 0 : y(p.coversPerNight) }))
+      .filter((d): d is { weekStart: string, nights: number, value: number, x: number, y: number } => d.value != null)
+    // Break the line across weeks with no open nights rather than bridging them.
+    let path = ''
+    let prevIdx = -2
+    t.points.forEach((p, i) => {
+      if (p.coversPerNight == null) return
+      path += `${prevIdx === i - 1 ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.coversPerNight).toFixed(1)} `
+      prevIdx = i
+    })
+    const latest = [...t.points].reverse().find(p => p.coversPerNight != null)?.coversPerNight ?? null
+    return {
+      areaId: t.areaId,
+      areaName: t.areaName,
+      points: t.points,
+      capacity: t.capacity,
+      capY: t.capacity != null ? y(t.capacity) : null,
+      path,
+      dots,
+      latest,
+      recent4: t.recent4WeekCoversPerNight,
+      fill4: t.capacity && t.recent4WeekCoversPerNight != null ? t.recent4WeekCoversPerNight / t.capacity : null
+    }
+  })
+})
+
 // ---- formatting ----
 function fmtMoney(n: number | null | undefined): string {
   return n == null ? '—' : `$${n.toFixed(2)}`
@@ -642,6 +687,50 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
           </div>
         </section>
 
+        <section v-if="trendRows.length" class="rm-section">
+          <div class="section-head">
+            <div class="section-label">Weekly Covers/Night Trend, By Area</div>
+            <div class="section-note">
+              Last {{ trendRows[0]!.points.length }} weeks (Mon–Sun), open nights only. Dashed line = nightly capacity this season.
+            </div>
+          </div>
+          <div class="pl-table-card">
+            <table class="pl-table trend-table">
+              <caption>Weekly average covers per night by seating area over recent weeks, with the latest week, last four weeks, and fill percentage of nightly capacity</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Area</th>
+                  <th scope="col">Trend</th>
+                  <th scope="col">Latest Week</th>
+                  <th scope="col">Last 4 Weeks</th>
+                  <th scope="col">Capacity</th>
+                  <th scope="col">4-Wk Fill</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in trendRows" :key="t.areaId">
+                  <th scope="row" style="text-transform: capitalize;">{{ t.areaName }}</th>
+                  <td class="trend-cell">
+                    <svg :viewBox="`0 0 ${TREND_W} ${TREND_H}`" :width="TREND_W" :height="TREND_H" role="img"
+                         :aria-label="`${t.areaName} weekly covers per night: ${t.points.map(p => p.coversPerNight == null ? 'none' : fmtCoversPerNight(p.coversPerNight)).join(', ')}`">
+                      <line v-if="t.capY != null" class="cap-line" x1="0" :x2="TREND_W" :y1="t.capY" :y2="t.capY" />
+                      <path class="trend-line" :d="t.path" />
+                      <circle v-for="(p, i) in t.dots" :key="i" class="trend-dot" :class="{ last: i === t.dots.length - 1 }"
+                              :cx="p.x" :cy="p.y" :r="i === t.dots.length - 1 ? 3.5 : 2">
+                        <title>Week of {{ fmtDate(p.weekStart) }}: {{ fmtCoversPerNight(p.value) }}/night over {{ p.nights }} nights</title>
+                      </circle>
+                    </svg>
+                  </td>
+                  <td class="derived">{{ fmtCoversPerNight(t.latest) }}</td>
+                  <td class="derived">{{ fmtCoversPerNight(t.recent4) }}</td>
+                  <td class="derived">{{ t.capacity ?? 'Closed' }}</td>
+                  <td class="derived">{{ fmtPct(t.fill4) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="rm-section">
           <div class="section-head">
             <div class="section-label">Trailing 3-Month Averages, By Area</div>
@@ -860,6 +949,11 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .pl-table tbody tr:last-child { border-bottom: none; }
 .pl-table tfoot th, .pl-table tfoot td { font-weight: 700; border-top: 2px solid var(--hair); padding-top: 10px; padding-bottom: 10px; }
 
+.trend-cell svg { display: block; margin: 0 auto; max-width: 100%; }
+.trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-dot { fill: var(--accent); }
+.trend-dot.last { stroke: var(--surface); stroke-width: 1.5; }
+.cap-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .derived.sim { color: var(--accent-text); }
 /* Light gray backing for the three Sim. columns (Covers/Night, Per-Cover $,
