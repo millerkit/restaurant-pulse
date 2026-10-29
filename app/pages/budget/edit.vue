@@ -58,6 +58,30 @@ async function loadYearAccountActuals() {
 }
 onMounted(loadYearAccountActuals)
 
+// The current (in-progress) month's per-account actuals, fetched independently of whichever
+// month tab is selected, so the Total tab can project this month instead of counting its
+// full budget (added 2026-10-29: overspending in an open month was invisible in Total until
+// the month closed). Same endpoint/rules as the selected-month Projected column below.
+const currentMonthActuals = ref<Record<number, number>>({})
+const currentMonthHasActuals = ref(false)
+const currentMonthLaborLatestDate = ref<string | null>(null)
+async function loadCurrentMonthActuals() {
+  if (!isMonthCurrent(YEAR, asOfMonth)) return
+  try {
+    const result = await $fetch<{ accounts: { accountId: number, amount: number }[], laborLatestDate: string | null }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } })
+    const map: Record<number, number> = {}
+    for (const a of result.accounts) map[a.accountId] = a.amount
+    currentMonthActuals.value = map
+    currentMonthHasActuals.value = result.accounts.length > 0
+    currentMonthLaborLatestDate.value = result.laborLatestDate
+  } catch {
+    currentMonthActuals.value = {}
+    currentMonthHasActuals.value = false
+    currentMonthLaborLatestDate.value = null
+  }
+}
+onMounted(loadCurrentMonthActuals)
+
 // Synthesizes a MonthData-shaped object summing each account's amount across all 12 months, so
 // it can stand in for a real month's data and let every existing piece of account-tree
 // machinery below (directChildren, accountDepth, accountsForCategory, categoryComputedTotal,
@@ -73,17 +97,14 @@ onMounted(loadYearAccountActuals)
 // contributes $0 to the sum, same as categoryTotals()/yearCategoryTotal() elsewhere already
 // treat them.
 //
-// Known remaining gap vs. the Revenue tab's own Total column (yearAccountTotal in
-// revenue.vue): that page also projects the *current* month from its actual-to-date for core
-// dine-in revenue accounts (and floors non-core ones at their actual), rather than leaving it
-// on plain budget the way this file and hybridYearTotalsPastActual both do. Matching that here
-// was tried and reverted 2026-09-25 — it closed the gap against revenue.vue but reopened a
-// worse one against this file's own category header, since hybridYearTotalsPastActual (shared
-// with Cash Flow's Year-End Projection) would still need widening too to stay consistent, a
-// larger, cross-page change not made without the user's own sign-off. The remaining gap is
-// bounded to whatever the current month's actual-to-date and its budget disagree on — small
-// next to the many-month gap this fix already closes, and shrinks to zero once the month
-// closes and its real actual is known.
+// The Total column stays past actuals + current/future budget. A separate Projected column
+// (2026-10-29, at the user's request; only after the 15th of the month) swaps the current
+// month's budget for a projection from actual-to-date: each leaf uses
+// currentMonthLeafProjection (the same steady/payroll/lump rules as the month tab's Projected
+// column), and annualProjectedAccountAmount / yearProjectedTotals add the per-leaf difference.
+// hybridYearTotalsPastActual is left untouched, so Cash Flow's Year-End Projection and the
+// pacing cards are unaffected. The 2026-09-25 decision to leave the current month on plain
+// budget still holds for the Total column.
 const annualMonthData = computed<MonthData | null>(() => {
   const first = monthlyData.value.find(m => m)
   if (!first || monthlyData.value.some(m => !m)) return null
@@ -484,14 +505,39 @@ function countOperatingDays(start: Date, end: Date): number {
   }
   return count
 }
-const monthExpectedFraction = computed(() => {
-  const monthStart = new Date(YEAR, editMonth.value - 1, 1)
-  const monthEnd = new Date(YEAR, editMonth.value, 0)
+function operatingFractionForMonth(month: number): number {
+  const monthStart = new Date(YEAR, month - 1, 1)
+  const monthEnd = new Date(YEAR, month, 0)
   const today = new Date()
   const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
   if (totalOperatingDays === 0) return 0
   return countOperatingDays(monthStart, today) / totalOperatingDays
+}
+const monthExpectedFraction = computed(() => operatingFractionForMonth(editMonth.value))
+
+// Month-independent twin of laborPayrollFraction, for the current month's Total-tab projection.
+const currentMonthLaborFraction = computed<number | null>(() => {
+  const latest = currentMonthLaborLatestDate.value
+  if (!latest) return null
+  const monthStart = new Date(YEAR, asOfMonth - 1, 1)
+  const monthEnd = new Date(YEAR, asOfMonth, 0)
+  const total = countFridays(monthStart, monthEnd)
+  if (total === 0) return null
+  const [ly, lm, ld] = latest.split('-').map(Number) as [number, number, number]
+  const posted = countFridays(monthStart, new Date(ly, lm - 1, ld))
+  return posted < 1 ? null : posted / total
 })
+// Same per-account rules as computedAccountProjected (projectionRule), but for a leaf of the
+// current month regardless of which tab is open.
+function currentMonthLeafProjection(acc: BudgetAccount): number {
+  const budget = acc.amount ?? 0
+  const actual = currentMonthActuals.value[acc.accountId] || 0
+  if (projectionRule(acc) === 'lump') return Math.max(actual, budget)
+  const fraction = acc.category === 'labor' && currentMonthLaborFraction.value !== null
+    ? currentMonthLaborFraction.value
+    : operatingFractionForMonth(asOfMonth)
+  return fraction > 0 ? actual / fraction : actual
+}
 
 // ---- Row filter: hide $0 rows ---------------------------------------------
 // Simplified 2026-09-13 (was an adaptive own/previous-month toggle before
@@ -786,7 +832,41 @@ const yearHybridExpectedToDate = computed(() => hybridYearExpectedToDate(getMont
 // card on this page/section (the "% of budget" chips, Budget Pace, Cash Flow, Labor,
 // Revenue Modeling) — those need "budget" to mean the literal committed target, not
 // quietly become the actual once a month is over.
+// The current month is projected, not counted at full budget: per category, the sum over leaf
+// accounts of (projection - budget) is added on top of the budget-based total, so the header
+// agrees with the per-account rows (annualMonthData) even where a parent carries a stray
+// stored amount.
+const currentMonthLeafDelta = computed(() => {
+  const delta = new Map<number, number>()
+  const data = monthlyData.value[asOfMonth - 1]
+  if (!data || !currentMonthHasActuals.value) return delta
+  const parentIds = new Set(data.accounts.map(a => a.parentAccountId))
+  for (const acc of data.accounts) {
+    if (parentIds.has(acc.accountId)) continue
+    delta.set(acc.accountId, currentMonthLeafProjection(acc) - (acc.amount ?? 0))
+  }
+  return delta
+})
 const yearDisplayTotals = computed(() => hybridYearTotalsPastActual(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth))
+const yearProjectedTotals = computed(() => {
+  const totals = { ...yearDisplayTotals.value }
+  const data = monthlyData.value[asOfMonth - 1]
+  for (const acc of data?.accounts ?? []) totals[acc.category] += currentMonthLeafDelta.value.get(acc.accountId) ?? 0
+  return totals
+})
+const yearProjectedNetIncome = computed(() => netIncome(yearProjectedTotals.value))
+// Shown only in the second half of the month, when actual-to-date is enough to extrapolate from.
+const showProjectedColumn = computed(() => asOfDay > 15 && currentMonthHasActuals.value)
+// Per-account Projected value: leaves add their current-month delta to the annual figure
+// (computedAccountAmount, which reads the annual aggregate); parents sum their children.
+function annualProjectedAccountAmount(acc: BudgetAccount): number {
+  const children = directChildren(acc.accountId)
+  if (children.length === 0) return computedAccountAmount(acc) + (currentMonthLeafDelta.value.get(acc.accountId) ?? 0)
+  return children.reduce((sum, c) => sum + annualProjectedAccountAmount(c), 0)
+}
+function yearProjectedCategoryTotal(cat: Category): number {
+  return yearProjectedTotals.value[cat]
+}
 const yearDisplayNetIncome = computed(() => netIncome(yearDisplayTotals.value))
 
 const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
@@ -1447,7 +1527,8 @@ function exportForQuickBooks() {
             <thead v-if="viewingAnnualTotal">
               <tr class="col-head-row">
                 <th scope="col"></th>
-                <th scope="col">Total</th>
+                <th scope="col">Budgeted Total</th>
+                <th v-if="showProjectedColumn" scope="col">Projected</th>
               </tr>
             </thead>
             <thead v-else-if="selectedMonthClosed">
@@ -1466,7 +1547,8 @@ function exportForQuickBooks() {
               </tr>
             </thead>
             <!-- Annual total: real actuals for already-synced past months, this month's
-                 full budget, and budget for every future month
+                 full budget, and budget for every future month; an extra Projected column
+                 (after the 15th) swaps this month's budget for its projection
                  (hybridYearTotalsPastActual — see yearDisplayCategoryTotal's own comment),
                  so "Total" reads as this year's actual P&L trajectory (real results so far
                  + planned results for the rest of the year), not a stale past budget mixed
@@ -1487,9 +1569,10 @@ function exportForQuickBooks() {
                     </button>
                   </th>
                   <td><span class="amount-input readonly">${{ Math.round(yearDisplayCategoryTotal(cat)).toLocaleString() }}</span></td>
+                  <td v-if="showProjectedColumn"><span class="amount-input readonly">${{ Math.round(yearProjectedCategoryTotal(cat)).toLocaleString() }}</span></td>
                 </tr>
                 <tr v-if="yearFutureMonthsUnbudgeted(cat) > 0" class="cogs-avg-row">
-                  <td colspan="2">
+                  <td :colspan="showProjectedColumn ? 3 : 2">
                     <div class="section-note">
                       {{ yearFutureMonthsUnbudgeted(cat) }} of the remaining months ({{ MONTH_NAMES[asOfMonth - 1] }}–Dec) have no budget entered — this total counts $0 for those.
                     </div>
@@ -1501,16 +1584,26 @@ function exportForQuickBooks() {
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
                     <td><span class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span></td>
+                    <td v-if="showProjectedColumn"><span class="amount-input readonly">${{ Math.round(annualProjectedAccountAmount(acc)).toLocaleString() }}</span></td>
                   </tr>
                 </template>
               </template>
               <tr class="net-income-row">
                 <th scope="row">Net Income (Total)</th>
                 <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearDisplayNetIncome)">{{ formatNetIncome(yearDisplayNetIncome) }}</strong></span></td>
+                <td v-if="showProjectedColumn"><span class="amount-input readonly"><strong :class="netIncomeClass(yearProjectedNetIncome)">{{ formatNetIncome(yearProjectedNetIncome) }}</strong></span></td>
               </tr>
               <tr v-if="yearActualNetIncome !== null" class="net-income-row">
                 <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
                 <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearActualNetIncome)">{{ formatNetIncome(yearActualNetIncome) }}</strong></span></td>
+                <td v-if="showProjectedColumn"></td>
+              </tr>
+              <tr v-if="showProjectedColumn">
+                <td :colspan="3">
+                  <div class="section-note">
+                    Budgeted Total = actuals for closed months plus budget for {{ MONTH_NAMES[asOfMonth - 1] }}–Dec. Projected swaps {{ MONTH_NAMES[asOfMonth - 1] }}'s budget for a projection from its actual-to-date (steady costs at the current pace, labor by Friday payrolls, bills like rent and utilities at the larger of what has posted and budget); closed months stay actuals and later months stay budget. Shown after the 15th.
+                  </div>
+                </td>
               </tr>
             </tbody>
             <tbody v-else-if="!selectedMonthClosed">
