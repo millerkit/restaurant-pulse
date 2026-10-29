@@ -1,3 +1,5 @@
+import type { FollowActualsUpdate } from './capacity-actuals'
+
 // Single entry point for "run a sync" — called identically by the nightly
 // scheduler plugin (server/plugins/qbo-nightly-sync.ts) and the manual
 // trigger route (server/api/qbo/sync.post.ts), so there's exactly one
@@ -159,11 +161,27 @@ export async function runNightlySync(dateOverride?: string) {
       }
     }
 
+    // Month-close update of per-cover revenue assumptions for capacity areas
+    // that opted in (capacity_areas.follow_actuals). Needs Toast's per-area
+    // data, so only after the Toast block above; a failure only logs, it
+    // shouldn't fail the QBO/Toast sync itself.
+    let followActualsResult: FollowActualsUpdate[] = []
+    if (toastResult) {
+      try {
+        followActualsResult = applyMonthCloseActuals(db, localToday(qbo.syncTimeZone), endDate)
+        for (const u of followActualsResult) {
+          console.log(`follow_actuals: ${u.name} per-cover set to food $${u.food} / beverage $${u.beverage} from ${u.closedMonth} close`)
+        }
+      } catch (err) {
+        console.warn(`applyMonthCloseActuals failed: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
     const rowsSynced = accountResult.inserted + accountResult.updated + accountResult.deactivated + accountResult.reactivated + plResult.rowsSynced + (toastResult?.daysSynced ?? 0)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'success', rows_synced = ? WHERE id = ?`)
       .run(new Date().toISOString(), rowsSynced, runId)
 
-    return { accountResult, plResult, toastResult, rowsSynced }
+    return { accountResult, plResult, toastResult, followActualsResult, rowsSynced }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'error', error_message = ? WHERE id = ?`)

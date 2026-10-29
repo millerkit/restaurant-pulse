@@ -4636,6 +4636,37 @@ balance-sheet liability, so they never reach the P&L or Net Income.
 - Verified: migration, typecheck (no new errors beyond the pre-existing ones). Not clicked through in a
   browser (local dev is behind Basic Auth).
 
+## Per-area per-cover revenue can follow actuals — 2026-10-29
+
+Replaces the habit of clicking "Set from Actuals" on the Edit Capacity tab by hand. Fully
+automatic updating was rejected: Food/Beverage per cover are *assumptions* the Actual columns
+are judged against (and "Recompute Revenue from Capacity" feeds them into the revenue budget),
+so a target that chases actuals nightly would zero out the variance and make Budget Pace
+circular. Instead:
+
+- **`capacity_areas.follow_actuals`** (0/1, default 0) is a per-area opt-in, set with an
+  "Auto-update monthly" checkbox under each row's Set from Actuals button (saved with the
+  normal Save). Areas left off stay fully manual; the button still works for any area.
+- **Updates only at month close**: `applyMonthCloseActuals()` in
+  [`server/utils/capacity-actuals.ts`](server/utils/capacity-actuals.ts), called from
+  `runNightlySync()` after the Toast block, writes the real per-cover blend of the two most
+  recently *closed* months into `per_cover_revenue_food/_beverage` on the first successful sync
+  of a new month. `follow_actuals_through` ('YYYY-MM') makes it idempotent across nights and
+  restarts; it's skipped if the sync didn't reach the closed month's last day, and for an area
+  with under 30 covers in the window. Turning the box on takes effect at the next sync (it
+  applies the latest closed month then); turning it off clears the marker.
+- `blendForRange()` in the same util is now also what `area-actuals.get.ts` uses for the
+  button, so the manual and automatic paths share one definition (Chef's Counter's real $190
+  food split, restaurant-wide Food/Beverage mix for the rest).
+- **Production rollout**: run `node scripts/add-capacity-follow-actuals.mjs` on the volume
+  (`fly ssh console`) BEFORE `fly deploy`, or `/api/capacity/settings` 500s on the missing
+  columns. Local dev already migrated.
+- Verified: util against a copy of local data (apply, idempotent re-run, incomplete-data
+  no-op, Dining/Chef's blends matching hand SQL), settings POST round-trip, page renders the
+  control. Not clicked through in the browser (local dev is behind Basic Auth); the
+  month-close path can't run locally (sync refuses outside production) and first fires on the
+  first production sync of November.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

@@ -300,7 +300,16 @@ CREATE TABLE capacity_areas (
   capacity_may_oct            INTEGER NOT NULL,
   per_cover_revenue_food      REAL NOT NULL,   -- assumed $ FOOD revenue per guest in this area
   per_cover_revenue_beverage  REAL NOT NULL,   -- assumed $ BEVERAGE revenue per guest in this area
-  notes                       TEXT
+  notes                       TEXT,
+  -- Opt-in (added 2026-10-29): when 1, the first nightly sync after a month
+  -- closes overwrites the two per_cover_revenue_* columns with that area's
+  -- real per-cover blend of the two most recently closed months (see
+  -- server/utils/capacity-actuals.ts). Default 0 = fully manual, since the
+  -- per-cover figures are assumptions the Actual columns are judged against.
+  -- follow_actuals_through is the 'YYYY-MM' of the last closed month applied,
+  -- which makes the update idempotent across nightly runs and restarts.
+  follow_actuals              INTEGER NOT NULL DEFAULT 0,
+  follow_actuals_through      TEXT
 );
 
 -- Holiday closures only (added nights closed beyond the standing Monday

@@ -9,7 +9,8 @@
 type AreaInput = {
   id: number, seats: number, maxTurnsPerNight: number,
   capacityNovApr: number | null, capacityMayOct: number,
-  perCoverRevenueFood: number, perCoverRevenueBeverage: number
+  perCoverRevenueFood: number, perCoverRevenueBeverage: number,
+  followActuals?: boolean
 }
 type SeasonalityInput = { month: number, holidayClosures: number }
 type AreaSeasonalityInput = { areaId: number, month: number, expectedCovers: number }
@@ -52,7 +53,11 @@ export default defineEventHandler(async (event) => {
     UPDATE capacity_areas
     SET seats = @seats, max_turns_per_night = @maxTurnsPerNight,
         capacity_nov_apr = @capacityNovApr, capacity_may_oct = @capacityMayOct,
-        per_cover_revenue_food = @perCoverRevenueFood, per_cover_revenue_beverage = @perCoverRevenueBeverage
+        per_cover_revenue_food = @perCoverRevenueFood, per_cover_revenue_beverage = @perCoverRevenueBeverage,
+        follow_actuals = COALESCE(@followActuals, follow_actuals),
+        -- turning it off clears the marker so a later re-enable catches up on
+        -- the latest closed month at the next sync
+        follow_actuals_through = CASE WHEN @followActuals = 0 THEN NULL ELSE follow_actuals_through END
     WHERE id = @id
   `)
   const upsertMonth = db.prepare(`
@@ -66,7 +71,7 @@ export default defineEventHandler(async (event) => {
     ON CONFLICT(area_id, month) DO UPDATE SET expected_covers = excluded.expected_covers
   `)
   const run = db.transaction(() => {
-    for (const a of areas) updateArea.run(a)
+    for (const a of areas) updateArea.run({ ...a, followActuals: a.followActuals == null ? null : (a.followActuals ? 1 : 0) })
     for (const s of seasonality) upsertMonth.run(s)
     for (const s of areaSeasonality) upsertAreaMonth.run(s)
   })

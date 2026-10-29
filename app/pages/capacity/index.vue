@@ -111,7 +111,8 @@ const selectedMonthData = computed(() => months.value.find(m => m.month === sele
 type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
   capacity_nov_apr: number | null, capacity_may_oct: number,
-  per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null
+  per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null,
+  follow_actuals: number, follow_actuals_through: string | null
 }
 type SeasonalityRow = { month: number, holiday_closures: number }
 type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number }
@@ -243,6 +244,14 @@ const lastMonthLabel = computed(() => {
   return d ? MONTH_NAMES[Number(d.start.slice(5, 7)) - 1] : 'Last Month'
 })
 
+// "Updated after Sep close" — shown only for an area that's following
+// actuals and has had at least one automatic update applied.
+function followThroughLabel(areaId: number): string | null {
+  const row = editData.value?.areas.find(r => r.id === areaId)
+  if (!row?.follow_actuals || !row.follow_actuals_through) return null
+  return `Updated after ${MONTH_NAMES[Number(row.follow_actuals_through.slice(5, 7)) - 1]} close`
+}
+
 function isMayThroughOct(month: number): boolean {
   return month >= 5 && month <= 10
 }
@@ -268,7 +277,7 @@ function roundCovers(n: number): number {
 // draft shape at all; see computedCapacity() below.
 type AreaDraft = {
   id: number, name: string, seats: string, maxTurnsPerNight: string,
-  perCoverRevenueFood: string, perCoverRevenueBeverage: string
+  perCoverRevenueFood: string, perCoverRevenueBeverage: string, followActuals: boolean
 }
 // One row per month: closures (unchanged) plus each area's own
 // expected nightly covers, keyed by area id — the real editable projection
@@ -287,7 +296,8 @@ function loadDrafts() {
     seats: String(Math.round(a.seats)),
     maxTurnsPerNight: String(a.max_turns_per_night),
     perCoverRevenueFood: String(a.per_cover_revenue_food),
-    perCoverRevenueBeverage: String(a.per_cover_revenue_beverage)
+    perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
+    followActuals: !!a.follow_actuals
   }))
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   monthlyDrafts.value = (editData.value?.seasonality ?? []).map(s => ({
@@ -305,7 +315,8 @@ const draftSnapshot = computed(() => JSON.stringify({ areaDrafts: areaDrafts.val
 const cleanDraftSnapshot = computed(() => {
   const areas = (editData.value?.areas ?? []).map(a => ({
     id: a.id, name: a.name, seats: String(Math.round(a.seats)), maxTurnsPerNight: String(a.max_turns_per_night),
-    perCoverRevenueFood: String(a.per_cover_revenue_food), perCoverRevenueBeverage: String(a.per_cover_revenue_beverage)
+    perCoverRevenueFood: String(a.per_cover_revenue_food), perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
+    followActuals: !!a.follow_actuals
   }))
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   const monthly = (editData.value?.seasonality ?? []).map(s => ({
@@ -619,7 +630,8 @@ async function save() {
       capacityNovApr: computedCapacity(a, 'novApr'),
       capacityMayOct: computedCapacity(a, 'mayOct') ?? NaN,
       perCoverRevenueFood: num(a.perCoverRevenueFood),
-      perCoverRevenueBeverage: num(a.perCoverRevenueBeverage)
+      perCoverRevenueBeverage: num(a.perCoverRevenueBeverage),
+      followActuals: a.followActuals
     }))
     const seasonality = monthlyDrafts.value.map(s => ({
       month: s.month,
@@ -848,6 +860,7 @@ async function save() {
               <li>Outdoor has no Nov–Apr season — it stays closed through winter.</li>
               <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Capacity Pace tab for the blended (non-area) version.</li>
               <li>"Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</li>
+              <li>"Auto-update monthly" does the same thing for you: on the first nightly sync after a month closes, Food/Beverage are replaced with that area's real per-cover over the two most recently closed months. Off by default — leave it off for areas where you want a deliberate target to compare actuals against. Turning it on takes effect at the next sync.</li>
             </ul>
           </div>
           <div class="pl-table-card">
@@ -887,6 +900,11 @@ async function save() {
                       <span class="setpct-arrow" aria-hidden="true">→</span>
                     </div>
                     <span v-if="canSetFromActuals(a)" class="setpct-result">≈{{ fmtMoneyOrDash(trailingTwoMonthPerCover(a.id)) }}/cover</span>
+                    <label class="follow-toggle" :title="'On the first sync after each month closes, replace Food/Beverage with this area\'s real per-cover from the last two closed months'">
+                      <input v-model="a.followActuals" type="checkbox" />
+                      Auto-update monthly
+                    </label>
+                    <span v-if="followThroughLabel(a.id)" class="setpct-result">{{ followThroughLabel(a.id) }}</span>
                   </td>
                   <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
                   <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
@@ -1207,6 +1225,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .variance-delta { display: block; font-weight: 500; opacity: 0.8; white-space: nowrap; font-size: 11px; }
 
 .setpct-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.follow-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); cursor: pointer; margin-top: 2px; }
 .setpct-row { display: flex; align-items: center; justify-content: center; gap: 5px; }
 .setpct-arrow { color: var(--ink-3); font-size: 14px; }
 .setpct-result { font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
