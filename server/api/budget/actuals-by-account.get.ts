@@ -44,5 +44,30 @@ export default defineEventHandler((event) => {
     WHERE dli.date BETWEEN ? AND ? AND a.category = 'labor'
   `).get(start, end) as { latest: string | null }
 
-  return { year, month, accounts: rows, laborLatestDate: laborLatest.latest ?? null }
+  // Last day with any synced data this month, and each weekday's share of a normal week's
+  // revenue (Sun=0..Sat=6, Monday 0). The Edit Budget projection uses both: "how far through
+  // the month" should stop at the last synced day (today's sales aren't in yet) and weight
+  // nights by the real weekday pattern, since Thu-Sat carry far more than Tue-Wed. weights is
+  // null if any weekday has no history yet, and the caller falls back to equal weights.
+  const latestSynced = db.prepare('SELECT MAX(date) AS latest FROM daily_line_items WHERE date BETWEEN ? AND ?')
+    .get(start, end) as { latest: string | null }
+  let weekdayWeights: Record<number, number> | null = null
+  try {
+    const targets = computeWeeklyRevenueTargets()
+    if (targets.days.every(d => d.share != null)) {
+      weekdayWeights = { 1: 0 }
+      for (const d of targets.days) weekdayWeights[d.dow] = d.share as number
+    }
+  } catch {
+    weekdayWeights = null
+  }
+
+  return {
+    year,
+    month,
+    accounts: rows,
+    laborLatestDate: laborLatest.latest ?? null,
+    latestSyncedDate: latestSynced.latest ?? null,
+    weekdayWeights
+  }
 })

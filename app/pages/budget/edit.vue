@@ -64,20 +64,32 @@ onMounted(loadYearAccountActuals)
 // the month closed). Same endpoint/rules as the selected-month Projected column below.
 const currentMonthActuals = ref<Record<number, number>>({})
 const currentMonthHasActuals = ref(false)
+type ActualsByAccountResponse = {
+  accounts: { accountId: number, amount: number }[]
+  laborLatestDate: string | null
+  latestSyncedDate: string | null
+  weekdayWeights: Record<number, number> | null
+}
 const currentMonthLaborLatestDate = ref<string | null>(null)
+const currentMonthLatestSynced = ref<string | null>(null)
+const currentMonthWeekdayWeights = ref<Record<number, number> | null>(null)
 async function loadCurrentMonthActuals() {
   if (!isMonthCurrent(YEAR, asOfMonth)) return
   try {
-    const result = await $fetch<{ accounts: { accountId: number, amount: number }[], laborLatestDate: string | null }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } })
+    const result = await $fetch<ActualsByAccountResponse>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } })
     const map: Record<number, number> = {}
     for (const a of result.accounts) map[a.accountId] = a.amount
     currentMonthActuals.value = map
     currentMonthHasActuals.value = result.accounts.length > 0
     currentMonthLaborLatestDate.value = result.laborLatestDate
+    currentMonthLatestSynced.value = result.latestSyncedDate
+    currentMonthWeekdayWeights.value = result.weekdayWeights
   } catch {
     currentMonthActuals.value = {}
     currentMonthHasActuals.value = false
     currentMonthLaborLatestDate.value = null
+    currentMonthLatestSynced.value = null
+    currentMonthWeekdayWeights.value = null
   }
 }
 onMounted(loadCurrentMonthActuals)
@@ -195,24 +207,32 @@ const selectedMonthHasActuals = ref(false)
 // laborPayrollFraction below and actuals-by-account.get.ts) — drives the
 // payroll-cycle-aware labor projection, replacing the straight-line one.
 const selectedMonthLaborLatestDate = ref<string | null>(null)
+const selectedMonthLatestSynced = ref<string | null>(null)
+const selectedMonthWeekdayWeights = ref<Record<number, number> | null>(null)
 watch(editMonth, async (month) => {
   if (!isMonthClosed(YEAR, month) && !isMonthCurrent(YEAR, month)) {
     selectedMonthAccountActuals.value = {}
     selectedMonthHasActuals.value = false
     selectedMonthLaborLatestDate.value = null
+    selectedMonthLatestSynced.value = null
+    selectedMonthWeekdayWeights.value = null
     return
   }
   try {
-    const result = await $fetch<{ accounts: { accountId: number, amount: number }[], laborLatestDate: string | null }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+    const result = await $fetch<ActualsByAccountResponse>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
     const map: Record<number, number> = {}
     for (const a of result.accounts) map[a.accountId] = a.amount
     selectedMonthAccountActuals.value = map
     selectedMonthHasActuals.value = result.accounts.length > 0
     selectedMonthLaborLatestDate.value = result.laborLatestDate
+    selectedMonthLatestSynced.value = result.latestSyncedDate
+    selectedMonthWeekdayWeights.value = result.weekdayWeights
   } catch {
     selectedMonthAccountActuals.value = {}
     selectedMonthHasActuals.value = false
     selectedMonthLaborLatestDate.value = null
+    selectedMonthLatestSynced.value = null
+    selectedMonthWeekdayWeights.value = null
   }
 }, { immediate: true })
 
@@ -382,7 +402,10 @@ function projectFromActual(actual: number, category?: Category): number {
 //                 budget. A real overrun already posted still flags; an unposted bill
 //                 is assumed to land at budget, so it never shows a false underrun.
 const STEADY_OPEX_ACCOUNT_NUMBERS = new Set(['6200', '6210', '6220'])
-const LUMP_LABOR_ACCOUNT_NUMBERS = new Set(['6065', '6066'])
+// ICHRA (monthly charges) plus one-time or event-driven payments that don't repeat each
+// payroll (catering profit share, bonus, PTO, catering waitstaff): scaling these by the
+// payroll fraction overstated them (a $5.3K profit share projected as $6.6K).
+const LUMP_LABOR_ACCOUNT_NUMBERS = new Set(['6065', '6066', '6004', '6006', '6063', '6031'])
 type ProjectionRule = 'steady' | 'payroll' | 'lump'
 function projectionRule(acc: BudgetAccount): ProjectionRule {
   if (acc.category === 'cogs' || acc.category === 'revenue') return 'steady'
@@ -505,15 +528,30 @@ function countOperatingDays(start: Date, end: Date): number {
   }
   return count
 }
-function operatingFractionForMonth(month: number): number {
+// How far through the month the synced data reaches, for the non-payroll projection. Counts
+// operating days (Tue-Sun) only through the last day with synced data — today's sales aren't in
+// yet, so counting today understated revenue — and, when weekday weights are available, weights
+// each night by its normal share of a week's revenue (Thu-Sat carry far more than Tue-Wed).
+// Falls back to equal weights, and to today when nothing has synced.
+function operatingFractionForMonth(month: number, latestSynced: string | null, weights: Record<number, number> | null): number {
   const monthStart = new Date(YEAR, month - 1, 1)
   const monthEnd = new Date(YEAR, month, 0)
-  const today = new Date()
-  const totalOperatingDays = countOperatingDays(monthStart, monthEnd)
-  if (totalOperatingDays === 0) return 0
-  return countOperatingDays(monthStart, today) / totalOperatingDays
+  let through = new Date()
+  if (latestSynced) {
+    const [y, m, d] = latestSynced.split('-').map(Number) as [number, number, number]
+    through = new Date(y, m - 1, d)
+  }
+  const weightOf = (date: Date) => (isOperatingDay(date) ? (weights ? (weights[date.getDay()] ?? 0) : 1) : 0)
+  let total = 0
+  let elapsed = 0
+  for (const d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
+    const w = weightOf(d)
+    total += w
+    if (d <= through) elapsed += w
+  }
+  return total === 0 ? 0 : elapsed / total
 }
-const monthExpectedFraction = computed(() => operatingFractionForMonth(editMonth.value))
+const monthExpectedFraction = computed(() => operatingFractionForMonth(editMonth.value, selectedMonthLatestSynced.value, selectedMonthWeekdayWeights.value))
 
 // Month-independent twin of laborPayrollFraction, for the current month's Total-tab projection.
 const currentMonthLaborFraction = computed<number | null>(() => {
@@ -535,7 +573,7 @@ function currentMonthLeafProjection(acc: BudgetAccount): number {
   if (projectionRule(acc) === 'lump') return Math.max(actual, budget)
   const fraction = acc.category === 'labor' && currentMonthLaborFraction.value !== null
     ? currentMonthLaborFraction.value
-    : operatingFractionForMonth(asOfMonth)
+    : operatingFractionForMonth(asOfMonth, currentMonthLatestSynced.value, currentMonthWeekdayWeights.value)
   return fraction > 0 ? actual / fraction : actual
 }
 
