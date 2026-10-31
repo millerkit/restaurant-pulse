@@ -28,6 +28,12 @@ const PORTER_NAME_PATTERN = 'Porter%'
 // pattern above; porters almost never have overtime.
 const OVERTIME_NAME_PATTERN = '% OT'
 
+// Overtime dollars are turned into estimated hours at the Labor tab's blended
+// BOH OT rate (1.5 x $25.84/hr), so the hours here match the "≈ N hrs trailing"
+// figure on that tab. An estimate only: QBO posts dollars, not hours, and Toast
+// has shown OT actually paid nearer $42/hr (see "Labor-tab hours recalibrated").
+const OVERTIME_BLENDED_RATE = 1.5 * 25.84
+
 const FOOD_STREAMS = [
   { key: 'restaurant', label: 'Restaurant', accountNumbers: ['4010'] },
   { key: 'events', label: 'Events', accountNumbers: ['4150', '4180'] },
@@ -160,6 +166,7 @@ export default defineEventHandler(() => {
       revenue: { ...w.revenue, total: Object.values(w.revenue).reduce((s, v) => s + v, 0) },
       laborBoh: w.laborBoh,
       laborOvertime: w.laborOvertime,
+      overtimeHours: w.laborOvertime / OVERTIME_BLENDED_RATE,
       laborExecChef: w.laborExecChef
     }
   })

@@ -12,6 +12,7 @@ type Week = {
   revenue: Revenue
   laborBoh: number
   laborOvertime: number
+  overtimeHours: number
   laborExecChef: number
 }
 type KitchenLabor =
@@ -65,7 +66,7 @@ const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`
 
 const laborOf = (w: Week) => w.laborBoh + (includeOvertime.value ? w.laborOvertime : 0) + (includeExecChef.value ? w.laborExecChef : 0)
 
-type Row = Week & { labor: number, pct: number | null, otPct: number | null, deltaPts: number | null }
+type Row = Week & { labor: number, pct: number | null, otPct: number | null, otHours: number | null, deltaPts: number | null }
 
 // Newest first. Weeks without payroll (or without revenue) have no percent.
 const rows = computed<Row[]>(() => {
@@ -75,7 +76,8 @@ const rows = computed<Row[]>(() => {
     const labor = laborOf(w)
     const pct = w.hasPayroll && w.revenue.total > 0 ? labor / w.revenue.total : null
     const otPct = w.hasPayroll && w.revenue.total > 0 ? w.laborOvertime / w.revenue.total : null
-    return { ...w, labor, pct, otPct, deltaPts: null }
+    const otHours = w.hasPayroll ? w.overtimeHours : null
+    return { ...w, labor, pct, otPct, otHours, deltaPts: null }
   })
   // Change vs. the prior week, only when both weeks have a percent.
   for (let i = 1; i < out.length; i++) {
@@ -93,6 +95,7 @@ const chartPoints = computed(() => [...rows.value].reverse().map(r => ({
   labor: r.labor,
   otPct: r.otPct,
   overtime: r.laborOvertime,
+  otHours: r.otHours,
   revenue: r.revenue.total
 })))
 
@@ -204,18 +207,27 @@ function fmtDelta(v: number) {
             </div>
           </div>
           <template v-if="view === 'chart'">
+          <div class="chart-title">Kitchen labor as a % of food revenue <span class="trend-note">(dashed line = trend)</span></div>
           <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
               label="Line chart of kitchen labor as a percent of food revenue, by week"
             />
           </div>
-          <div class="chart-title">Overtime alone (BOH OT), % of food revenue</div>
+          <div class="chart-title">Overtime alone (BOH OT), % of food revenue <span class="trend-note">(dashed line = trend)</span></div>
           <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
               metric="overtime"
               label="Line chart of BOH overtime as a percent of food revenue, by week"
+            />
+          </div>
+          <div class="chart-title">Estimated overtime hours per week (BOH OT) <span class="trend-note">(dashed line = trend)</span></div>
+          <div class="table-card chart-card">
+            <KitchenLaborChart
+              :points="chartPoints"
+              metric="hours"
+              label="Line chart of estimated BOH overtime hours, by week"
             />
           </div>
           </template>
@@ -231,6 +243,7 @@ function fmtDelta(v: number) {
                   <th scope="col">Labor %</th>
                   <th scope="col">Overtime</th>
                   <th scope="col">Overtime %</th>
+                  <th scope="col">Est. OT hours</th>
                   <th scope="col">vs. prior week</th>
                 </tr>
               </thead>
@@ -248,6 +261,7 @@ function fmtDelta(v: number) {
                   <td v-if="r.hasPayroll">{{ fmtMoney(r.laborOvertime) }}</td>
                   <td v-else class="muted">—</td>
                   <td class="muted">{{ r.otPct !== null ? fmtPct(r.otPct) : '—' }}</td>
+                  <td class="muted">{{ r.otHours !== null ? Math.round(r.otHours) : '—' }}</td>
                   <td class="muted">{{ r.deltaPts !== null ? fmtDelta(r.deltaPts) : '—' }}</td>
                 </tr>
               </tbody>
@@ -260,6 +274,7 @@ function fmtDelta(v: number) {
           <ul>
             <li><strong>Labor:</strong> wages under BOH Wages (cooks, chefs, sous and pastry, service charge distribution{{ includeOvertime ? ', BOH overtime' : '' }}), excluding Porter{{ includeExecChef ? ', plus the Executive Chef' : '' }}. Payroll taxes, benefits and bonuses are not included.</li>
             <li><strong>Food revenue:</strong> restaurant food, event food (on-site and off-site), catering food and retail food. Beverage, service and equipment fees, and retail non-food are left out, and discounts &amp; comps can't be split between food and beverage, so revenue is before them.</li>
+            <li><strong>Est. OT hours:</strong> BOH overtime dollars divided by the Labor tab's blended OT rate (1.5 × $25.84/hr). QBO posts dollars, not hours, so this is an estimate; overtime actually paid has run nearer $42/hr, which would mean roughly 8% fewer hours.</li>
             <li v-if="data.offCycleLabor > 0.5"><strong>Off-cycle postings:</strong> {{ fmtMoney(data.offCycleLabor) }} of kitchen labor was posted on days other than a Friday; each is counted with the next Friday's payroll.</li>
           </ul>
         </section>
@@ -301,6 +316,7 @@ function fmtDelta(v: number) {
 .summary-sub { font-size: 12px; color: var(--ink-2); }
 
 .chart-title { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 14px 0 6px; }
+.trend-note { font-weight: 400; color: var(--ink-3); }
 .controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
 .view-switch { display: inline-flex; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }

@@ -17,11 +17,19 @@ type Point = {
   // overtime alone as a 0-1 fraction of food revenue, null with the same weeks as pct
   otPct: number | null
   overtime: number
+  // estimated overtime hours, null with the same weeks as pct
+  otHours: number | null
   revenue: number
 }
-const props = defineProps<{ points: Point[], label: string, metric?: 'labor' | 'overtime' }>()
-const isOt = computed(() => props.metric === 'overtime')
-const pickPct = (p: Point) => (isOt.value ? p.otPct : p.pct)
+const props = defineProps<{ points: Point[], label: string, metric?: 'labor' | 'overtime' | 'hours' }>()
+const isHours = computed(() => props.metric === 'hours')
+const isOt = computed(() => props.metric === 'overtime' || isHours.value)
+// The plotted number: a percent (0-100) for labor/overtime, hours for 'hours'.
+const pickVal = (p: Point): number | null => {
+  if (isHours.value) return p.otHours
+  const f = isOt.value ? p.otPct : p.pct
+  return f === null ? null : f * 100
+}
 
 const W = 900, H = 300
 const margin = { top: 18, right: 44, bottom: 28, left: 44 }
@@ -29,15 +37,16 @@ const plotW = W - margin.left - margin.right
 const plotH = H - margin.top - margin.bottom
 
 const n = computed(() => props.points.length)
-const values = computed(() => props.points.flatMap(p => (pickPct(p) === null ? [] : [pickPct(p)! * 100])))
+const values = computed(() => props.points.flatMap(p => (pickVal(p) === null ? [] : [pickVal(p)!])))
 
-// Overtime sits at a few percent, so it gets a finer grid than labor.
-const unit = computed(() => (isOt.value ? 2 : 5))
+// Overtime sits at a few percent, so it gets a finer grid than labor; hours
+// are in tens.
+const unit = computed(() => (isHours.value ? 10 : isOt.value ? 2 : 5))
 const yMin = computed(() => (values.value.length ? Math.max(0, Math.floor((Math.min(...values.value) - unit.value / 2) / unit.value) * unit.value) : 0))
 const yMax = computed(() => (values.value.length ? Math.ceil((Math.max(...values.value) + unit.value / 2) / unit.value) * unit.value : 50))
 const yTicks = computed(() => {
   const span = yMax.value - yMin.value
-  const step = isOt.value ? (span > 10 ? 4 : 2) : span > 60 ? 20 : span > 30 ? 10 : 5
+  const step = isHours.value ? (span > 80 ? 40 : span > 40 ? 20 : 10) : isOt.value ? (span > 10 ? 4 : 2) : span > 60 ? 20 : span > 30 ? 10 : 5
   const ticks: number[] = []
   for (let v = yMin.value; v <= yMax.value; v += step) ticks.push(v)
   return ticks
@@ -57,12 +66,32 @@ function pathFor(pick: (p: Point) => number | null): string {
   props.points.forEach((p, i) => {
     const v = pick(p)
     if (v === null) { open = false; return }
-    d += `${open ? 'L' : 'M'}${xFor(i).toFixed(1)},${yFor(v * 100).toFixed(1)} `
+    d += `${open ? 'L' : 'M'}${xFor(i).toFixed(1)},${yFor(v).toFixed(1)} `
     open = true
   })
   return d.trim()
 }
-const linePath = computed(() => pathFor(pickPct))
+const linePath = computed(() => pathFor(pickVal))
+
+// Least-squares trend over the weeks that have a value, drawn as a dashed line
+// from the first to the last of them.
+const trend = computed(() => {
+  const pts: { x: number, y: number }[] = []
+  props.points.forEach((p, i) => {
+    const v = pickVal(p)
+    if (v !== null) pts.push({ x: i, y: v })
+  })
+  if (pts.length < 3) return null
+  const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+  const my = pts.reduce((s, p) => s + p.y, 0) / pts.length
+  const den = pts.reduce((s, p) => s + (p.x - mx) ** 2, 0)
+  if (den === 0) return null
+  const slope = pts.reduce((s, p) => s + (p.x - mx) * (p.y - my), 0) / den
+  const at = (x: number) => my + slope * (x - mx)
+  const x1 = pts[0]!.x, x2 = pts[pts.length - 1]!.x
+  const clamp = (y: number) => Math.min(yMax.value, Math.max(yMin.value, y))
+  return { x1: xFor(x1), y1: yFor(clamp(at(x1))), x2: xFor(x2), y2: yFor(clamp(at(x2))) }
+})
 
 function fmtShort(s: string) {
   return new Date(`${s}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -74,9 +103,11 @@ const xLabelIndexes = computed(() => {
 })
 
 const lastIndex = computed(() => {
-  for (let i = props.points.length - 1; i >= 0; i--) if (pickPct(props.points[i]!) !== null) return i
+  for (let i = props.points.length - 1; i >= 0; i--) if (pickVal(props.points[i]!) !== null) return i
   return -1
 })
+const fmtTick = (v: number) => (isHours.value ? `${v}` : `${v}%`)
+const fmtEnd = (v: number) => (isHours.value ? `${Math.round(v)} hrs` : `${v.toFixed(1)}%`)
 
 const hovered = ref<number | null>(null)
 const hoveredPoint = computed(() => (hovered.value === null ? null : props.points[hovered.value] ?? null))
@@ -93,7 +124,7 @@ const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
     <svg :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="xMidYMid meet" role="img" :aria-label="label">
       <g v-for="t in yTicks" :key="t">
         <line :x1="margin.left" :x2="W - margin.right" :y1="yFor(t)" :y2="yFor(t)" class="gridline" />
-        <text :x="margin.left - 8" :y="yFor(t) + 4" class="axis-label y-label">{{ t }}%</text>
+        <text :x="margin.left - 8" :y="yFor(t) + 4" class="axis-label y-label">{{ fmtTick(t) }}</text>
       </g>
 
       <line
@@ -102,11 +133,12 @@ const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
         class="crosshair"
       />
 
+      <line v-if="trend" :x1="trend.x1" :y1="trend.y1" :x2="trend.x2" :y2="trend.y2" class="trend-line" />
       <path v-if="linePath" :d="linePath" class="series-line" />
       <template v-for="(p, i) in points" :key="p.weekStart">
         <circle
-          v-if="pickPct(p) !== null"
-          :cx="xFor(i)" :cy="yFor(pickPct(p)! * 100)" :r="hovered === i ? 5 : 3.5"
+          v-if="pickVal(p) !== null"
+          :cx="xFor(i)" :cy="yFor(pickVal(p)!)" :r="hovered === i ? 5 : 3.5"
           class="series-dot"
         />
       </template>
@@ -114,9 +146,9 @@ const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
       <!-- label the latest value directly -->
       <text
         v-if="lastIndex >= 0 && hovered === null"
-        :x="xFor(lastIndex) + 8" :y="yFor(pickPct(points[lastIndex]!)! * 100) + 4"
+        :x="xFor(lastIndex) + 8" :y="yFor(pickVal(points[lastIndex]!)!) + 4"
         class="end-label"
-      >{{ (pickPct(points[lastIndex]!)! * 100).toFixed(1) }}%</text>
+      >{{ fmtEnd(pickVal(points[lastIndex]!)!) }}</text>
 
       <text v-for="i in xLabelIndexes" :key="`x-${i}`" :x="xFor(i)" :y="H - margin.bottom + 16" class="axis-label x-label">
         {{ fmtShort(points[i]!.weekStart) }}
@@ -139,6 +171,7 @@ const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
         <div class="tooltip-row"><span class="tooltip-label">Kitchen labor</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.labor) }}</span></div>
         <div class="tooltip-row"><span class="tooltip-label">Overtime %</span><span class="tooltip-value">{{ (hoveredPoint.otPct! * 100).toFixed(1) }}%</span></div>
         <div class="tooltip-row"><span class="tooltip-label">Overtime</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.overtime) }}</span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Est. OT hours</span><span class="tooltip-value">{{ Math.round(hoveredPoint.otHours!) }}</span></div>
       </template>
       <div v-else class="tooltip-row"><span class="tooltip-label">Awaiting payroll</span></div>
       <div class="tooltip-row"><span class="tooltip-label">Food revenue</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.revenue) }}</span></div>
@@ -157,6 +190,7 @@ svg { width: 100%; height: auto; display: block; }
 .x-label { text-anchor: middle; }
 .crosshair { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
 .series-line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-line { stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 6 4; stroke-linecap: round; }
 .series-dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
 .end-label { font-size: 11px; font-weight: 700; fill: var(--ink); font-variant-numeric: tabular-nums; }
 
