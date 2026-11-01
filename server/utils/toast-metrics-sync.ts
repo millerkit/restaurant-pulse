@@ -16,11 +16,13 @@ interface ToastSelection {
   displayName: string | null
   price: number | null
   receiptLinePrice: number | null
+  quantity: number | null
   voided: boolean
 }
 
 interface ToastCheck {
   voided: boolean
+  payments?: { type: string | null }[]
   totalAmount: number | null
   amount: number | null
   selections: ToastSelection[]
@@ -51,14 +53,55 @@ interface ToastOrder {
 // same export: everything else on a Chef's Counter check is a real drink
 // (cocktail/wine/beer/zero-proof), so there's no separate allowlist
 // needed, just excluding the two known food item names.
-const CHEFS_COUNTER_FOOD_PRICE_PER_COVER = 190
-const CHEFS_COUNTER_FOOD_ITEM_NAMES = new Set(["Day Of Chef's Counter", "Pre-Paid Chef's Counter"])
-function chefsCounterBeverageTotal(checks: ToastCheck[]): number {
-  return checks
-    .filter(c => !c.voided)
-    .flatMap(c => c.selections ?? [])
-    .filter(s => !s.voided && !CHEFS_COUNTER_FOOD_ITEM_NAMES.has(s.displayName ?? ''))
-    .reduce((sum, s) => sum + (s.receiptLinePrice ?? s.price ?? 0), 0)
+//
+// Revised 2026-10-30 (twice). Chef's Counter is a $190 prix fixe, Tue-Sat only.
+// Verified against Toast's own Sales Summary for 2026-10-29 (Chef's Counter
+// revenue center = $3,337 net): prepaid tickets (OpenTable/Stripe) are rung
+// on each seat's check as "Pre-Paid Chef's Counter" at $0 just to open the
+// order, and the real money is rung separately, in bulk, as one "Day Of
+// Chef's Counter xN" check at $190 each paid with the "Stripe" alternate
+// payment type (2026-10-29: x12, $2,280). Counting every prix fixe
+// selection (the old $190 x guests, then $190 x selections) therefore
+// charged the same guests twice. So, for Chef's Counter checks:
+//   revenue = the checks' real subtotals (check.amount) — equals Toast's own
+//             revenue-center figure, and includes pairings/modifiers;
+//   food    = amount rung on "Day Of" selections (the Stripe bulk check plus
+//             genuine walk-up tickets); beverage = the rest of revenue
+//             (drinks, pairings and, on a la carte nights, a la carte food);
+//   covers  = Pre-Paid selections + Day Of selections NOT on a bulk
+//             Stripe/"OTHER"-paid check. On a night with neither (Sundays,
+//             a la carte nights) covers fall back to seated guests.
+// Tickets rung in a bulk check beyond the prepaid count (no-shows who paid,
+// or a buyout) still count in revenue but not covers.
+function chefsCounterCheckSplit(checks: ToastCheck[]): { tickets: number; dayOfAmount: number; totalAmount: number } {
+  let tickets = 0
+  let dayOfAmount = 0
+  let totalAmount = 0
+  for (const c of checks) {
+    if (c.voided) continue
+    totalAmount += c.amount ?? 0
+    const isBulkPayment = (c.payments ?? []).some(p => p.type === 'OTHER')
+    for (const s of c.selections ?? []) {
+      if (s.voided) continue
+      const q = s.quantity ?? 1
+      if (s.displayName === "Pre-Paid Chef's Counter") tickets += q
+      else if (s.displayName === "Day Of Chef's Counter") {
+        dayOfAmount += q * (s.receiptLinePrice ?? s.price ?? 0)
+        if (!isBulkPayment) tickets += q
+      }
+    }
+  }
+  return { tickets, dayOfAmount, totalAmount }
+}
+
+// A bulk Stripe settlement check: "Day Of Chef's Counter xN" paid with an
+// alternate ("OTHER") payment type. It's rung at odd times on whatever table
+// is handy (seen on table 51, and with no table at all), so it's routed to
+// Chef's Counter by what it contains, not by its table.
+function isBulkPrixFixeCheck(c: ToastCheck): boolean {
+  return !c.voided
+    && (c.payments ?? []).some(p => p.type === 'OTHER')
+    && (c.selections ?? []).some(s => !s.voided && s.displayName === "Day Of Chef's Counter")
 }
 
 // Urban Hearth is dinner-only; a daytime pop-up/market event (confirmed by
@@ -194,16 +237,39 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   const areaMap = await getTableAreaMap(creds)
   const areaIds = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map((r: any) => [r.name, r.id]))
   const perArea = new Map<string, { covers: number; revenue: number; foodRevenue: number | null; beverageRevenue: number | null }>()
+  // Chef's Counter covers can't be summed per order: a party's prix fixes
+  // are often rung on one order (sometimes with guests=0) and its drinks on
+  // another with guests=N (2026-09-29: "Day Of Chef's Counter x8" at
+  // guests=0 plus a drinks-only order at guests=8 for the same 8 people),
+  // so summing guests, or max(guests, prix fixes) per order, double counts.
+  // On a night with any prix fixes sold, every counter guest pays one, so
+  // covers = prix fixes sold; on a night with none (a la carte, e.g.
+  // Sundays), covers = seated guests.
+  let counterGuests = 0
+  let counterPrixFixe = 0
   for (const o of dinnerOrders) {
+    const bulkChecks = (o.checks ?? []).filter(isBulkPrixFixeCheck)
+    const rest = (o.checks ?? []).filter(c => !isBulkPrixFixeCheck(c))
+    if (bulkChecks.length) {
+      const { dayOfAmount, totalAmount } = chefsCounterCheckSplit(bulkChecks)
+      const counter = perArea.get('chefs counter') ?? { covers: 0, revenue: 0, foodRevenue: 0, beverageRevenue: 0 }
+      counter.foodRevenue = (counter.foodRevenue ?? 0) + dayOfAmount
+      counter.beverageRevenue = (counter.beverageRevenue ?? 0) + (totalAmount - dayOfAmount)
+      counter.revenue += totalAmount
+      perArea.set('chefs counter', counter)
+    }
     const areaName = o.table ? areaMap.get(o.table.guid) : null
     if (!areaName) continue
     const guests = o.numberOfGuests ?? 0
     if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
     const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0, foodRevenue: areaName === 'chefs counter' ? 0 : null, beverageRevenue: areaName === 'chefs counter' ? 0 : null }
-    entry.covers += guests
+    if (areaName !== 'chefs counter') entry.covers += guests
     if (areaName === 'chefs counter') {
-      const foodRevenue = guests * CHEFS_COUNTER_FOOD_PRICE_PER_COVER
-      const beverageRevenue = chefsCounterBeverageTotal(o.checks ?? [])
+      const { tickets, dayOfAmount, totalAmount } = chefsCounterCheckSplit(rest)
+      counterGuests += guests
+      counterPrixFixe += tickets
+      const foodRevenue = dayOfAmount
+      const beverageRevenue = totalAmount - dayOfAmount
       entry.foodRevenue = (entry.foodRevenue ?? 0) + foodRevenue
       entry.beverageRevenue = (entry.beverageRevenue ?? 0) + beverageRevenue
       entry.revenue += foodRevenue + beverageRevenue
@@ -217,11 +283,13 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
       // tip commonly ~20%+ of a check) — caught 2026-08-13 when the
       // user's own Dining Room actuals looked implausibly high compared
       // to the whole-restaurant blended average check.
-      const checkAmount = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
+      const checkAmount = rest.filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
       entry.revenue += checkAmount
     }
     perArea.set(areaName, entry)
   }
+  const counterEntry = perArea.get('chefs counter')
+  if (counterEntry) counterEntry.covers = counterPrixFixe > 0 ? counterPrixFixe : counterGuests
   const upsertArea = db.prepare(`
     INSERT INTO daily_toast_area_metrics (date, area_id, covers, revenue, food_revenue, beverage_revenue, synced_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)

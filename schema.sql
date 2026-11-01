@@ -449,6 +449,10 @@ CREATE TABLE reserve_plan (
 CREATE TABLE gift_card_plan (
   id             INTEGER PRIMARY KEY CHECK (id = 1),
   expected_cash  REAL NOT NULL,
+  -- Share (0-100) of expected_cash held back as a new-year cushion (added
+  -- 2026-10-30): redemptions bring revenue with no new cash, so only
+  -- expected_cash * (1 - cushion_pct/100) counts toward this year's loans.
+  cushion_pct    REAL NOT NULL DEFAULT 25 CHECK (cushion_pct >= 0 AND cushion_pct <= 100),
   updated_at     TEXT NOT NULL
 );
 

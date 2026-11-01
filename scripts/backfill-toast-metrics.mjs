@@ -88,17 +88,38 @@ function classifyTableName(name) {
   return null
 }
 
-// See CHEFS_COUNTER_FOOD_PRICE_PER_COVER's comment in
-// server/utils/toast-metrics-sync.ts — duplicated here for the same
-// Node-22 reason as the rest of this file.
-const CHEFS_COUNTER_FOOD_PRICE_PER_COVER = 190
-const CHEFS_COUNTER_FOOD_ITEM_NAMES = new Set(["Day Of Chef's Counter", "Pre-Paid Chef's Counter"])
-function chefsCounterBeverageTotal(checks) {
-  return (checks ?? [])
-    .filter(c => !c.voided)
-    .flatMap(c => c.selections ?? [])
-    .filter(s => !s.voided && !CHEFS_COUNTER_FOOD_ITEM_NAMES.has(s.displayName ?? ''))
-    .reduce((sum, s) => sum + (s.receiptLinePrice ?? s.price ?? 0), 0)
+// See the comment above chefsCounterCheckSplit in
+// server/utils/toast-metrics-sync.ts (2026-10-30) — duplicated here for the
+// same Node-22 reason as the rest of this file.
+function chefsCounterCheckSplit(checks) {
+  let tickets = 0
+  let dayOfAmount = 0
+  let totalAmount = 0
+  for (const c of checks ?? []) {
+    if (c.voided) continue
+    totalAmount += c.amount ?? 0
+    const isBulkPayment = (c.payments ?? []).some(p => p.type === 'OTHER')
+    for (const s of c.selections ?? []) {
+      if (s.voided) continue
+      const q = s.quantity ?? 1
+      if (s.displayName === "Pre-Paid Chef's Counter") tickets += q
+      else if (s.displayName === "Day Of Chef's Counter") {
+        dayOfAmount += q * (s.receiptLinePrice ?? s.price ?? 0)
+        if (!isBulkPayment) tickets += q
+      }
+    }
+  }
+  return { tickets, dayOfAmount, totalAmount }
+}
+
+// A bulk Stripe settlement check: "Day Of Chef's Counter xN" paid with an
+// alternate ("OTHER") payment type. It's rung at odd times on whatever table
+// is handy (seen on table 51, and with no table at all), so it's routed to
+// Chef's Counter by what it contains, not by its table.
+function isBulkPrixFixeCheck(c) {
+  return !c.voided
+    && (c.payments ?? []).some(p => p.type === 'OTHER')
+    && (c.selections ?? []).some(s => !s.voided && s.displayName === "Day Of Chef's Counter")
 }
 
 function isoDate(d) {
@@ -287,18 +308,35 @@ for (const isoDay of days) {
     .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
 
   const perArea = new Map()
+  // See the comment on counterGuests/counterPrixFixe in
+  // server/utils/toast-metrics-sync.ts for why counter covers aren't summed per order.
+  let counterGuests = 0
+  let counterPrixFixe = 0
   if (tableAreaMap.size > 0) {
     for (const o of orders) {
       if (o.deleted || !isDinnerHour(o.openedDate)) continue
+      const bulkChecks = (o.checks ?? []).filter(isBulkPrixFixeCheck)
+      const rest = (o.checks ?? []).filter(c => !isBulkPrixFixeCheck(c))
+      if (bulkChecks.length) {
+        const { dayOfAmount, totalAmount } = chefsCounterCheckSplit(bulkChecks)
+        const counter = perArea.get('chefs counter') ?? { covers: 0, revenue: 0, foodRevenue: 0, beverageRevenue: 0 }
+        counter.foodRevenue += dayOfAmount
+        counter.beverageRevenue += totalAmount - dayOfAmount
+        counter.revenue += totalAmount
+        perArea.set('chefs counter', counter)
+      }
       const guests = o.numberOfGuests ?? 0
       if (guests > MAX_PLAUSIBLE_GUESTS_PER_ORDER) continue
       const areaName = o.table ? tableAreaMap.get(o.table.guid) : null
       if (!areaName) continue
       const entry = perArea.get(areaName) ?? { covers: 0, revenue: 0, foodRevenue: areaName === 'chefs counter' ? 0 : null, beverageRevenue: areaName === 'chefs counter' ? 0 : null }
-      entry.covers += guests
+      if (areaName !== 'chefs counter') entry.covers += guests
       if (areaName === 'chefs counter') {
-        const foodRevenue = guests * CHEFS_COUNTER_FOOD_PRICE_PER_COVER
-        const beverageRevenue = chefsCounterBeverageTotal(o.checks)
+        const { tickets, dayOfAmount, totalAmount } = chefsCounterCheckSplit(rest)
+        counterGuests += guests
+        counterPrixFixe += tickets
+        const foodRevenue = dayOfAmount
+        const beverageRevenue = totalAmount - dayOfAmount
         entry.foodRevenue += foodRevenue
         entry.beverageRevenue += beverageRevenue
         entry.revenue += foodRevenue + beverageRevenue
@@ -306,11 +344,13 @@ for (const isoDay of days) {
         // See the comment in server/utils/toast-metrics-sync.ts on
         // check.amount (pre-tax, pre-tip) vs. check.totalAmount (amount +
         // tax + tip) — duplicated here for the same Node-22 reason.
-        const checkAmount = (o.checks ?? []).filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
+        const checkAmount = rest.filter(c => !c.voided).reduce((sum, c) => sum + (c.amount ?? 0), 0)
         entry.revenue += checkAmount
       }
       perArea.set(areaName, entry)
     }
+    const counterEntry = perArea.get('chefs counter')
+    if (counterEntry) counterEntry.covers = counterPrixFixe > 0 ? counterPrixFixe : counterGuests
   }
 
   // A day with zero orders AND zero time entries is either a real closed

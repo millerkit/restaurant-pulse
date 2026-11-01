@@ -250,7 +250,7 @@ export default defineEventHandler((event) => {
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
-  const giftCardPlan = db.prepare('SELECT expected_cash FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number } | undefined
+  const giftCardPlan = db.prepare('SELECT expected_cash, cushion_pct FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number, cushion_pct: number } | undefined
 
   // Real, actual transfers only — see schema.sql's reserve_transfers
   // comment for why this replaced a fixed $/week schedule assumption (two
@@ -679,6 +679,19 @@ export default defineEventHandler((event) => {
     }
   }
 
+  const upcomingSorted = allLoanRows
+    .filter(r => r.payment_date >= today)
+    .sort((a, b) => a.payment_date.localeCompare(b.payment_date))
+  const in45 = new Date(`${today}T00:00:00Z`)
+  in45.setUTCDate(in45.getUTCDate() + 45)
+  const next45End = in45.toISOString().slice(0, 10)
+  const toPayment = (r: LoanRow) => ({ loanKey: r.loan_key, lender: r.lender, date: r.payment_date, type: r.payment_type, interest: r.interest, principal: r.principal, total: r.total_payment })
+  // Everything due on the big catch-up date (Dec 20), shown in its own table
+  // until that date passes, only when it falls in the current year.
+  const catchUpDayRows = reserveState.catchUpDate && reserveState.catchUpDate >= today && reserveState.catchUpDate.slice(0, 4) === today.slice(0, 4)
+    ? upcomingSorted.filter(r => r.payment_date === reserveState.catchUpDate)
+    : []
+
   return {
     year,
     thisYear: {
@@ -704,15 +717,18 @@ export default defineEventHandler((event) => {
       breakevenNetIncome: breakevenNetIncomeForYear,
       // Gift card cash still expected before Dec 31 — cash in, not revenue
       // (see schema.sql's gift_card_plan comment).
-      giftCardCash: giftCardPlan?.expected_cash ?? 0
+      // giftCardCash is the usable part: the expected cash less the share
+      // held back as a new-year cushion.
+      giftCardCash: (giftCardPlan?.expected_cash ?? 0) * (1 - (giftCardPlan?.cushion_pct ?? 25) / 100),
+      giftCardExpected: giftCardPlan?.expected_cash ?? 0,
+      giftCardCushionPct: giftCardPlan?.cushion_pct ?? 25,
+      giftCardCushion: (giftCardPlan?.expected_cash ?? 0) * ((giftCardPlan?.cushion_pct ?? 25) / 100)
     },
     covenant,
     covenantScoped,
     reserve: reserveState,
-    upcomingPayments: allLoanRows
-      .filter(r => r.payment_date >= today)
-      .sort((a, b) => a.payment_date.localeCompare(b.payment_date))
-      .slice(0, 10)
-      .map(r => ({ loanKey: r.loan_key, lender: r.lender, date: r.payment_date, type: r.payment_type, interest: r.interest, principal: r.principal, total: r.total_payment }))
+    // Next 45 days only; the Dec 20 payments get their own table below.
+    upcomingPayments: upcomingSorted.filter(r => r.payment_date <= next45End).map(toPayment),
+    catchUpDayPayments: catchUpDayRows.map(toPayment)
   }
 })

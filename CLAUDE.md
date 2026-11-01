@@ -2706,6 +2706,45 @@ always ordered/paid through Toast directly, no Stripe involved there).
   backfill steps as the section above; this is now bundled into the same
   not-yet-deployed change.
 
+## Chef's Counter revenue now follows Toast's real checks — 2026-10-30
+
+Prompted by the user asking what Chef's Counter makes on a Tuesday. The counter seats 6
+(C1-C6 are seat numbers) with 2 turns, so at most **12 covers a night**; the $190 prix fixe
+runs **Tue-Sat only** (the counter seats a la carte guests on other nights, or on
+one-turn nights). The old sync set food to `guests x $190` for every night, which
+invented Sunday revenue, and a first fix (`$190 x prix fixe selections`) still showed
+~24 tickets on most Fridays. Root cause, verified live and against Toast's own Sales Summary
+for 2026-10-29 (Chef's Counter revenue center = **$3,337 net**):
+
+- **Prepaid guests are rung twice.** Each seat's check carries "Pre-Paid Chef's Counter xN"
+  at **$0** (just to open the order). The real money is rung separately, in bulk, as one
+  "Day Of Chef's Counter xN" check at $190 each, paid with the **Stripe** alternate payment
+  type (payment `type = OTHER`), rung in ~30 seconds at odd times (sometimes 11pm), on
+  whatever table is handy (table 51/outdoor, or no table). On Oct 29: 12 prepaid + a
+  Stripe bulk check of 12 ($2,280) + $1,057 of seat-check drinks/pairings = $3,337.
+- **Fixed** in `syncToastMetricsForDate` and `scripts/backfill-toast-metrics.mjs`
+  (`isBulkPrixFixeCheck`, `chefsCounterCheckSplit`): Chef's Counter `revenue` = real check
+  subtotals (`check.amount`, which includes multi-quantity drinks and modifiers);
+  `food_revenue` = dollars rung on "Day Of" selections (the Stripe bulk check plus genuine
+  walk-up tickets); `beverage_revenue` = the rest (drinks, pairings, and on a la carte
+  nights a la carte food). **Covers** = Pre-Paid selections + Day Of selections not on a
+  bulk-paid check; on a night with none, covers = seated guests. Bulk checks are routed to
+  Chef's Counter by content, not table (they used to land in Outdoor or be dropped).
+  No `$190` constant remains; no schema change.
+- **Result**: no night exceeds 12 covers on prix fixe nights; Oct 29 ties to Toast's
+  $3,337 exactly. Weekday prix fixe dollars for Aug 1-Oct 17 land within ~2% of the
+  colleague's OpenTable totals (Tue $9,690 / Wed $12,160 / Thu $14,820 / Fri $25,080 /
+  Sat $19,380 over ~the same window; ours $79,420 vs $81,130 overall).
+- **Local dev re-backfilled** from 2026-06-20. **Production is not yet fixed**: needs
+  `fly deploy`, then re-run the backfill in the container (`fly ssh console -C "node
+  scripts/backfill-toast-metrics.mjs --since=2026-06-20"`). Production's Edit Capacity
+  Chef's Counter per-cover figures (and `follow_actuals` month-close blends) read these rows.
+- **Known gaps**: a bulk check's tickets can exceed the prepaid seats rung (no-shows who
+  paid, or a buyout, e.g. 2026-09-29's 19-ticket check) - that revenue counts but not
+  covers. Ticketed event dinners (2026-10-20 "Prepaid Mushroom Dinner") aren't prix fixes
+  and read ~$0. The sync only sees dinner-hour (5pm+) orders, so a bulk check rung earlier
+  would be missed. Whole-restaurant `daily_toast_metrics.covers` is unchanged.
+
 ## Per-area revenue was using check.totalAmount (includes tax + tip), not the real subtotal — 2026-08-13
 
 Same day, right after production's first deploy of the per-area actuals
@@ -4633,6 +4672,13 @@ balance-sheet liability, so they never reach the P&L or Net Income.
   here; cards already sold are already in the cash balance. No QBO liability balance is shown yet.
 - **Production rollout:** run `node scripts/add-gift-card-plan.mjs` on the volume (`fly ssh console`)
   BEFORE `fly deploy`, or `/api/cashflow` 500s on the missing table. Local dev already migrated.
+- **New-year cushion (2026-10-30):** `gift_card_plan.cushion_pct` (0-100, default 25) is the share of
+  the expected cash held back for next year, since redemptions bring revenue with no cash. Only
+  `expected * (1 - pct/100)` counts toward this year (`yearProjection.giftCardCash`, which every
+  card already used); the API also returns `giftCardExpected`, `giftCardCushionPct`,
+  `giftCardCushion`. Entered beside the amount on the Cash Flow tab. **Run
+  `node scripts/add-gift-card-cushion.mjs` on production BEFORE `fly deploy`**, or `/api/cashflow`
+  500s on the missing column. Typecheck shows no new errors; not clicked through in a browser.
 - Verified: migration, typecheck (no new errors beyond the pre-existing ones). Not clicked through in a
   browser (local dev is behind Basic Auth).
 
@@ -4666,6 +4712,24 @@ circular. Instead:
   control. Not clicked through in the browser (local dev is behind Basic Auth); the
   month-close path can't run locally (sync refuses outside production) and first fires on the
   first production sync of November.
+
+## Miller loan deferral (modeled locally, not agreed or in production) - 2026-11-01
+
+The user is proposing to the lender (their parents) that Miller's payments pause Nov 15 2026 - Jun 15 2027,
+with 3.82% interest accruing and capitalizing, then a level payment Jul 15 2027 - Jan 15 2032.
+`scripts/defer-miller-loan.mjs` (dry run by default; `--apply`, `--revert`) rewrites Miller's `loan_schedule`
+rows from Nov 2026: 55 payments of $2,913.91, balance at resume $146,805.62 (schedule principal $143,159.82
++ $3,645.80 accrued). Total interest from Nov 2026 rises about $3,497. The original rows are kept in
+`loan_schedule_miller_backup` until `--revert`. Cash Flow, the reserve simulation and the Dashboard's
+suggested weekly goal all read `loan_schedule`, so they follow automatically: 2027 reserve draws fall
+$15,520 ($199,579 to $184,059 excluding SBA), and the weekly goal drops about $800 per deferred month.
+- **Budget:** 7020 interest is essentially unchanged (accrual about $455.73/mo vs. $448.42 in Dec): the only
+  edit is Dec 2026 +$7.31. Not written; 2027 has no 7020 budget yet. QBO needs a monthly accrual JE for the
+  deferred interest, or the P&L understates it.
+- **Applied to local dev only.** Production needs the user's go-ahead after the lender agrees; run the script
+  on the volume via `fly ssh console` (it reads `data/restaurant.sqlite`). The $2,913.91 differs from the
+  $2,909 quoted to the lender because the schedule's balance ($143,160) is $478 above the $142,682 used then:
+  confirm the note's true balance and re-run with `--balance=` if needed.
 
 ## Not yet done
 

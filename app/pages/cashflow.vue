@@ -23,7 +23,7 @@ type ReserveSustainability = {
   operatingCashFreedPerWeek: number | null
   operatingCashFreedTotal: number | null
 }
-type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number, giftCardCash: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number, giftCardCash: number, giftCardExpected: number, giftCardCushionPct: number, giftCardCushion: number }
 type Covenant = {
   minimumRatio: number
   testYear: number
@@ -44,6 +44,7 @@ type CashFlowResponse = {
     sustainability: ReserveSustainability | null
   }
   upcomingPayments: Payment[]
+  catchUpDayPayments: Payment[]
 }
 
 const data = ref<CashFlowResponse | null>(null)
@@ -174,9 +175,20 @@ async function deleteTransfer(t: ReserveTransfer) {
   }
 }
 
+const catchUpDayTotals = computed(() => {
+  const rows = data.value?.catchUpDayPayments ?? []
+  return {
+    interest: rows.reduce((t, p) => t + p.interest, 0),
+    principal: rows.reduce((t, p) => t + p.principal, 0),
+    total: rows.reduce((t, p) => t + p.total, 0)
+  }
+})
+
 // ---- Gift card cash expected before year end ----------------------------
 const giftCardAmount = ref<number | null>(null)
-watch(() => data.value?.yearProjection.giftCardCash ?? null, (v) => { if (giftCardAmount.value === null) giftCardAmount.value = v }, { immediate: true })
+const giftCardCushionPct = ref<number | null>(null)
+watch(() => data.value?.yearProjection.giftCardExpected ?? null, (v) => { if (giftCardAmount.value === null) giftCardAmount.value = v }, { immediate: true })
+watch(() => data.value?.yearProjection.giftCardCushionPct ?? null, (v) => { if (giftCardCushionPct.value === null) giftCardCushionPct.value = v }, { immediate: true })
 const giftCardSubmitting = ref(false)
 const giftCardError = ref<string | null>(null)
 const giftCardSaved = ref(false)
@@ -188,9 +200,13 @@ async function submitGiftCard() {
     giftCardError.value = 'Enter an amount of 0 or more'
     return
   }
+  if (giftCardCushionPct.value === null || !Number.isFinite(giftCardCushionPct.value) || giftCardCushionPct.value < 0 || giftCardCushionPct.value > 100) {
+    giftCardError.value = 'Enter a cushion from 0 to 100%'
+    return
+  }
   giftCardSubmitting.value = true
   try {
-    await $fetch('/api/cashflow/gift-card-plan', { method: 'POST', body: { expectedCash: giftCardAmount.value } })
+    await $fetch('/api/cashflow/gift-card-plan', { method: 'POST', body: { expectedCash: giftCardAmount.value, cushionPct: giftCardCushionPct.value } })
     giftCardSaved.value = true
     await load()
   } catch (err: any) {
@@ -299,7 +315,7 @@ async function submitPlan() {
               <span class="period">Profit needed to cover the loans</span>
             </div>
             <div class="figure">{{ fmt(breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue)</template>.</div>
+            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue<template v-if="data.yearProjection.giftCardCushion > 0">, after holding back {{ data.yearProjection.giftCardCushionPct }}% as a cushion</template>)</template>.</div>
           </div>
           <div class="hero-card">
             <div class="hero-top">
@@ -315,17 +331,18 @@ async function submitPlan() {
         <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
           Projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
           <template v-if="data.yearProjection.giftCardCash > 0 && projectedFreeCashFlowWithGiftCards !== null">
-            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash
+            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash<template v-if="data.yearProjection.giftCardCushion > 0"> ({{ fmt(data.yearProjection.giftCardCushion) }} held back as a {{ YEAR + 1 }} cushion)</template>
           </template>
         </div>
         <form class="transfer-form plan-form" @submit.prevent="submitGiftCard">
           <div class="transfer-form-row">
             <label>Gift card cash still expected before Dec 31<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
+            <label>Hold back as {{ YEAR + 1 }} cushion (%)<input type="number" step="1" min="0" max="100" v-model.number="giftCardCushionPct" required /></label>
             <button type="submit" :disabled="giftCardSubmitting">{{ giftCardSubmitting ? 'Saving…' : 'Update' }}</button>
             <span v-if="giftCardError" class="chip critical">{{ giftCardError }}</span>
             <span v-else-if="giftCardSaved" class="chip good">Saved</span>
           </div>
-          <div class="section-note">Gift card sales are cash in the bank but not revenue, so they don't touch Net Income or the covenant. This is a timing benefit: when the cards are redeemed (mostly {{ YEAR + 1 }}), that revenue arrives with no new cash, so don't count on it for the {{ YEAR + 1 }} reserve plan.</div>
+          <div class="section-note">Gift card sales are cash in the bank but not revenue, so they don't touch Net Income or the covenant. This is a timing benefit: when the cards are redeemed (mostly {{ YEAR + 1 }}), that revenue arrives with no new cash, so don't count on it for the {{ YEAR + 1 }} reserve plan. The cushion % is the share set aside for that: only the rest counts toward covering this year's loans<template v-if="giftCardAmount && giftCardCushionPct !== null"> ({{ fmt(giftCardAmount * (1 - giftCardCushionPct / 100)) }} counted, {{ fmt(giftCardAmount * giftCardCushionPct / 100) }} held back at the values above)</template>.</div>
         </form>
       </section>
 
@@ -413,6 +430,7 @@ async function submitPlan() {
       <section>
         <div class="section-head">
           <div class="section-label">Upcoming Debt Service Payments</div>
+          <div class="section-note">Next 45 days</div>
         </div>
         <div class="cf-table-card">
           <table class="cf-table upcoming">
@@ -428,6 +446,37 @@ async function submitPlan() {
                 <td>{{ fmt(p.total) }}</td>
               </tr>
             </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Everything due on the catch-up date -->
+      <section v-if="data.catchUpDayPayments.length">
+        <div class="section-head">
+          <div class="section-label">All Payments Due {{ fmtDate(data.catchUpDayPayments[0]!.date) }}</div>
+        </div>
+        <div class="cf-table-card">
+          <table class="cf-table upcoming">
+            <thead>
+              <tr><th>Date</th><th>Payee</th><th>Interest</th><th>Principal</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in data.catchUpDayPayments" :key="p.loanKey + p.date + p.type">
+                <td>{{ fmtDate(p.date) }}</td>
+                <td>{{ p.lender }}<span v-if="p.type === 'catch_up'" class="flag serious">catch-up</span></td>
+                <td>{{ fmt(p.interest) }}</td>
+                <td>{{ fmt(p.principal) }}</td>
+                <td>{{ fmt(p.total) }}</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="2"><strong>Grand total</strong></td>
+                <td><strong>{{ fmt(catchUpDayTotals.interest) }}</strong></td>
+                <td><strong>{{ fmt(catchUpDayTotals.principal) }}</strong></td>
+                <td><strong>{{ fmt(catchUpDayTotals.total) }}</strong></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </section>
