@@ -4772,6 +4772,91 @@ so next year can be planned in the same screens. Budget Pace and every other pag
   rates, so real labor totals can only be judged in production); 2026 Labor tab output unchanged. Not clicked through
   on production.
 
+## 2027 budget, second pass: COGS, variable opex, utilities, leases — 2026-11-02
+
+[`scripts/seed-2027-budget-extras.mjs`](scripts/seed-2027-budget-extras.mjs) fills what "Build 2027 budget" leaves blank. Run it
+AFTER the Build is applied (it needs the 2027 revenue budget); dry run by default, `--apply` writes, `--revert` undoes
+(previous values are kept in `budget_targets_backup_2027_extras`, no QBO tokens). Matches accounts by `account_number`.
+
+- **From the user**: 1281 Cambridge St rent (6510) $11,500/mo and Mass Ave rent (7920) $2,950/mo, constant all of 2027; Mass Ave
+  sublet income (8030, other income) $5,000/mo assumed all year. **Not budgeted on purpose**: gain on asset sale (8010, timing
+  unknown), depreciation (7910, TBD), catering/retail COGS (their revenue isn't budgeted).
+- **Electricity (6521)**: a hand-built seasonal profile from the Eversource bill export (Jul $4,643; Aug+Sep two bills $12,503;
+  Oct $2,886; pre-opening months ignored; no winter data exists for the open restaurant) plus $450/mo for Mass Ave — the
+  constants and reasoning are at the top of the script.
+- **Gas (6522)**: seasonal too (added same day) — about $700 summer base from the Jul–Oct bills ($639–$785), $900 Apr, $950 Nov,
+  $1,300 Dec, $1,400 Jan/Feb (heating + winter demand pricing; winter is an assumption until this winter's bills exist),
+  plus $25 Mass Ave.
+- **COGS**: Food = trailing Food COGS % x each month's Food revenue (months with >5% catering/event revenue skipped when a
+  cleaner month exists); each beverage COGS account = its own trailing % of its paired revenue account (5110/4022, 5120/4024,
+  5125/4026, 5130/4028); 5020 and 5115 = trailing average. **Processing fees** (6210, 6220) = trailing % of total revenue.
+  **Every other variable opex account** = trailing monthly average, flat. "Trailing" = newest 3 fully-synced closed months since
+  2026-08-01. Reservation Platform Fees (6305) carry the OpenTable $5,000/mo credit, which the user says ends after July 2027: budgeted at the
+  trailing net (about -$4,432/mo) Jan-Jul, then gross fees (about $568/mo) from Aug; 6644's one-off amplifier refund is skipped. Any other
+  net-credit account is listed, not budgeted;
+  lumpy accounts (one month >=70% of the window) are flagged; `--exclude=` skips accounts, `--food-pct=` overrides Food.
+- Why a script and not the Edit Budget COGS recompute: that button averages the *selected year's* closed months, so in 2027 it
+  finds no window.
+- Verified on a scratch copy of local dev (synthetic 2027 revenue; local has no Aug-Oct actuals): dry run, apply, double-apply
+  refusal, revert. Not yet run against production.
+
+## Per-area weekly closures: Chef's Counter dark on Tuesdays - 2026-11-02
+
+Trial decided by the user: close Chef's Counter on Tuesdays from **2026-12-01** (fully closed, no a la carte),
+assuming an optimistic **85% recapture** of those covers on its other nights (mostly Wed/Thu, some Fri/Sat). The
+model had no per-area weekday dimension: `expected_covers` is one per-area, per-month average applied to every
+Tue-Sun night (`dayByDaySum`, `revenue-modeling.get.ts`'s `operatingNightsPerYear`, the weekday revenue pattern
+in `weekly-targets.ts`). This is step 1 of 3 (Capacity); the rest is below.
+
+- **`capacity_areas.closed_dows` / `closed_from` / `closure_recapture_pct`** (schema.sql). A comma list of weekday
+  numbers (Monday ignored), a start date, and a 0-100 recapture %. Dated, so periods before the start are still
+  judged on the old schedule, and the trial reverts by clearing the weekdays. Nothing is configured by default.
+- **The covers grid still holds the PRE-closure per-Tue-Sun-night baseline.** From `closed_from`, the server
+  (`closureOn` / `areaExpectedOn` in `server/api/capacity.get.ts`) zeroes the area's capacity and covers on closed
+  weekdays and multiplies its other nights by `(6 - closed*(1-r)) / (6 - closed)`, capped at nightly capacity.
+  Baseline stays the stored meaning because the stored values are reused every year, so a closure that starts
+  mid-year (Dec 2026 on) cannot be encoded by rewriting them. Chef's Counter, Dec, 85%: x1.17, so a 7 baseline
+  becomes 8.19 on Wed-Sun; 0% recapture leaves 7.
+- **Everything month-level inherits it**: `months[].assumed` (and so the Revenue tab's "Recompute from Capacity"
+  and "Build 2027 budget", which read `/api/capacity`), the fill-% seat denominator, and the area cards'
+  `assumedCoversPerNight`, now per night the area is open (the unit of its actual). Holiday-closure nights are
+  worth the month's average night (`avgNightlyForMonth`), since nights now differ by weekday.
+- **Edit Capacity**: new "Weekly Area Closures" table (weekday chips, start date, recapture %). The covers grid's
+  Projected Revenue applies closures night by night; its Total / Fill % / Per-Cover $ stay baseline.
+  "Set by Actuals" converts an open-night observation back to the baseline (divides by the uplift) when the
+  closure covers the whole target month and the window has no closed-weekday nights. `CHEFS_COUNTER_2027_GOAL`
+  values are baselines too.
+- **Verified**: against a DB copy through the real handler (Nov unchanged; Dec Chef 8.19/night; hand-checked
+  month totals with and without recapture; 85% costs about $2.1K of Dec revenue vs. about $8.4K at 0%), and
+  the settings POST validation. The browser was not used (local dev needs Basic Auth). Local dev has the trial set.
+- **Production**: run `node scripts/add-capacity-closed-dows.mjs` on the volume BEFORE `fly deploy` (else
+  `/api/capacity` 500s), then enter the closure on the Capacity tab.
+- **Weekday revenue targets (step 2, same day)**: `computeWeeklyRevenueTargets()` now returns `sets` and
+  `forDate(iso)`: the plain pattern (baseline) plus one set per closure start date. A set is MODELED from
+  pre-closure history: each closed weekday loses that area's average Toast revenue/covers on it, and
+  `closure_recapture_pct` of its covers lands on the open weekdays by `closure_recapture_weights` (JSON, relative;
+  Chef's: Wed 35 / Thu 35 / Fri 15 / Sat 15, entered on the Weekly Area Closures table), capped at each night's
+  remaining seats (capacity minus its average covers), valued at that night's own per-cover. Once 24 real open
+  nights (3+ per weekday) exist since the start date, the set switches to the real post-closure pattern with no
+  adjustment, so the model never double counts. The weekly goal (`weekly_revenue_benchmark`) is unchanged; shares
+  are renormalized, so the closure only reshapes the days (e.g. Dec Tue $7,784 -> $6,197 on a $50K week, local data).
+  Consumers use the set in force on each date: Dashboard This Week's Targets (plus a `closureNote` line),
+  Revenue Calendar (`pl.get.ts`), the buyout "normal night displaced" (`buyoutWeekdaysFor(rates, onDate)`, by
+  month start on the Revenue tab; latest pattern for Revenue Modeling), and the Edit Budget weekday projection
+  weights (pattern at month start). Area revenue is Toast check subtotals while targets are QBO core revenue, so
+  the closure's dollar effect is approximate. If the closure columns aren't migrated, targets fall back to the
+  plain pattern instead of failing the Dashboard.
+- **Migration changed**: `add-capacity-closed-dows.mjs` now also adds `closure_recapture_weights`. Re-run it on
+  production BEFORE deploying; the settings POST writes that column, so an old schema fails every Capacity save.
+- **Leave prompt hardening**: the "unsaved capacity edits" prompt now fires only for real draft edits (not the
+  capacity auto-correction), names what differs, and the page re-baselines its drafts explicitly after a save.
+  Prompted by a report of the prompt after a successful save that could not be reproduced locally (round trip
+  and UI flow both clean), so the exact cause is unconfirmed.
+- **Revenue Modeling scenario (step 3)**: built (a "Close an Area One Night a Week" what-if) but judged overkill
+  and kept OFF main, on branch `close-area-scenario` (one commit touching `revenue-modeling.vue` and
+  `revenue-modeling.get.ts`). Revenue Modeling still multiplies every area by one `operatingNightsPerYear`.
+  The Labor tab's Tuesday Chef's hours must be cut by hand (variable labor scales with covers, not schedules).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
