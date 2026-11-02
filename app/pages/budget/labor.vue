@@ -1,26 +1,32 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
-import { MONTH_NAMES, YEAR, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
+import { MONTH_NAMES, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear, useBudgetYearSelection } from '~/composables/useBudgetData'
+import { SEASONALITY_CAP_PCT, createLaborModel, seasonalityInfoFrom } from '~/utils/laborModel'
+import type { GroupKey, LaborAccount, LaborSlot as Slot, LaborTaxRates as TaxRates, MonthlyIndexEntry, PayType, RoleClass } from '~/utils/laborModel'
 
 useHead({ title: `${site.restaurantName} — Labor` })
 
-const asOfMonth = currentAsOfMonth()
-const asOfDay = currentAsOfDay()
+// The year this tab is modeling (2026 or 2027 — see BudgetYearToggle). For a year that hasn't
+// started, asOfMonth is 1 and nothing is "closed", so all 12 months are modeled and saved.
+const { year: selectedYear } = useBudgetYearSelection()
+const YEAR = selectedYear.value
+const asOfMonth = currentAsOfMonth(YEAR)
+const asOfDay = currentAsOfDay(YEAR)
 const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i))
 
 // For the "model changes" summary cards: the same year-of-budget_targets fetch Budget
 // Pace/Edit Budget already use, so already-closed/already-budgeted months (Jan through
 // the month before this page's own Sep-Dec-style range) have a real number to draw from,
 // not just this page's own forward-looking draft. loadYear() runs on mount automatically.
-const { monthlyData: yearBudgetData } = useBudgetYear()
+const { monthlyData: yearBudgetData } = useBudgetYear(YEAR)
 
 // Real per-month labor actuals from daily_line_items — used to make "Total labor, 2026"
 // (below) a true actual-YTD + modeled-remainder figure instead of budgeted-YTD +
 // modeled-remainder. Independent of yearBudgetData/budget_targets above, which sometimes
 // gets hand-overwritten with real numbers for a closed month (see CLAUDE.md) and so isn't
 // a reliable "what actually happened" signal on its own.
-const { monthlyActuals } = useActualsYear()
+const { monthlyActuals } = useActualsYear(YEAR)
 
 // Bump-step sizes for each number field's up/down arrows (see NumberStepper) — kept as
 // named constants rather than inlined so $/hr, hrs/wk, and annual salary each bump by a
@@ -40,19 +46,7 @@ const SALARY_STEP = 1000
 // staffing more than real demand warrants. Rather than trust the raw index outright, its
 // effect on hours is capped to a band around 100% — loosen or remove this once more years
 // of Cambridge St-specific data exist to validate the shape against.
-const SEASONALITY_CAP_PCT = 15
 
-type PayType = 'hourly' | 'salary' | 'overtime' | 'flat' | 'tax'
-type RoleClass = 'direct' | 'supervision' | 'overhead' | 'growth'
-type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
-type Slot = { id: number | null, slotIndex: number, employeeName: string, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate: string }
-type LaborAccount = {
-  accountId: number, accountNumber: string | null, name: string, groupKey: GroupKey, payType: PayType,
-  scalesWithSeasonality: boolean, otHours: number, otBaseGroup: 'boh' | 'foh' | null, flatAmount: number,
-  taxKey: 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null, isHidden: boolean, roleClass: RoleClass | null, slots: Slot[]
-}
-type TaxRates = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number, taxableTipsPerPayroll: number }
-type MonthlyIndexEntry = { month: number, indexPct: number | null, years: number[] }
 
 const GROUP_LABEL: Record<GroupKey, string> = {
   boh: 'Back of House', foh: 'Front of House', management: 'Management Salaries',
@@ -153,6 +147,8 @@ async function loadAll() {
     for (const a of actualsRes.accounts) map[a.accountId] = a.amount
     currentMonthActuals.value = map
     hasCurrentMonthActuals.value = actualsRes.accounts.length > 0
+    await nextTick()
+    savedSnapshot.value = editableSnapshot()
   } catch (err: any) {
     loadError.value = err?.data?.statusMessage || err?.message || 'Failed to load labor data'
   } finally {
@@ -185,21 +181,21 @@ function toggleHidden(account: LaborAccount) {
 // which year(s) it's based on — everything the "show the math" note needs to render, in
 // one place, so the page is never applying an adjustment the user can't see the reasoning
 // for. capped defaults to 100 (no adjustment) when there's no real data for that month.
-function seasonalityInfoFor(month: number): { raw: number | null, capped: number, years: number[], wasCapped: boolean } {
-  const entry = monthlyIndex.value.find(m => m.month === month)
-  const raw = entry?.indexPct ?? null
-  const years = entry?.years ?? []
-  if (raw === null) return { raw: null, capped: 100, years, wasCapped: false }
-  const capped = Math.min(100 + SEASONALITY_CAP_PCT, Math.max(100 - SEASONALITY_CAP_PCT, raw))
-  return { raw, capped, years, wasCapped: Math.round(capped) !== Math.round(raw) }
+function seasonalityInfoFor(month: number) {
+  return seasonalityInfoFrom(monthlyIndex.value, month)
 }
 
-// This slot's effective hours for a given month, scaled by the real (capped) historical
-// demand index when the parent account has seasonal scaling on — see schema.sql's
-// labor_position_settings comment.
-function effectiveHours(account: LaborAccount, typicalHours: number, month: number): number {
-  return account.scalesWithSeasonality ? typicalHours * (seasonalityInfoFor(month).capped / 100) : typicalHours
-}
+// The payroll math itself (hours x rate x Fridays, OT, payroll taxes) lives in
+// app/utils/laborModel.ts so the Budget tab can price any month of any year with it.
+const {
+  effectiveHours, blendedRate, slotWeeklyDollars, slotMonthlyDollars, accountEffectiveHours,
+  accountWeeklyDollars, wageSubjectTotal, taxBaseFor, taxRateFor, accountMonthlyDollars
+} = createLaborModel({
+  year: YEAR,
+  accounts: () => accounts.value,
+  taxRates: () => taxRates.value,
+  seasonalPct: month => seasonalityInfoFor(month).capped
+})
 
 // One global on/off switch rather than a per-role checkbox — added after the user said
 // they expect to scale every hourly role the same way, making a per-role toggle just
@@ -213,21 +209,6 @@ function setGlobalSeasonality(value: boolean) {
   for (const a of accounts.value) {
     if (a.payType === 'hourly' || a.payType === 'overtime') a.scalesWithSeasonality = value
   }
-}
-
-// $/hr blended across every slot in a BOH/FOH group's hourly accounts, weighted by each
-// slot's typical (pre-seasonality) hours — the base rate BOH/FOH OT is computed against.
-function blendedRate(group: 'boh' | 'foh'): number {
-  let weightedSum = 0
-  let totalHours = 0
-  for (const acc of accounts.value) {
-    if (acc.groupKey !== group || acc.payType !== 'hourly') continue
-    for (const s of acc.slots) {
-      weightedSum += s.hourlyRate * s.weeklyHours
-      totalHours += s.weeklyHours
-    }
-  }
-  return totalHours > 0 ? weightedSum / totalHours : 0
 }
 
 // Converts the OT trailing-$/week hint (from trailingActuals, keyed by the OT account's
@@ -267,66 +248,6 @@ function impliedWeeklyHours(account: LaborAccount): number | null {
   return weeklyAvg / rate
 }
 
-function slotWeeklyDollars(account: LaborAccount, slot: Slot, month: number): number {
-  return account.payType === 'hourly' ? slot.hourlyRate * effectiveHours(account, slot.weeklyHours, month) : 0
-}
-// Payroll Fridays in a month that this person is actually paid: all of them, or only those
-// on/after their first paycheck date when one is set (a mid-month hire). Compared as local
-// y/m/d components, never through a UTC-parsed Date, to avoid timezone drift.
-function slotFridays(slot: Slot, month: number): number {
-  const total = fridaysInMonth(YEAR, month)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(slot.firstPaycheckDate)) return total
-  const [fy, fm, fd] = slot.firstPaycheckDate.split('-').map(Number)
-  const monthStart = new Date(YEAR, month - 1, 1)
-  const monthEnd = new Date(YEAR, month, 0)
-  const from = new Date(fy, fm - 1, fd)
-  if (from <= monthStart) return total
-  if (from > monthEnd) return 0
-  return countFridays(from, monthEnd)
-}
-function slotMonthlyDollars(account: LaborAccount, slot: Slot, month: number): number {
-  return slotWeeklyDollars(account, slot, month) * slotFridays(slot, month)
-}
-function slotSalaryMonthlyDollars(slot: Slot, month: number): number {
-  return slot.weeklySalary * slotFridays(slot, month)
-}
-// Total scaled hrs/wk across every person on an hourly role, for the role's totals row —
-// each slot's own effectiveHours (seasonality-scaled), summed, not the raw typical hours.
-function accountEffectiveHours(account: LaborAccount, month: number): number {
-  return account.slots.reduce((sum, s) => sum + effectiveHours(account, s.weeklyHours, month), 0)
-}
-
-function accountWeeklyDollars(account: LaborAccount, month: number): number {
-  if (account.payType === 'hourly') {
-    return account.slots.reduce((sum, s) => sum + slotWeeklyDollars(account, s, month), 0)
-  }
-  if (account.payType === 'salary') {
-    return account.slots.reduce((sum, s) => sum + s.weeklySalary, 0)
-  }
-  if (account.payType === 'overtime' && account.otBaseGroup) {
-    return 1.5 * blendedRate(account.otBaseGroup) * effectiveHours(account, account.otHours, month)
-  }
-  return 0
-}
-
-function wageSubjectTotal(month: number): number {
-  let total = 0
-  for (const acc of accounts.value) {
-    if (acc.payType === 'tax' || acc.groupKey === 'benefits') continue
-    total += accountMonthlyDollars(acc, month)
-  }
-  return total
-}
-
-// Social Security and Medicare apply to wages PLUS reported tips; FUTA/SUTA/PFML stay on
-// wages only. Tips are entered per weekly payroll, so the monthly figure scales by Fridays.
-function taxBaseFor(key: NonNullable<LaborAccount['taxKey']>, month: number): number {
-  const wages = wageSubjectTotal(month)
-  return key === 'medicare' || key === 'social_security' ? wages + taxRates.value.taxableTipsPerPayroll * fridaysInMonth(YEAR, month) : wages
-}
-function taxRateFor(key: NonNullable<LaborAccount['taxKey']>): number {
-  return { medicare: taxRates.value.medicareRate, social_security: taxRates.value.socialSecurityRate, futa: taxRates.value.futaRate, suta_ma: taxRates.value.sutaMaRate, pfml_ma: taxRates.value.pfmlMaRate }[key]
-}
 function setTaxRate(key: NonNullable<LaborAccount['taxKey']>, pct: number) {
   const field = { medicare: 'medicareRate', social_security: 'socialSecurityRate', futa: 'futaRate', suta_ma: 'sutaMaRate', pfml_ma: 'pfmlMaRate' }[key] as keyof TaxRates
   taxRates.value[field] = Number.isFinite(pct) ? pct / 100 : 0
@@ -339,14 +260,6 @@ function setTaxRate(key: NonNullable<LaborAccount['taxKey']>, pct: number) {
 // number to copy in, rather than a fixed constant).
 function isFixedRateTax(key: LaborAccount['taxKey']): boolean {
   return key === 'medicare' || key === 'social_security'
-}
-
-function accountMonthlyDollars(account: LaborAccount, month: number): number {
-  if (account.payType === 'flat') return account.flatAmount
-  if (account.payType === 'tax') return account.taxKey ? taxRateFor(account.taxKey) * taxBaseFor(account.taxKey, month) : 0
-  if (account.payType === 'hourly') return account.slots.reduce((sum, s) => sum + slotMonthlyDollars(account, s, month), 0)
-  if (account.payType === 'salary') return account.slots.reduce((sum, s) => sum + slotSalaryMonthlyDollars(s, month), 0)
-  return accountWeeklyDollars(account, month) * fridaysInMonth(YEAR, month)
 }
 
 function groupMonthlyTotal(group: GroupKey, month: number): number {
@@ -608,6 +521,17 @@ function trailingProjectedMonthDollars(accountId: number): number | null {
   return weeklyAvg != null ? weeklyAvg * fridaysInMonth(YEAR, asOfMonth) : null
 }
 
+// Unsaved-edit tracking for the year toggle's "discard changes?" prompt: a snapshot of the
+// editable state as last loaded/saved, compared against the live one.
+function editableSnapshot(): string {
+  return JSON.stringify({ accounts: accounts.value, taxRates: taxRates.value })
+}
+const savedSnapshot = ref<string | null>(null)
+const hasUnsavedChanges = computed(() => savedSnapshot.value !== null && editableSnapshot() !== savedSnapshot.value)
+function confirmLeave(): boolean {
+  return !hasUnsavedChanges.value || window.confirm('You have unsaved changes on this page. Switch year and discard them?')
+}
+
 const saveStatus = ref<'idle' | 'saving' | 'done' | 'error'>('idle')
 const saveMessage = ref('')
 
@@ -649,8 +573,9 @@ async function save() {
   <div>
     <PageHeader
       page-name="Labor"
-      description="Edit rates, hours, and salaries — the monthly budget is computed from payroll frequency and real seasonal demand"
+      :description="`Edit rates, hours, and salaries — the monthly budget is computed from payroll frequency and real seasonal demand · ${YEAR}`"
     />
+    <BudgetYearToggle :confirm-leave="confirmLeave" />
 
     <div v-if="loadError" class="drill-card">
       <span class="chip critical">Couldn't load labor data</span>
@@ -660,11 +585,29 @@ async function save() {
 
     <template v-else>
       <div class="scope-row">
-        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong> — already-closed months stay as budgeted.</span>
+        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong><template v-if="asOfMonth > 1"> — already-closed months stay as budgeted.</template><template v-else> — every month of the year.</template></span>
+        <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
         <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="save">Save</button>
       </div>
       <div v-if="saveStatus === 'done'" class="chip good">{{ saveMessage }}</div>
       <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
+
+      <!-- Payroll posts every Friday, so a month with five Fridays carries a fifth paycheck
+           of every salary and hourly role. This is the Friday adjustment the monthly budget
+           is built on — shown so a high month reads as calendar, not as a staffing change. -->
+      <div class="drill-card payroll-calendar">
+        <div class="payroll-calendar-head">
+          <span class="chip accent">Payroll calendar {{ YEAR }}</span>
+          <span class="quiet-note">Each month's labor = weekly cost &times; its payroll Fridays, so five-Friday months run about 25% higher.</span>
+        </div>
+        <div class="payroll-calendar-grid">
+          <div v-for="m in targetMonths" :key="m" :class="['payroll-month', { five: fridaysInMonth(YEAR, m) >= 5 }]">
+            <span class="pm-name">{{ MONTH_NAMES[m - 1] }}</span>
+            <span class="pm-fridays">{{ fridaysInMonth(YEAR, m) }} Fridays</span>
+            <strong class="pm-total">{{ fmt(modeledLaborTotal(m)) }}</strong>
+          </div>
+        </div>
+      </div>
 
       <!-- Trailing-actual comparison row: a second, real-data-only answer to the same 5
            questions the modeled row below asks, for an at-a-glance "does my model roughly
@@ -997,6 +940,15 @@ async function save() {
 </template>
 
 <style scoped>
+.payroll-calendar { margin-bottom: 22px; }
+.payroll-calendar-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.payroll-calendar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.payroll-month { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px; background: var(--surface); }
+.payroll-month.five { border-color: var(--accent); background: var(--accent-wash); }
+.pm-name { font-size: 12px; color: var(--ink-2); }
+.pm-fridays { font-size: 12px; color: var(--ink-2); }
+.pm-total { font-size: 14px; }
+.payroll-month.five .pm-fridays { color: var(--accent-text); font-weight: 600; }
 .state-note { padding: 40px 0; text-align: center; color: var(--ink-3); font-size: 14px; }
 .drill-card {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;

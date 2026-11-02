@@ -59,8 +59,13 @@ function monthRange(year: number, month: number): { start: string, end: string }
   return { start: `${year}-${mm}-01`, end: `${year}-${mm}-${String(daysInMonth(year, month)).padStart(2, '0')}` }
 }
 
-export default defineEventHandler(() => {
+export default defineEventHandler((event) => {
   const db = useDb()
+  // Optional ?year= — only changes which calendar year the 12-month `months` array covers
+  // (operating days and the assumed Food/Beverage revenue depend on that year's calendar), so
+  // the Revenue tab can plan next year from the same Capacity assumptions. Actuals, the
+  // quick-look periods and everything else stay on the as-of year.
+  const requestedYear = Number(getQuery(event).year)
   const areas = db.prepare('SELECT * FROM capacity_areas ORDER BY id').all() as AreaRow[]
   const holidayRows = db.prepare('SELECT * FROM capacity_seasonality ORDER BY month').all() as HolidayRow[]
   const holidaysByMonth = new Map(holidayRows.map(r => [r.month, r.holiday_closures]))
@@ -307,9 +312,10 @@ export default defineEventHandler(() => {
   }
 
   // ---- Full year, month by month (for the month-tab detail view) ------
+  const monthsYear = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100 ? requestedYear : asOfYear
   const months = Array.from({ length: 12 }, (_, i) => {
     const month = i + 1
-    const { start, end } = monthRange(asOfYear, month)
+    const { start, end } = monthRange(monthsYear, month)
     return {
       month,
       holidayClosures: holidaysByMonth.get(month) ?? 0,
@@ -325,5 +331,5 @@ export default defineEventHandler(() => {
   const trailing28 = areaBreakdownForMonth(asOfMonth, trailing28Start, asOfDate)
   const trailing28Nights = Math.max(0, ...trailing28.map(a => a.actualNights))
 
-  return { asOfDate, asOfYear, asOfMonth, areas, periods, months, trailing28: { start: trailing28Start, nights: trailing28Nights, areaBreakdown: trailing28 } }
+  return { asOfDate, asOfYear, asOfMonth, monthsYear, areas, periods, months, trailing28: { start: trailing28Start, nights: trailing28Nights, areaBreakdown: trailing28 } }
 })

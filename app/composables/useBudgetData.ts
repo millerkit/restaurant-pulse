@@ -21,8 +21,27 @@ export type BudgetAccount = {
 }
 export type MonthData = { year: number, month: number, accounts: BudgetAccount[] }
 
-// The only year this restaurant has any budget data for yet.
+// The current operating year — what every page other than the Budget/Revenue/Labor tabs
+// (Budget Pace, Cash Flow, Capacity, ...) is pinned to, and the default for every
+// year-aware helper below. The Budget, Revenue and Labor tabs let you plan the next year
+// too (BUDGET_YEARS) via useBudgetYearSelection().
 export const YEAR = 2026
+export const BUDGET_YEARS = [2026, 2027]
+
+// Which year the Budget/Revenue/Labor tabs are showing. Shared across those tabs and kept
+// in a cookie so it survives navigation and reloads. app.vue keys <NuxtPage> on this value,
+// so toggling remounts the page and its setup() re-reads the new year — pages can treat the
+// year as a constant for the life of the component.
+export function useBudgetYearSelection() {
+  const cookie = useCookie<number | null>('budget-year', { maxAge: 60 * 60 * 24 * 365, sameSite: 'lax' })
+  const normalize = (v: unknown) => (BUDGET_YEARS.includes(Number(v)) ? Number(v) : YEAR)
+  const year = useState<number>('budget-year', () => normalize(cookie.value))
+  function setYear(y: number) {
+    year.value = normalize(y)
+    cookie.value = year.value
+  }
+  return { year, setYear }
+}
 export const CATEGORIES: Category[] = ['revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense']
 export const CATEGORY_LABEL: Record<Category, string> = { revenue: 'Revenue', cogs: 'COGS', labor: 'Labor', opex: 'Operating Expenses', other_income: 'Other Income', other_expense: 'Other Expense' }
 export const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -195,10 +214,11 @@ export function hybridYearExpectedToDate(
   getMonthCategoryBudget: (month: number, cat: Category) => number | null,
   monthlyActuals: MonthActuals[],
   asOfMonth: number,
-  asOfDay: number
+  asOfDay: number,
+  year: number = YEAR
 ): Record<Category, number> {
   const targets = hybridMonthlyCategoryTargets(getMonthCategoryBudget, monthlyActuals, asOfMonth)
-  const frac = asOfDay / daysInMonth(YEAR, asOfMonth)
+  const frac = asOfDay / daysInMonth(year, asOfMonth)
   const result = {} as Record<Category, number>
   for (const cat of CATEGORIES) {
     let sum = 0
@@ -242,7 +262,7 @@ export function hybridYearTotalsPastActual(
   return totals
 }
 
-export function useBudgetYear() {
+export function useBudgetYear(year: number = YEAR) {
   const monthlyData = ref<MonthData[]>([])
   const loadError = ref<string | null>(null)
   const loading = ref(true)
@@ -252,7 +272,7 @@ export function useBudgetYear() {
     loadError.value = null
     try {
       const results = await Promise.all(
-        Array.from({ length: 12 }, (_, i) => $fetch<MonthData>('/api/budget/targets', { query: { year: YEAR, month: i + 1 } }))
+        Array.from({ length: 12 }, (_, i) => $fetch<MonthData>('/api/budget/targets', { query: { year, month: i + 1 } }))
       )
       monthlyData.value = results
     } catch (err: any) {
@@ -304,13 +324,17 @@ export function monthsElapsedInYear(year: number): number {
 // confirmed against production 2026-07-29). Clamped to this app's only
 // budgeted year (YEAR), same as monthsElapsedInYear() above, so viewing a
 // year with no real "today" inside it doesn't produce a nonsensical value.
-export function currentAsOfMonth(): number {
+// A year that hasn't started yet (next year's plan) has nothing elapsed: month 1, day 0.
+// A year that's fully over reads as its last day.
+export function currentAsOfMonth(year: number = YEAR): number {
   const now = new Date()
-  return now.getFullYear() === YEAR ? now.getMonth() + 1 : 12
+  if (year > now.getFullYear()) return 1
+  return now.getFullYear() === year ? now.getMonth() + 1 : 12
 }
-export function currentAsOfDay(): number {
+export function currentAsOfDay(year: number = YEAR): number {
   const now = new Date()
-  return now.getFullYear() === YEAR ? now.getDate() : daysInMonth(YEAR, 12)
+  if (year > now.getFullYear()) return 0
+  return now.getFullYear() === year ? now.getDate() : daysInMonth(year, 12)
 }
 
 export type MonthActuals = { month: number, hasData: boolean, totals: Record<Category, number>, ownerCompLabor: number }
@@ -318,14 +342,14 @@ export type MonthActuals = { month: number, hasData: boolean, totals: Record<Cat
 // Real per-month actuals from daily_line_items, independent of
 // budget_targets — see actuals.get.ts. Empty (hasData: false for every
 // month) until a real QBO backfill/sync has populated this year's data.
-export function useActualsYear() {
+export function useActualsYear(year: number = YEAR) {
   const monthlyActuals = ref<MonthActuals[]>([])
   const loadError = ref<string | null>(null)
 
   async function loadActualsYear() {
     loadError.value = null
     try {
-      const result = await $fetch<{ year: number, months: MonthActuals[] }>('/api/budget/actuals', { query: { year: YEAR } })
+      const result = await $fetch<{ year: number, months: MonthActuals[] }>('/api/budget/actuals', { query: { year } })
       monthlyActuals.value = result.months
     } catch (err: any) {
       loadError.value = err?.data?.statusMessage || err?.message || 'Failed to load actuals'
@@ -354,11 +378,11 @@ export const CATEGORY_DIRECTION: Record<Category, Direction> = {
 // currentAsOfMonth/currentAsOfDay above. Shared here so every page
 // computing a year-pace expectation (Budget Pace's Year toggle, Edit
 // Budget's year live preview) uses the identical real number.
-export function currentYearDayFraction(): number {
+export function currentYearDayFraction(year: number = YEAR): number {
   const now = new Date()
-  if (now.getFullYear() < YEAR) return 0
-  if (now.getFullYear() > YEAR) return 1
-  return dayOfYear(YEAR, now.getMonth() + 1, now.getDate()) / daysInYear(YEAR)
+  if (now.getFullYear() < year) return 0
+  if (now.getFullYear() > year) return 1
+  return dayOfYear(year, now.getMonth() + 1, now.getDate()) / daysInYear(year)
 }
 
 export function paceStatus(actualPct: number, expectedPct: number, direction: Direction) {

@@ -4731,6 +4731,47 @@ $15,520 ($199,579 to $184,059 excluding SBA), and the weekly goal drops about $8
   $2,909 quoted to the lender because the schedule's balance ($143,160) is $478 above the $142,682 used then:
   confirm the note's true balance and re-run with `--balance=` if needed.
 
+## 2027 budget: year toggle + "Build 2027 budget" — 2026-11-02
+
+The Budget, Revenue and Labor tabs now have a 2026 / 2027 toggle ([`app/components/BudgetYearToggle.vue`](app/components/BudgetYearToggle.vue)),
+so next year can be planned in the same screens. Budget Pace and every other page stay on 2026.
+
+- **Selection is shared state, pages remount on change.** `useBudgetYearSelection()`
+  ([`useBudgetData.ts`](app/composables/useBudgetData.ts)) holds the year in `useState` + a `budget-year` cookie;
+  [`app/app.vue`](app/app.vue) keys `<NuxtPage>` on it for `/budget/*` (except `/budget`), so each page's setup re-runs with
+  the new year and can treat `YEAR` as a local constant. Unsaved edits prompt before switching. `YEAR` the export is
+  still the current operating year (2026) and the default for the helpers, which gained optional `year` params
+  (`useBudgetYear`, `useActualsYear`, `currentAsOfMonth/Day`, `hybridYearExpectedToDate`, `currentYearDayFraction`).
+  For a year that hasn't started, `currentAsOfMonth` is 1 and `currentAsOfDay` is 0: nothing closed, no live pace
+  card, all 12 months editable, and the Labor tab models/saves all 12 months.
+- **"Build 2027 budget"** ([`BuildNextYearBudget.vue`](app/components/BuildNextYearBudget.vue), top of Edit Budget when the
+  selected year hasn't started) previews, then writes, three things to `budget_targets` for every month: (1) **fixed
+  opex** = December 2026's budget for every `cost_behavior='fixed'` leaf account; (2) **revenue** = the Capacity tab's
+  Food/Beverage projection for each 2027 month, split across the revenue accounts the same way the Revenue tab's
+  "Recompute from Capacity" does (`/api/capacity?year=` now accepts a year for its `months` array: operating days
+  and holiday closures follow that year's calendar); (3) **labor** = the Labor tab's saved rates/hours/salaries.
+  COGS, variable opex, event/catering/retail and buyouts are deliberately not touched, so 2027 net income reads far too
+  high until they're budgeted. It runs client-side against whichever DB the app is on (local dev's budget differs from
+  production's), and shows how many existing entries it would replace.
+- **7020 Loan Interest is the exception to "carry December forward"**: December includes the one-time Dec 20 catch-up
+  interest, so by default it is budgeted from `loan_schedule`'s regular monthly interest for 2027
+  ([`server/api/budget/loan-interest.get.ts`](server/api/budget/loan-interest.get.ts)); a checkbox restores the plain
+  December carry-over.
+  Months where the Miller deferral leaves no payment row (Jan–Jun 2027) also get the monthly accrued interest ($455.73,
+  read from `loan_schedule_miller_backup`'s first row), matching the QBO accrual entry (added 2026-11-02; the Miller
+  deferral is applied in production).
+- **Labor math moved to [`app/utils/laborModel.ts`](app/utils/laborModel.ts)** (`createLaborModel`), shared by the Labor tab
+  and the Build action, so both price a month identically. Payroll posts every Friday, so a month's cost is weekly $
+  x that month's Fridays; **2027 has 53 Fridays: five paychecks in Jan, Apr, Jul, Oct and Dec**. The Labor tab shows
+  a payroll calendar with each month's modeled total.
+- **Caveats**: payroll-tax rates come from the Labor tab as saved (SUTA is currently the reduced 2026 rate; rates and wage
+  bases reset each January, see the SUTA note in the Oct 24 section); fixed utilities (gas, electricity) are flat at
+  December's winter level all year; the Labor tab's hand-set 2026 hires/raises carry over as-is.
+- Verified in local dev (backed up, restored after): Jan–Dec revenue/fixed totals hand-reconciled to the Capacity API
+  and loan schedule; labor 5- vs 4-Friday months matched a hand calculation with synthetic rates (local dev has no saved
+  rates, so real labor totals can only be judged in production); 2026 Labor tab output unchanged. Not clicked through
+  on production.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

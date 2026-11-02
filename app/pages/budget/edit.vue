@@ -1,18 +1,26 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, varianceTint } from '~/composables/useBudgetData'
+import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
-const { monthlyData, loadError, loadYear } = useBudgetYear()
-const { monthlyActuals, loadActualsYear } = useActualsYear()
+// The year being edited (2026, or 2027 once planning ahead) — see BudgetYearToggle. app.vue
+// remounts this page when it changes, so it is a constant for this component's lifetime.
+const { year: selectedYear } = useBudgetYearSelection()
+const YEAR = selectedYear.value
+// A year that hasn't started yet has no actuals: nothing is closed or current, every month is
+// plain editable budget, and the "Build next year's budget" starter shows above the table.
+const isPlanningYear = YEAR > new Date().getFullYear()
+
+const { monthlyData, loadError, loadYear } = useBudgetYear(YEAR)
+const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
 
 // Real "as of" month/day the Live Preview card paces against — see
 // currentAsOfMonth/currentAsOfDay in useBudgetData.ts for why this must be
 // the real date, not a frozen narration date.
-const asOfMonth = currentAsOfMonth()
-const asOfDay = currentAsOfDay()
-const asOfLabel = `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
+const asOfMonth = currentAsOfMonth(YEAR)
+const asOfDay = currentAsOfDay(YEAR)
+const asOfLabel = isPlanningYear ? `${YEAR} (planning)` : `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
@@ -616,7 +624,7 @@ function accountVisible(acc: BudgetAccount): boolean {
 // so this recomputes a compact version of that page's pace cards straight
 // from the draft values above, gated to only the one month where it means
 // anything.
-const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === asOfMonth)
+const showLivePace = computed(() => !viewingAnnualTotal.value && editMonth.value === asOfMonth && isMonthCurrent(YEAR, asOfMonth))
 const livePaceExpectedPct = computed(() => (asOfDay / daysInMonth(YEAR, asOfMonth)) * 100)
 // Real actual-to-date from daily_line_items (selectedMonthAccountActuals),
 // matching the per-line-item table below and the Year live preview card,
@@ -862,7 +870,7 @@ const yearHybridTotals = computed(() => hybridYearTotals(getMonthCategoryBudgetL
 // hybridYearExpectedToDate) — replaces the flat currentYearDayFraction()
 // this card used previously, bringing it in line with the Budget Pace
 // page's own year view and the Dashboard.
-const yearHybridExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth, asOfDay))
+const yearHybridExpectedToDate = computed(() => hybridYearExpectedToDate(getMonthCategoryBudgetLive, monthlyActuals.value, asOfMonth, asOfDay, YEAR))
 
 // The Total tab's own displayed figures — real actuals for already-synced past months,
 // full budget for this month and every future one (see hybridYearTotalsPastActual). Kept
@@ -1314,6 +1322,9 @@ const hasUnsavedChanges = computed(() => {
 })
 
 const UNSAVED_CHANGES_MESSAGE = 'You have unsaved budget edits for this month. Discard them and continue?'
+function confirmYearSwitch(): boolean {
+  return !hasUnsavedChanges.value || window.confirm(UNSAVED_CHANGES_MESSAGE)
+}
 
 // Every way of leaving the currently-edited month with unsaved changes still
 // in the input boxes: switching to another month tab, jumping to the Total
@@ -1439,6 +1450,7 @@ function exportForQuickBooks() {
       :as-of-label="asOfLabel"
       @synced="loadYear(); loadActualsYear()"
     />
+    <BudgetYearToggle :confirm-leave="confirmYearSwitch" />
 
     <div v-if="loadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>
@@ -1446,6 +1458,7 @@ function exportForQuickBooks() {
     </div>
 
     <template v-else>
+      <BuildNextYearBudget v-if="isPlanningYear" :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
       <section>
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
-import { CATEGORY_LABEL, MONTH_NAMES, YEAR, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, varianceTint } from '~/composables/useBudgetData'
+import { CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
 
 // Mirrors server/utils/core-revenue.ts's CORE_REVENUE_ACCOUNT_NUMBERS — duplicated rather
 // than imported since server/utils isn't part of the client bundle (see this file's other
@@ -14,21 +14,27 @@ const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4
 
 useHead({ title: `${site.restaurantName} — Revenue` })
 
-const { monthlyData, loadError, loadYear } = useBudgetYear()
-const { monthlyActuals, loadActualsYear } = useActualsYear()
+// Which year this tab is planning (2026 or 2027 — see BudgetYearToggle); app.vue remounts the
+// page on a change, so it is a constant for this component's lifetime.
+const { year: selectedYear } = useBudgetYearSelection()
+const YEAR = selectedYear.value
+const isPlanningYear = YEAR > new Date().getFullYear()
+
+const { monthlyData, loadError, loadYear } = useBudgetYear(YEAR)
+const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
 
 // Revenue projection is forward-looking only — a past/closed month's revenue is already
 // final and shown read-only on the Edit Budget page (which still displays every category's
 // real actual vs. budget for a closed month, unaffected by this page). Same asOfMonth..Dec
 // scope as the Labor tab (app/pages/budget/labor.vue), just rendered as real month tabs per
 // the user's explicit ask, rather than Labor's single-view-with-summary-cards approach.
-const asOfMonth = currentAsOfMonth()
-const asOfDay = currentAsOfDay()
-const asOfLabel = `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
+const asOfMonth = currentAsOfMonth(YEAR)
+const asOfDay = currentAsOfDay(YEAR)
+const asOfLabel = isPlanningYear ? `${YEAR} (planning)` : `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i))
 
 const editMonth = ref(asOfMonth)
-const selectedMonthIsCurrent = computed(() => editMonth.value === asOfMonth)
+const selectedMonthIsCurrent = computed(() => editMonth.value === asOfMonth && !isPlanningYear)
 
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
@@ -485,7 +491,7 @@ type CapacityMonth = { month: number, assumed: CapacityAssumedMonth }
 const capacityMonths = ref<CapacityMonth[] | null>(null)
 async function loadCapacityMonths() {
   try {
-    const result = await $fetch<{ months: CapacityMonth[] }>('/api/capacity')
+    const result = await $fetch<{ months: CapacityMonth[] }>('/api/capacity', { query: { year: YEAR } })
     capacityMonths.value = result.months?.length ? result.months : null
   } catch {
     capacityMonths.value = null
@@ -772,6 +778,9 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
   e.preventDefault()
   e.returnValue = ''
 }
+function confirmYearSwitch(): boolean {
+  return !hasUnsavedChanges.value || window.confirm(UNSAVED_CHANGES_MESSAGE)
+}
 onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload))
 
@@ -810,6 +819,7 @@ async function saveRevenue() {
       :as-of-label="asOfLabel"
       @synced="loadYear(); loadActualsYear()"
     />
+    <BudgetYearToggle :confirm-leave="confirmYearSwitch" />
 
     <div v-if="loadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>
