@@ -59,6 +59,12 @@ const weekTotals = computed(() => {
   return { covers, spend: covers > 0 ? revenue / covers : null, needed }
 })
 const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString()}`
+// Weekly core sales a layer needs: covers/night x avg spend x operating nights per week.
+const weeklyRevenue = (coversPerNight: number | null) => {
+  const d = data.value
+  if (!d || coversPerNight == null || d.avgSpend == null) return '—'
+  return fmtMoney(coversPerNight * d.avgSpend * d.weekdays.length)
+}
 const fmtCovers = (n: number | null) => n == null ? '—' : String(Math.round(n))
 
 // Status of the recent average vs. a needed figure. The glyph carries the meaning (not just
@@ -114,7 +120,7 @@ const sensitivity = computed(() => {
 
         <table class="be-table">
           <thead>
-            <tr><td>layer (cumulative)</td><td class="num">$ / mo</td><td class="num">covers / night</td><td class="num">vs. recent avg</td></tr>
+            <tr><td>layer (cumulative)</td><td class="num">revenue / wk</td><td class="num">covers / night</td><td class="num">vs. recent avg</td></tr>
           </thead>
           <tbody>
             <tr v-for="t in data.tiers" :key="t.key" :class="{ selected: t.key === selectedTier }" @click="selectedTier = t.key">
@@ -124,7 +130,7 @@ const sensitivity = computed(() => {
                   <span><strong>{{ t.label }}</strong><span class="be-sub">{{ t.detail }}</span></span>
                 </label>
               </td>
-              <td class="num">{{ fmtMoney(t.monthly) }}</td>
+              <td class="num">{{ weeklyRevenue(t.coversPerNight) }}</td>
               <td class="num"><strong>{{ fmtCovers(t.coversPerNight) }}</strong></td>
               <td class="num">
                 <span v-if="status(data.avgCoversPerNight, t.coversPerNight)" :class="['chip', status(data.avgCoversPerNight, t.coversPerNight)!.cls]">{{ status(data.avgCoversPerNight, t.coversPerNight)!.text }}</span>
