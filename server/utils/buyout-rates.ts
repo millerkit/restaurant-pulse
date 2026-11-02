@@ -22,8 +22,11 @@ export function loadBuyoutRates(db: ReturnType<typeof useDb>): BuyoutRates {
   }
 }
 
-export function buyoutWeekdaysFor(rates: BuyoutRates): BuyoutWeekday[] {
-  const weeklyTargets = computeWeeklyRevenueTargets()
+// onDate: the night being planned for. A weekly area closure (e.g. Chef's Counter dark on Tuesdays)
+// changes what a normal night makes, so a buyout displaces less. Omit it to plan for the latest
+// pattern in force (the annual Revenue Modeling what-if).
+export function buyoutWeekdaysFor(rates: BuyoutRates, onDate: string = '9999-12-31'): BuyoutWeekday[] {
+  const weeklyTargets = computeWeeklyRevenueTargets().forDate(onDate)
   return weeklyTargets.days.map(d => ({
     dow: d.dow,
     label: d.label,

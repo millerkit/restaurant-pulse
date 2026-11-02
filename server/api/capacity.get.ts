@@ -27,7 +27,27 @@ import { CORE_REVENUE_ACCOUNT_NUMBERS } from '../utils/core-revenue'
 type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
   capacity_nov_apr: number | null, capacity_may_oct: number | null,
-  per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null
+  per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null,
+  closed_dows: string | null, closed_from: string | null, closure_recapture_pct: number
+}
+
+// Tue-Sun: the restaurant's regular service nights (Monday is the standing closure).
+const SERVICE_NIGHTS_PER_WEEK = 6
+// Weekly closure of one area (capacity_areas.closed_dows/closed_from — see schema.sql).
+// Before closed_from, or with no closure configured, uplift is 1 and nothing changes.
+// After it, the area is dark on its closed weekdays and its other nights carry
+// recapture% of the closed nights' covers: with `closed` closed nights a week,
+// weekly covers become base*(6 - closed*(1-r)), spread over the 6-closed open nights.
+function closureOn(area: AreaRow, iso: string, dow: number): { closedToday: boolean, uplift: number } {
+  if (!area.closed_from || iso < area.closed_from || !area.closed_dows) return { closedToday: false, uplift: 1 }
+  const closed = new Set(area.closed_dows.split(',').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6 && n !== 1))
+  if (closed.size === 0) return { closedToday: false, uplift: 1 }
+  const open = SERVICE_NIGHTS_PER_WEEK - closed.size
+  const r = Math.min(1, Math.max(0, (area.closure_recapture_pct ?? 0) / 100))
+  return {
+    closedToday: closed.has(dow),
+    uplift: open > 0 ? (SERVICE_NIGHTS_PER_WEEK - closed.size * (1 - r)) / open : 1
+  }
 }
 type HolidayRow = { month: number, holiday_closures: number }
 type AreaMonthRow = { area_id: number, month: number, expected_covers: number }
@@ -91,16 +111,45 @@ export default defineEventHandler((event) => {
   // CLAUDE.md) has a real target for each of the Food (4010) and Beverage
   // (4022/4024/4026/4028) revenue account groups, not just a blended total.
   // revenue is always revenueFood + revenueBeverage.
-  function nightlyExpectedForMonth(month: number) {
+  // One area's expected covers / capacity on a specific date, or null if the
+  // area is dark that day (weekly closure — see closureOn). The stored
+  // expected_covers is the pre-closure per-Tue-Sun-night baseline; the
+  // closure uplift is applied here, capped at the area's nightly capacity.
+  function areaExpectedOn(area: AreaRow, iso: string) {
+    const [y, m, day] = iso.split('-').map(Number)
+    const closure = closureOn(area, iso, new Date(Date.UTC(y, m - 1, day)).getUTCDay())
+    if (closure.closedToday) return null
+    const cap = areaCapacity(area, m)
+    let covers = areaMonth.get(`${area.id}:${m}`) ?? 0
+    if (closure.uplift !== 1) covers = Math.min(covers * closure.uplift, cap)
+    return { covers, maxCovers: cap }
+  }
+  function nightlyExpectedOn(iso: string) {
     let covers = 0, revenueFood = 0, revenueBeverage = 0, maxCovers = 0
     for (const area of areas) {
-      const c = areaMonth.get(`${area.id}:${month}`) ?? 0
-      covers += c
-      revenueFood += c * area.per_cover_revenue_food
-      revenueBeverage += c * area.per_cover_revenue_beverage
-      maxCovers += areaCapacity(area, month)
+      const e = areaExpectedOn(area, iso)
+      if (!e) continue
+      covers += e.covers
+      revenueFood += e.covers * area.per_cover_revenue_food
+      revenueBeverage += e.covers * area.per_cover_revenue_beverage
+      maxCovers += e.maxCovers
     }
     return { covers, revenue: revenueFood + revenueBeverage, revenueFood, revenueBeverage, maxCovers }
+  }
+  // Average nightly figures across a full calendar month's service nights —
+  // what a flat "holiday closure" night is worth, now that nights differ by weekday.
+  function avgNightlyForMonth(year: number, month: number) {
+    const acc = { covers: 0, revenue: 0, revenueFood: 0, revenueBeverage: 0, maxCovers: 0 }
+    let n = 0
+    for (let day = 1; day <= daysInMonth(year, month); day++) {
+      if (!isOperatingDow(year, month, day)) continue
+      const night = nightlyExpectedOn(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+      acc.covers += night.covers; acc.revenue += night.revenue; acc.revenueFood += night.revenueFood
+      acc.revenueBeverage += night.revenueBeverage; acc.maxCovers += night.maxCovers
+      n++
+    }
+    if (n === 0) return acc
+    return { covers: acc.covers / n, revenue: acc.revenue / n, revenueFood: acc.revenueFood / n, revenueBeverage: acc.revenueBeverage / n, maxCovers: acc.maxCovers / n }
   }
 
   // Day-by-day sum over [startIso, endIso] — handles a range spanning a
@@ -116,7 +165,7 @@ export default defineEventHandler((event) => {
     while (d <= end) {
       const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate()
       if (isOperatingDow(y, m, day)) {
-        const nightly = nightlyExpectedForMonth(m)
+        const nightly = nightlyExpectedOn(`${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
         expectedCovers += nightly.covers
         expectedRevenue += nightly.revenue
         expectedRevenueFood += nightly.revenueFood
@@ -139,7 +188,7 @@ export default defineEventHandler((event) => {
     if (y1 !== y2 || m1 !== m2 || d1 !== 1 || d2 !== daysInMonth(y1, m1)) return null
     const holidayClosures = holidaysByMonth.get(m1) ?? 0
     if (holidayClosures === 0) return null
-    const nightly = nightlyExpectedForMonth(m1)
+    const nightly = avgNightlyForMonth(y1, m1)
     return {
       covers: nightly.covers * holidayClosures,
       revenue: nightly.revenue * holidayClosures,
@@ -168,7 +217,7 @@ export default defineEventHandler((event) => {
       operatingDays,
       expectedCovers,
       expectedRevenue,
-      // Food/Beverage split of expectedRevenue — see nightlyExpectedForMonth
+      // Food/Beverage split of expectedRevenue — see nightlyExpectedOn
       // above — consumed by the Edit Budget page's "Recompute Revenue from
       // Capacity" action, which only ever calls this for a full calendar
       // month (see CLAUDE.md).
@@ -277,6 +326,20 @@ export default defineEventHandler((event) => {
   function areaBreakdownForMonth(month: number, startIso: string, endIso: string) {
     const actualByArea = actualAreaForMonth(startIso, endIso)
     const byWeekday = weekdayCoversForRange(startIso, endIso)
+    // Assumed covers/night per night the AREA is open in the range (a weekly
+    // closure shortens its week, and lifts its other nights), the same unit as
+    // actualCoversPerNight below, which divides by nights with data.
+    const assumedPerOpenNight = (a: AreaRow): number => {
+      let sum = 0, nights = 0
+      for (let d = new Date(`${startIso}T00:00:00Z`); d <= new Date(`${endIso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+        if (d.getUTCDay() === 1) continue
+        const e = areaExpectedOn(a, d.toISOString().slice(0, 10))
+        if (!e) continue
+        sum += e.covers
+        nights++
+      }
+      return nights > 0 ? sum / nights : (areaMonth.get(`${a.id}:${month}`) ?? 0)
+    }
     return areas.map((a) => {
       const act = actualByArea?.get(a.id)
       const actualCovers = act?.covers ?? null
@@ -284,7 +347,7 @@ export default defineEventHandler((event) => {
       return {
         areaId: a.id,
         areaName: a.name,
-        assumedCoversPerNight: areaMonth.get(`${a.id}:${month}`) ?? 0,
+        assumedCoversPerNight: assumedPerOpenNight(a),
         assumedPerCover: a.per_cover_revenue_food + a.per_cover_revenue_beverage,
         actualCoversPerNight: actualByArea && actualNights > 0 ? (actualCovers ?? 0) / actualNights : null,
         actualNights,

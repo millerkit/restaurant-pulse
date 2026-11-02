@@ -309,7 +309,28 @@ CREATE TABLE capacity_areas (
   -- follow_actuals_through is the 'YYYY-MM' of the last closed month applied,
   -- which makes the update idempotent across nightly runs and restarts.
   follow_actuals              INTEGER NOT NULL DEFAULT 0,
-  follow_actuals_through      TEXT
+  follow_actuals_through      TEXT,
+  -- Weekly closure of this area (added 2026-11-02; first use: Chef's Counter
+  -- closed Tuesdays from 2026-12-01). closed_dows is a comma list of weekday
+  -- numbers (0=Sun..6=Sat; Monday is the restaurant's standing closure and
+  -- is ignored here). From closed_from on, the area has zero capacity and
+  -- zero expected covers on those weekdays, and its expected_covers (in
+  -- capacity_area_seasonality, still the PRE-closure per-Tue-Sun-night
+  -- baseline) are uplifted on its remaining open nights by
+  -- closure_recapture_pct: the share (0-100) of the closed nights' covers
+  -- assumed to move to open nights. uplift = (6 - closed*(1-r)) / (6 - closed),
+  -- capped at the area's nightly capacity. See server/api/capacity.get.ts.
+  -- Dated so earlier periods are still judged on the old schedule and the
+  -- trial can be reverted by clearing closed_dows.
+  closed_dows                 TEXT,
+  closed_from                 TEXT,
+  closure_recapture_pct       REAL NOT NULL DEFAULT 0,
+  -- JSON {"3":35,"4":35,"5":15,"6":15}: how the recaptured covers split across
+  -- the area's open weekdays (relative weights, normalized on use; a weekday
+  -- left out gets none). NULL = equal across its open weekdays. Only the
+  -- weekday revenue targets use this (server/utils/weekly-targets.ts); the
+  -- monthly Capacity totals only need the sum.
+  closure_recapture_weights   TEXT
 );
 
 -- Holiday closures only (added nights closed beyond the standing Monday

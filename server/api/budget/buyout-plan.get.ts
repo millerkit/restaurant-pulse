@@ -20,7 +20,7 @@ export default defineEventHandler((event) => {
   const db = useDb()
 
   const rates = loadBuyoutRates(db)
-  const weekdays = buyoutWeekdaysFor(rates)
+  const weekdays = buyoutWeekdaysFor(rates, `${year}-${String(month).padStart(2, '0')}-01`)
 
   const countRows = db.prepare('SELECT dow, count FROM revenue_buyout_plan WHERE year = ? AND month = ?').all(year, month) as { dow: number, count: number }[]
   const countByDow: Record<number, number> = {}

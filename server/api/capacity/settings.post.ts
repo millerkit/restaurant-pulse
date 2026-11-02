@@ -10,7 +10,11 @@ type AreaInput = {
   id: number, seats: number, maxTurnsPerNight: number,
   capacityNovApr: number | null, capacityMayOct: number,
   perCoverRevenueFood: number, perCoverRevenueBeverage: number,
-  followActuals?: boolean
+  followActuals?: boolean,
+  // Weekly closure (see capacity_areas in schema.sql). Omit all three to leave
+  // the area's closure untouched; closedDows [] clears it.
+  closedDows?: number[], closedFrom?: string | null, closureRecapturePct?: number,
+  closureRecaptureWeights?: Record<string, number> | null
 }
 type SeasonalityInput = { month: number, holidayClosures: number }
 type AreaSeasonalityInput = { areaId: number, month: number, expectedCovers: number }
@@ -37,6 +41,22 @@ export default defineEventHandler(async (event) => {
     if (!Number.isFinite(a.capacityMayOct) || a.capacityMayOct < 0) throw createError({ statusCode: 400, statusMessage: `Invalid capacityMayOct for area ${a.id}` })
     if (!Number.isFinite(a.perCoverRevenueFood) || a.perCoverRevenueFood < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueFood for area ${a.id}` })
     if (!Number.isFinite(a.perCoverRevenueBeverage) || a.perCoverRevenueBeverage < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueBeverage for area ${a.id}` })
+    if (a.closedDows != null) {
+      if (!Array.isArray(a.closedDows) || a.closedDows.some(d => !Number.isInteger(d) || d < 0 || d > 6 || d === 1)) {
+        throw createError({ statusCode: 400, statusMessage: `Invalid closedDows for area ${a.id} (weekday numbers 0-6, not Monday)` })
+      }
+      if (a.closedDows.length > 0 && !(typeof a.closedFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.closedFrom))) {
+        throw createError({ statusCode: 400, statusMessage: `A closure start date (YYYY-MM-DD) is required for area ${a.id}` })
+      }
+      if (a.closedDows.length >= 6) throw createError({ statusCode: 400, statusMessage: `Area ${a.id} can't be closed every service night` })
+      if (a.closureRecapturePct != null && (!Number.isFinite(a.closureRecapturePct) || a.closureRecapturePct < 0 || a.closureRecapturePct > 100)) {
+        throw createError({ statusCode: 400, statusMessage: `Invalid closureRecapturePct for area ${a.id} (0-100)` })
+      }
+      const w = a.closureRecaptureWeights
+      if (w != null && (typeof w !== 'object' || Object.entries(w).some(([k, v]) => !Number.isInteger(Number(k)) || Number(k) < 0 || Number(k) > 6 || !Number.isFinite(v) || v < 0))) {
+        throw createError({ statusCode: 400, statusMessage: `Invalid closureRecaptureWeights for area ${a.id}` })
+      }
+    }
   }
   for (const s of seasonality) {
     if (!Number.isInteger(s.month) || s.month < 1 || s.month > 12) throw createError({ statusCode: 400, statusMessage: `Invalid month: ${s.month}` })
@@ -57,7 +77,11 @@ export default defineEventHandler(async (event) => {
         follow_actuals = COALESCE(@followActuals, follow_actuals),
         -- turning it off clears the marker so a later re-enable catches up on
         -- the latest closed month at the next sync
-        follow_actuals_through = CASE WHEN @followActuals = 0 THEN NULL ELSE follow_actuals_through END
+        follow_actuals_through = CASE WHEN @followActuals = 0 THEN NULL ELSE follow_actuals_through END,
+        closed_dows = CASE WHEN @setClosure = 1 THEN @closedDows ELSE closed_dows END,
+        closed_from = CASE WHEN @setClosure = 1 THEN @closedFrom ELSE closed_from END,
+        closure_recapture_pct = CASE WHEN @setClosure = 1 THEN @closureRecapturePct ELSE closure_recapture_pct END,
+        closure_recapture_weights = CASE WHEN @setClosure = 1 THEN @closureRecaptureWeights ELSE closure_recapture_weights END
     WHERE id = @id
   `)
   const upsertMonth = db.prepare(`
@@ -71,7 +95,19 @@ export default defineEventHandler(async (event) => {
     ON CONFLICT(area_id, month) DO UPDATE SET expected_covers = excluded.expected_covers
   `)
   const run = db.transaction(() => {
-    for (const a of areas) updateArea.run({ ...a, followActuals: a.followActuals == null ? null : (a.followActuals ? 1 : 0) })
+    for (const a of areas) {
+      const setClosure = a.closedDows != null
+      const dows = setClosure ? [...new Set(a.closedDows)].sort((x, y) => x - y) : []
+      updateArea.run({
+        ...a,
+        followActuals: a.followActuals == null ? null : (a.followActuals ? 1 : 0),
+        setClosure: setClosure ? 1 : 0,
+        closedDows: dows.length > 0 ? dows.join(',') : null,
+        closedFrom: dows.length > 0 ? a.closedFrom : null,
+        closureRecapturePct: dows.length > 0 ? (a.closureRecapturePct ?? 0) : 0,
+        closureRecaptureWeights: dows.length > 0 && a.closureRecaptureWeights ? JSON.stringify(a.closureRecaptureWeights) : null
+      })
+    }
     for (const s of seasonality) upsertMonth.run(s)
     for (const s of areaSeasonality) upsertAreaMonth.run(s)
   })

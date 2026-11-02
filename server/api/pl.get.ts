@@ -125,7 +125,7 @@ export default defineEventHandler((event) => {
     for (const date of dates) {
       if (date < NEW_LOCATION_START) continue
       const dow = new Date(`${date}T00:00:00Z`).getUTCDay()
-      const target = weeklyTargets.targetByDow.get(dow)?.dollarTarget
+      const target = weeklyTargets.forDate(date).targetByDow.get(dow)?.dollarTarget
       if (target == null) continue
       const actual = actualByDay.get(date) ?? 0
       const eventRevenue = eventByDay.get(date) ?? 0

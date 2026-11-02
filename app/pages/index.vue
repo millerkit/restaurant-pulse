@@ -291,6 +291,7 @@ function meterStatusLabel(status: string | null) {
           </div>
         </div>
 
+        <div class="quiet-note" v-if="weeklyTargets.closureNote">{{ weeklyTargets.closureNote }} The weekly goal is unchanged; only how it's split across the days.</div>
         <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount">Set a weekly revenue goal below to see day-specific dollar/covers targets.</div>
         <div class="quiet-note" v-else-if="weeklyTargets.sampleOpenDays < 6">Based on only {{ weeklyTargets.sampleOpenDays }} real open day{{ weeklyTargets.sampleOpenDays === 1 ? '' : 's' }} since the location move ({{ formatWeekdayDate(weeklyTargets.sinceDate) }}) — the weekday pattern will sharpen as more data accumulates.</div>
 

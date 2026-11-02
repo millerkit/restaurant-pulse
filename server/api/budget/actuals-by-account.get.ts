@@ -53,7 +53,9 @@ export default defineEventHandler((event) => {
     .get(start, end) as { latest: string | null }
   let weekdayWeights: Record<number, number> | null = null
   try {
-    const targets = computeWeeklyRevenueTargets()
+    // The pattern in force at the start of the month (a closure that starts mid-month is
+    // approximated by the pattern before it).
+    const targets = computeWeeklyRevenueTargets().forDate(start)
     if (targets.days.every(d => d.share != null)) {
       weekdayWeights = { 1: 0 }
       for (const d of targets.days) weekdayWeights[d.dow] = d.share as number

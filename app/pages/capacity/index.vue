@@ -112,7 +112,9 @@ type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
   capacity_nov_apr: number | null, capacity_may_oct: number,
   per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null,
-  follow_actuals: number, follow_actuals_through: string | null
+  follow_actuals: number, follow_actuals_through: string | null,
+  closed_dows: string | null, closed_from: string | null, closure_recapture_pct: number,
+  closure_recapture_weights: string | null
 }
 type SeasonalityRow = { month: number, holiday_closures: number }
 type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number }
@@ -277,7 +279,20 @@ function roundCovers(n: number): number {
 // draft shape at all; see computedCapacity() below.
 type AreaDraft = {
   id: number, name: string, seats: string, maxTurnsPerNight: string,
-  perCoverRevenueFood: string, perCoverRevenueBeverage: string, followActuals: boolean
+  perCoverRevenueFood: string, perCoverRevenueBeverage: string, followActuals: boolean,
+  // Weekly closure (capacity_areas.closed_dows/closed_from/closure_recapture_pct)
+  closedDows: number[], closedFrom: string, recapturePct: string,
+  // Relative share of the recaptured covers landing on each open weekday (keyed by weekday number)
+  recaptureWeights: Record<number, string>
+}
+function parseRecaptureWeights(s: string | null): Record<number, string> {
+  try {
+    const o = s ? JSON.parse(s) as Record<string, number> : {}
+    return Object.fromEntries(Object.entries(o).map(([k, v]) => [Number(k), String(v)]))
+  } catch { return {} }
+}
+function parseClosedDows(s: string | null): number[] {
+  return (s ?? '').split(',').filter(x => x !== '').map(Number).filter(n => Number.isInteger(n) && n !== 1)
 }
 // One row per month: closures (unchanged) plus each area's own
 // expected nightly covers, keyed by area id — the real editable projection
@@ -297,7 +312,11 @@ function loadDrafts() {
     maxTurnsPerNight: String(a.max_turns_per_night),
     perCoverRevenueFood: String(a.per_cover_revenue_food),
     perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
-    followActuals: !!a.follow_actuals
+    followActuals: !!a.follow_actuals,
+    closedDows: parseClosedDows(a.closed_dows),
+    closedFrom: a.closed_from ?? '',
+    recapturePct: String(a.closure_recapture_pct ?? 0),
+    recaptureWeights: parseRecaptureWeights(a.closure_recapture_weights)
   }))
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   monthlyDrafts.value = (editData.value?.seasonality ?? []).map(s => ({
@@ -316,7 +335,11 @@ const cleanDraftSnapshot = computed(() => {
   const areas = (editData.value?.areas ?? []).map(a => ({
     id: a.id, name: a.name, seats: String(Math.round(a.seats)), maxTurnsPerNight: String(a.max_turns_per_night),
     perCoverRevenueFood: String(a.per_cover_revenue_food), perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
-    followActuals: !!a.follow_actuals
+    followActuals: !!a.follow_actuals,
+    closedDows: parseClosedDows(a.closed_dows),
+    closedFrom: a.closed_from ?? '',
+    recapturePct: String(a.closure_recapture_pct ?? 0),
+    recaptureWeights: parseRecaptureWeights(a.closure_recapture_weights)
   }))
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   const monthly = (editData.value?.seasonality ?? []).map(s => ({
@@ -402,8 +425,76 @@ function monthDerived(s: MonthlyDraft) {
     totalCovers: covers,
     fillPct: maxCovers > 0 ? covers / maxCovers : null,
     avgCheck: covers > 0 ? revenue / covers : null,
-    projectedMonthlyRevenue: revenue * operatingNightsInMonth(s)
+    projectedMonthlyRevenue: projectedRevenueForMonth(s)
   }
+}
+
+// ---- weekly area closures (mirrors server/api/capacity.get.ts closureOn) ----
+// The covers grid holds each area's PRE-closure per-Tue-Sun-night baseline. From
+// an area's closure start date, it is dark on its closed weekdays and its other
+// nights carry the recaptured share of the closed nights' covers.
+const SERVICE_NIGHTS_PER_WEEK = 6
+function closureUplift(a: AreaDraft): number {
+  const closed = a.closedDows.length
+  const open = SERVICE_NIGHTS_PER_WEEK - closed
+  if (closed === 0 || open <= 0) return 1
+  const r = Math.min(1, Math.max(0, (Number(a.recapturePct) || 0) / 100))
+  return (SERVICE_NIGHTS_PER_WEEK - closed * (1 - r)) / open
+}
+function closureOnDate(a: AreaDraft, iso: string, dow: number): { closed: boolean, uplift: number } {
+  if (!a.closedFrom || iso < a.closedFrom || a.closedDows.length === 0) return { closed: false, uplift: 1 }
+  return { closed: a.closedDows.includes(dow), uplift: closureUplift(a) }
+}
+// Revenue for a full calendar month of YEAR, night by night, so a closure that
+// starts partway through the year (or the month) is applied only from its date.
+// Holiday-closure nights are worth the month's average night, same as the server.
+function projectedRevenueForMonth(s: MonthlyDraft): number {
+  const dim = new Date(Date.UTC(YEAR, s.month, 0)).getUTCDate()
+  let total = 0, nights = 0
+  for (let day = 1; day <= dim; day++) {
+    const dow = new Date(Date.UTC(YEAR, s.month - 1, day)).getUTCDay()
+    if (dow === 1) continue
+    const iso = `${YEAR}-${String(s.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    let night = 0
+    for (const a of areaDrafts.value) {
+      const cl = closureOnDate(a, iso, dow)
+      if (cl.closed) continue
+      const base = Number(s.areaCoversInput[a.id])
+      let covers = Number.isFinite(base) ? base : 0
+      if (cl.uplift !== 1) covers = Math.min(covers * cl.uplift, areaCapacityForMonth(a, s.month))
+      night += covers * perCoverTotal(a)
+    }
+    total += night
+    nights++
+  }
+  const closures = intNum(s.holidayClosuresInput)
+  return total - (nights > 0 ? (total / nights) * (Number.isFinite(closures) ? closures : 0) : 0)
+}
+const CLOSABLE_DOWS = [
+  { dow: 2, short: 'Tue' }, { dow: 3, short: 'Wed' }, { dow: 4, short: 'Thu' },
+  { dow: 5, short: 'Fri' }, { dow: 6, short: 'Sat' }, { dow: 0, short: 'Sun' }
+]
+function toggleClosedDow(a: AreaDraft, dow: number) {
+  a.closedDows = a.closedDows.includes(dow) ? a.closedDows.filter(d => d !== dow) : [...a.closedDows, dow].sort((x, y) => x - y)
+  if (a.closedDows.length > 0 && !a.closedFrom) a.closedFrom = ''
+}
+// Weights only for the area's open weekdays, blanks as 0; null (equal split) if none were entered.
+const RECAPTURE_DEFAULTS: Record<number, number> = { 3: 35, 4: 35, 5: 15, 6: 15 }
+function openDowsOf(a: AreaDraft) {
+  return CLOSABLE_DOWS.filter(d => !a.closedDows.includes(d.dow))
+}
+function recaptureWeightsPayload(a: AreaDraft): Record<string, number> | null {
+  const entries = openDowsOf(a).map(d => [String(d.dow), Number(a.recaptureWeights[d.dow]) || 0] as const)
+  return entries.some(([, v]) => v > 0) ? Object.fromEntries(entries) : null
+}
+function fillDefaultRecaptureWeights(a: AreaDraft) {
+  a.recaptureWeights = Object.fromEntries(openDowsOf(a).map(d => [d.dow, String(RECAPTURE_DEFAULTS[d.dow] ?? 0)]))
+}
+function closureSummary(a: AreaDraft): string {
+  if (a.closedDows.length === 0) return 'Open all service nights'
+  const u = closureUplift(a)
+  const open = SERVICE_NIGHTS_PER_WEEK - a.closedDows.length
+  return `${open} nights a week; covers on open nights × ${u.toFixed(2)}`
 }
 // Rounded to the nearest whole percent / dollar for quick readability
 // (2026-08-17, at the user's request) — display-only, not the underlying
@@ -596,7 +687,16 @@ function weekdayWeightedCovers(s: MonthlyDraft, row: AreaBreakdownRow): number {
     weighted += obs.covers / obs.nights
     weight += 1
   }
-  return weight > 0 ? weighted / weight : (row.actualCoversPerNight as number)
+  const observed = weight > 0 ? weighted / weight : (row.actualCoversPerNight as number)
+  // The grid holds the PRE-closure baseline. If this area's closure already covers
+  // the whole target month and the window has no nights on a closed weekday, the
+  // observed average is per open night (recapture included), so convert it back.
+  const area = areaDrafts.value.find(a => a.id === row.areaId)
+  if (area && area.closedDows.length > 0 && area.closedFrom && area.closedFrom <= `${year}-${String(s.month).padStart(2, '0')}-01`) {
+    const sawClosedDay = area.closedDows.some(dow => (byDow[dow]?.nights ?? 0) > 0)
+    if (!sawClosedDay) return observed / closureUplift(area)
+  }
+  return observed
 }
 function cappedActual(s: MonthlyDraft, row: AreaBreakdownRow): number {
   const area = areaDrafts.value.find(a => a.id === row.areaId)
@@ -647,20 +747,44 @@ function applySetByHistory(s: MonthlyDraft) {
 // unchanged, so the total rises by the difference. Winter months are a guess
 // (no winter data at this location yet). Revisit once a full year exists.
 // Whole numbers because the covers inputs are integer-only (avg 9.1).
+// These are PRE-closure baselines (per Tue-Sun night), which is what the grid stores:
+// a Tuesday closure plus recapture (Weekly Area Closures) is applied on top of them.
 const CHEFS_COUNTER_2027_GOAL = [8, 8, 8, 9, 10, 10, 9, 9, 8, 10, 10, 10]
 function isChefsCounter(name: string): boolean {
   return /chef/i.test(name)
 }
 
+// What the leave prompts warn about: only real edits to the drafts, not the
+// capacityMismatch auto-correction (which still enables Save, but isn't
+// something the user typed). The message names what differs so a false alarm
+// is diagnosable instead of a bare "unsaved edits".
+const unsavedEditSummary = computed(() => {
+  const clean = JSON.parse(cleanDraftSnapshot.value) as { areaDrafts: AreaDraft[], monthlyDrafts: MonthlyDraft[] }
+  const draft = JSON.parse(draftSnapshot.value) as { areaDrafts: AreaDraft[], monthlyDrafts: MonthlyDraft[] }
+  const parts: string[] = []
+  for (const a of draft.areaDrafts) {
+    const c = clean.areaDrafts.find(x => x.id === a.id)
+    if (!c) continue
+    const fields = (Object.keys(a) as (keyof AreaDraft)[]).filter(k => JSON.stringify(a[k]) !== JSON.stringify(c[k]))
+    if (fields.length > 0) parts.push(`${a.name}: ${fields.join(', ')}`)
+  }
+  for (const m of draft.monthlyDrafts) {
+    const c = clean.monthlyDrafts.find(x => x.month === m.month)
+    if (c && JSON.stringify(m) !== JSON.stringify(c)) parts.push(MONTH_NAMES[m.month - 1])
+  }
+  return parts
+})
+const hasUserEdits = computed(() => draftSnapshot.value !== cleanDraftSnapshot.value)
+
 function handleBeforeUnload(e: BeforeUnloadEvent) {
-  if (!hasUnsavedChanges.value) return
+  if (!hasUserEdits.value) return
   e.preventDefault()
   e.returnValue = ''
 }
 onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload))
 onBeforeRouteLeave(() => {
-  if (hasUnsavedChanges.value && !window.confirm('You have unsaved capacity edits. Leave without saving?')) return false
+  if (hasUserEdits.value && !window.confirm(`You have unsaved capacity edits (${unsavedEditSummary.value.join('; ')}). Leave without saving?`)) return false
 })
 
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -690,7 +814,11 @@ async function save() {
       capacityMayOct: computedCapacity(a, 'mayOct') ?? NaN,
       perCoverRevenueFood: num(a.perCoverRevenueFood),
       perCoverRevenueBeverage: num(a.perCoverRevenueBeverage),
-      followActuals: a.followActuals
+      followActuals: a.followActuals,
+      closedDows: a.closedDows,
+      closedFrom: a.closedDows.length > 0 ? a.closedFrom : null,
+      closureRecapturePct: a.closedDows.length > 0 ? num(a.recapturePct) : 0,
+      closureRecaptureWeights: a.closedDows.length > 0 ? recaptureWeightsPayload(a) : null
     }))
     const seasonality = monthlyDrafts.value.map(s => ({
       month: s.month,
@@ -708,6 +836,13 @@ async function save() {
         throw new Error(`Invalid number in the ${areaDrafts.value.find(d => d.id === a.id)?.name} row`)
       }
     }
+    for (const a of areas) {
+      const name = areaDrafts.value.find(d => d.id === a.id)?.name
+      if (a.closedDows.length > 0) {
+        if (!a.closedFrom || !/^\d{4}-\d{2}-\d{2}$/.test(a.closedFrom)) throw new Error(`Pick a closure start date for ${name}`)
+        if (!Number.isFinite(a.closureRecapturePct) || a.closureRecapturePct < 0 || a.closureRecapturePct > 100) throw new Error(`Recapture % for ${name} must be between 0 and 100`)
+      }
+    }
     for (const s of seasonality) {
       if (Number.isNaN(s.holidayClosures)) {
         throw new Error(`Invalid closures number in the ${MONTH_NAMES[s.month - 1]} row`)
@@ -721,6 +856,8 @@ async function save() {
     }
     await $fetch('/api/capacity/settings', { method: 'POST', body: { areas, seasonality, areaSeasonality } })
     await editRefresh()
+    // Don't rely only on the editData watcher to re-baseline the drafts.
+    loadDrafts()
     saveStatus.value = 'saved'
   } catch (err: any) {
     saveStatus.value = 'error'
@@ -990,12 +1127,64 @@ async function save() {
 
         <section>
           <div class="section-head">
+            <div class="section-label">Weekly Area Closures</div>
+            <ul class="section-note note-list">
+              <li>Close an area on fixed weekdays from a start date (Monday is already the restaurant's closure). Before the start date nothing changes, so past months are still judged on the old schedule.</li>
+              <li>From the start date the area has no capacity and no covers on those nights. The covers in the grid below stay the area's <em>pre-closure</em> per-night baseline.</li>
+              <li>Recapture is the share of the closed nights' covers assumed to move to the area's open nights. Open-night covers are multiplied by (6 − closed × (1 − recapture)) ÷ open nights, capped at the area's nightly capacity.</li>
+              <li>The weekday weights say where the recaptured covers land (relative; blanks count as 0, all blank splits evenly). They only shape the weekday revenue targets on the Dashboard and Revenue Calendar; monthly totals use the recapture % alone. Landing is capped at each night's remaining seats.</li>
+            </ul>
+          </div>
+          <div class="pl-table-card">
+            <table class="pl-table edit-table">
+              <caption>Weekly closure per area: closed weekdays, start date, recapture percentage, and the resulting open-night schedule</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Area</th>
+                  <th scope="col">Closed on</th>
+                  <th scope="col">Starting</th>
+                  <th scope="col">Recapture %</th>
+                  <th scope="col">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in areaDrafts" :key="a.id">
+                  <th scope="row" style="text-transform: capitalize;">{{ a.name }}</th>
+                  <td>
+                    <span class="dow-toggles">
+                      <label v-for="d in CLOSABLE_DOWS" :key="d.dow" :class="['dow-toggle', { on: a.closedDows.includes(d.dow) }]">
+                        <input type="checkbox" :checked="a.closedDows.includes(d.dow)" @change="toggleClosedDow(a, d.dow)" />
+                        {{ d.short }}
+                      </label>
+                    </span>
+                  </td>
+                  <td><input v-model="a.closedFrom" type="date" class="cell-input date" :disabled="a.closedDows.length === 0" :aria-label="`${a.name} closure start date`" /></td>
+                  <td><span class="pct-cell"><input v-model="a.recapturePct" class="cell-input" inputmode="numeric" :disabled="a.closedDows.length === 0" :aria-label="`${a.name} recapture percent`" />%</span></td>
+                  <td class="derived">
+                    {{ closureSummary(a) }}
+                    <div v-if="a.closedDows.length > 0" class="recapture-weights">
+                      <span class="quiet-note">Recaptured covers land on:</span>
+                      <label v-for="d in openDowsOf(a)" :key="d.dow" class="recapture-weight">
+                        {{ d.short }}
+                        <input v-model="a.recaptureWeights[d.dow]" class="cell-input narrow" inputmode="numeric" placeholder="0" :aria-label="`${a.name} recapture weight ${d.short}`" />
+                      </label>
+                      <button type="button" class="apply-pct-btn" @click="fillDefaultRecaptureWeights(a)">Wed/Thu heavy</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
             <div class="section-label">Expected Nightly Covers by Area &amp; Closures</div>
             <ul class="section-note note-list">
               <li>Average nightly covers per area, by month — edit these directly.</li>
               <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
               <li>For the current month, "Set by Actuals" instead overwrites each area's covers with its real average covers/night so far this month (Toast) — use this to tighten the assumption as real data comes in.</li>
-              <li>Total, Fill %, and Per-Cover $ are derived.</li>
+              <li>Total, Fill %, and Per-Cover $ are derived from these baselines; Projected Revenue also applies any weekly area closure from its start date.</li>
               <li>Closures are additional nights closed beyond the standing Monday closure.</li>
             </ul>
           </div>
@@ -1284,6 +1473,14 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .variance-delta { display: block; font-weight: 500; opacity: 0.8; white-space: nowrap; font-size: 11px; }
 
 .setpct-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.pct-cell { display: inline-flex; align-items: center; gap: 3px; }
+.recapture-weights { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; justify-content: center; }
+.recapture-weight { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.dow-toggles { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.dow-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 3px 8px; border: 1px solid var(--hair); border-radius: 999px; color: var(--ink-3); cursor: pointer; }
+.dow-toggle input { accent-color: var(--accent); margin: 0; }
+.dow-toggle.on { color: var(--ink); background: var(--surface-alt); border-color: var(--ink-3); }
+.cell-input.date { width: 140px; }
 .follow-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); cursor: pointer; margin-top: 2px; }
 .setpct-row { display: flex; align-items: center; justify-content: center; gap: 5px; }
 .setpct-arrow { color: var(--ink-3); font-size: 14px; }

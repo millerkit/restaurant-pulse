@@ -221,7 +221,13 @@ export default defineEventHandler((event) => {
   // ones. Only the "this week" actual-vs-target roll-up and the suggested-
   // weekly-goal breakeven calc below are Dashboard-specific.
   const weekly = computeWeeklyRevenueTargets()
-  const { benchmarkAmount: weeklyBenchmarkAmount, avgSpendPerCover, sampleOpenDays, days: dayTargets } = weekly
+  // The target set in force today: after a weekly area closure starts (e.g. Chef's Counter dark on
+  // Tuesdays), the weekday pattern and spend/cover shift — see TargetSet in weekly-targets.ts.
+  // Each day below still uses the set in force on its own date.
+  const currentTargets = weekly.forDate(asOfDate)
+  const { benchmarkAmount: weeklyBenchmarkAmount, sampleOpenDays } = weekly
+  const avgSpendPerCover = currentTargets.avgSpendPerCover
+  const dayTargets = currentTargets.days
 
   // Need per-date core revenue/covers lookups for "this week"'s actuals —
   // not returned by computeWeeklyRevenueTargets (it only needs weekday
@@ -255,8 +261,9 @@ export default defineEventHandler((event) => {
   // same "actual/target both cut off at the same as-of point" fairness
   // pattern as capacity.get.ts's actualForRange.
   const thisWeekMonday = mondayOf(asOfDate)
-  const thisWeekDays = dayTargets.map((target, i) => {
+  const thisWeekDays = dayTargets.map((_, i) => {
     const date = addDaysIso(thisWeekMonday, i + 1) // Tue = Monday+1 .. Sun = Monday+6
+    const target = weekly.forDate(date).days[i]
     const hasHappened = date <= asOfDate
     const eventRevenue = hasHappened ? (eventRevenueByDate.get(date) ?? 0) : 0
     const eventNight = hasHappened && target.dollarTarget != null && isEventNight(coreRevenueByDate.get(date) ?? 0, eventRevenue, target.dollarTarget)
@@ -379,6 +386,7 @@ export default defineEventHandler((event) => {
       sampleOpenDays,
       excludedNights: weekly.excludedNights,
       days: dayTargets,
+      closureNote: currentTargets.from ? currentTargets.note : null,
       thisWeek: {
         mondayOf: thisWeekMonday,
         days: thisWeekDays,

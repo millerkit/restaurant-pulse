@@ -25,7 +25,8 @@
     "db:migrate-capacity-revenue-split": "node scripts/migrate-capacity-revenue-split.mjs",
     "db:migrate-leaf-only-budgets": "node scripts/migrate-leaf-only-budgets.mjs",
     "db:add-labor-role-class": "node scripts/add-labor-role-class.mjs",
-    "db:add-gift-card-plan": "node scripts/add-gift-card-plan.mjs"
+    "db:add-gift-card-plan": "node scripts/add-gift-card-plan.mjs",
+    "db:add-capacity-closed-dows": "node scripts/add-capacity-closed-dows.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
