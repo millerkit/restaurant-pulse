@@ -418,12 +418,18 @@ const trendRows = computed(() => {
   const trends = data.value?.areaTrends ?? []
   return trends.map((t) => {
     const vals = t.points.map(p => p.coversPerNight).filter((v): v is number => v != null)
-    // Shared floor of 0 so a flat-looking line can't exaggerate small moves;
-    // ceiling is capacity when known (so "full" reads as the top of the box).
-    const yMax = Math.max(t.capacity ?? 0, ...vals, 1)
+    // Scale to this area's own range (with a minimum span so noise in a
+    // near-flat series doesn't look like a swing). Scaling 0..capacity made
+    // every line look flat; the Change column gives the honest size of the move.
+    const lo = vals.length ? Math.min(...vals) : 0
+    const hi = vals.length ? Math.max(...vals) : 1
+    const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 1
+    const span = Math.max(hi - lo, mean * 0.2, 1)
+    const yMin = (lo + hi) / 2 - span / 2
+    const yMax = yMin + span
     const pad = 5
     const x = (i: number) => pad + (i * (TREND_W - 2 * pad)) / Math.max(t.points.length - 1, 1)
-    const y = (v: number) => TREND_H - pad - (v / yMax) * (TREND_H - 2 * pad)
+    const y = (v: number) => TREND_H - pad - ((v - yMin) / (yMax - yMin)) * (TREND_H - 2 * pad)
     const dots = t.points
       .map((p, i) => ({ weekStart: p.weekStart, nights: p.nights, value: p.coversPerNight, x: x(i), y: p.coversPerNight == null ? 0 : y(p.coversPerNight) }))
       .filter((d): d is { weekStart: string, nights: number, value: number, x: number, y: number } => d.value != null)
@@ -436,7 +442,19 @@ const trendRows = computed(() => {
       prevIdx = i
     })
     const latest = [...t.points].reverse().find(p => p.coversPerNight != null)?.coversPerNight ?? null
+    // Last 4 weeks with data vs. the 4 before them.
+    const weekly = vals
+    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
+    const recent = weekly.slice(-4)
+    const prior = weekly.slice(-8, -4)
+    let change: { pct: number, delta: number, dir: 'up' | 'down' | 'flat' } | null = null
+    if (recent.length >= 2 && prior.length >= 2 && avg(prior) > 0) {
+      const delta = avg(recent) - avg(prior)
+      const pct = delta / avg(prior)
+      change = { pct, delta, dir: Math.abs(pct) < 0.03 ? 'flat' : pct > 0 ? 'up' : 'down' }
+    }
     return {
+      change,
       areaId: t.areaId,
       areaName: t.areaName,
       points: t.points,
@@ -691,7 +709,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
           <div class="section-head">
             <div class="section-label">Weekly Covers/Night Trend, By Area</div>
             <div class="section-note">
-              Last {{ trendRows[0]!.points.length }} weeks (Mon–Sun), open nights only. Dashed line = nightly capacity this season.
+              Last {{ trendRows[0]!.points.length }} weeks (Mon–Sun), open nights only. Each line is scaled to its own range, so compare the Change column across areas, not line heights.
             </div>
           </div>
           <div class="pl-table-card">
@@ -701,6 +719,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                 <tr>
                   <th scope="col">Area</th>
                   <th scope="col">Trend</th>
+                  <th scope="col">Change<br><small>last 4 wks vs. prior 4</small></th>
                   <th scope="col">Latest Week</th>
                   <th scope="col">Last 4 Weeks</th>
                   <th scope="col">Capacity</th>
@@ -713,13 +732,20 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="trend-cell">
                     <svg :viewBox="`0 0 ${TREND_W} ${TREND_H}`" :width="TREND_W" :height="TREND_H" role="img"
                          :aria-label="`${t.areaName} weekly covers per night: ${t.points.map(p => p.coversPerNight == null ? 'none' : fmtCoversPerNight(p.coversPerNight)).join(', ')}`">
-                      <line v-if="t.capY != null" class="cap-line" x1="0" :x2="TREND_W" :y1="t.capY" :y2="t.capY" />
                       <path class="trend-line" :d="t.path" />
                       <circle v-for="(p, i) in t.dots" :key="i" class="trend-dot" :class="{ last: i === t.dots.length - 1 }"
                               :cx="p.x" :cy="p.y" :r="i === t.dots.length - 1 ? 3.5 : 2">
                         <title>Week of {{ fmtDate(p.weekStart) }}: {{ fmtCoversPerNight(p.value) }}/night over {{ p.nights }} nights</title>
                       </circle>
                     </svg>
+                  </td>
+                  <td class="derived trend-change" :class="t.change?.dir">
+                    <template v-if="t.change">
+                      {{ t.change.dir === 'up' ? '▲' : t.change.dir === 'down' ? '▼' : '►' }}
+                      {{ t.change.delta >= 0 ? '+' : '−' }}{{ fmtCoversPerNight(Math.abs(t.change.delta)) }}
+                      ({{ t.change.pct >= 0 ? '+' : '−' }}{{ Math.abs(t.change.pct * 100).toFixed(0) }}%)
+                    </template>
+                    <template v-else>—</template>
                   </td>
                   <td class="derived">{{ fmtCoversPerNight(t.latest) }}</td>
                   <td class="derived">{{ fmtCoversPerNight(t.recent4) }}</td>
@@ -952,6 +978,9 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .trend-cell svg { display: block; margin: 0 auto; max-width: 100%; }
 .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .trend-dot { fill: var(--accent); }
+.trend-change { white-space: nowrap; font-weight: 600; }
+.trend-change.up { color: var(--good); }
+.trend-change.down { color: var(--shortfall-deep); }
 .trend-dot.last { stroke: var(--surface); stroke-width: 1.5; }
 .cap-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
 .derived { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
