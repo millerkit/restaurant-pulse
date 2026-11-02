@@ -331,6 +331,9 @@ export default defineEventHandler((event) => {
       operatingCashFreedTotal: number | null
       remainderOfYearWeeks: number
       minimumRemainingDeposits: number | null
+      minimumDepositsBeforeCatchUp: number
+      yearEndBufferNeeded: number
+      weeksBeforeCatchUp: number
     } | null = null
     if (catchUpDate) {
       const sustainYear = Number(catchUpDate.slice(0, 4)) + 1
@@ -375,6 +378,22 @@ export default defineEventHandler((event) => {
         ? currentWeeklyAmount - suggestedRemainderOfYearRate
         : null
       const remainderOfYearWeeks = mondaysThrough(asOfIso, yearEnd).length
+      // Least total still to deposit, split into what it takes to clear every
+      // payment through the catch-up and the extra to carry the sustainYear
+      // buffer into January. Computed from totals, not rate x weeks: the flat
+      // weekly rate that clears Dec 20 only has the weeks before it to work
+      // with, so multiplying it by every remaining Monday overstated the need.
+      const yearEndDraws = reserveFundedRows
+        .filter(r => r.payment_date >= asOfIso && r.payment_date <= yearEnd)
+        .sort((a, b) => a.payment_date.localeCompare(b.payment_date))
+      let cumulativeDraws = 0
+      let minimumDepositsBeforeCatchUp = 0
+      for (const r of yearEndDraws) {
+        cumulativeDraws += r.total_payment
+        minimumDepositsBeforeCatchUp = Math.max(minimumDepositsBeforeCatchUp, cumulativeDraws - saved)
+      }
+      const minimumTotalDeposits = Math.max(minimumDepositsBeforeCatchUp, cumulativeDraws + bufferNeededForRecommendedRate - saved)
+      const weeksBeforeCatchUp = mondaysThrough(asOfIso, catchUpDate).filter(d => d < catchUpDate).length
 
       sustainability = {
         sustainYear,
@@ -389,7 +408,10 @@ export default defineEventHandler((event) => {
         operatingCashFreedPerWeek,
         operatingCashFreedTotal: operatingCashFreedPerWeek !== null ? operatingCashFreedPerWeek * remainderOfYearWeeks : null,
         remainderOfYearWeeks,
-        minimumRemainingDeposits: suggestedRemainderOfYearRate !== null ? suggestedRemainderOfYearRate * remainderOfYearWeeks : null
+        minimumRemainingDeposits: minimumTotalDeposits,
+        minimumDepositsBeforeCatchUp,
+        yearEndBufferNeeded: minimumTotalDeposits - minimumDepositsBeforeCatchUp,
+        weeksBeforeCatchUp
       }
     }
 
@@ -711,7 +733,12 @@ export default defineEventHandler((event) => {
       remainingSbaPrincipal: sbaRemaining.principal + sbaRemaining.catchUpInterest,
       remainingTransfers,
       remainingTransferCount: reserveState.sustainability?.remainderOfYearWeeks ?? remainingMondaysInYear,
-      minimumWeeklyTransfer: reserveState.sustainability?.suggestedRemainderOfYearRate ?? null,
+      minimumWeeklyTransfer: reserveState.sustainability && reserveState.sustainability.weeksBeforeCatchUp > 0
+        ? reserveState.sustainability.minimumDepositsBeforeCatchUp / reserveState.sustainability.weeksBeforeCatchUp
+        : null,
+      minimumDepositsBeforeCatchUp: reserveState.sustainability?.minimumDepositsBeforeCatchUp ?? null,
+      yearEndBufferNeeded: reserveState.sustainability?.yearEndBufferNeeded ?? null,
+      weeksBeforeCatchUp: reserveState.sustainability?.weeksBeforeCatchUp ?? null,
       plannedRemainingTransfers,
       weeklyTransferAmount: currentWeeklyAmountForProjection,
       breakevenNetIncome: breakevenNetIncomeForYear,
