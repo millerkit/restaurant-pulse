@@ -633,7 +633,23 @@ function applySetByHistory(s: MonthlyDraft) {
     result[order[k]] += 1
     leftover--
   }
-  areas.forEach((a, i) => { s.areaCoversInput[a.id] = String(result[i]) })
+  areas.forEach((a, i) => {
+    const goal = isChefsCounter(a.name) ? CHEFS_COUNTER_2027_GOAL[s.month - 1] : undefined
+    s.areaCoversInput[a.id] = String(goal != null ? Math.min(Math.round(goal), caps[i] ?? Infinity) : result[i])
+  })
+}
+// Chef's Counter is the one area "Set by History" does NOT derive from the
+// seasonal index (2026-11-02): it gets a fixed, pushed-marketing goal per
+// month instead (avg covers per operating night, Tue-Sun, the same unit as
+// the covers inputs). Built from Aug-Oct 2026 actuals (~7.9/night blended;
+// Fri/Sat ~10 of a 12 cap, Tue/Sun ~4.6) plus the restaurant-wide seasonal
+// shape; the growth is meant to come from Tue-Thu and Sun. Other areas are
+// unchanged, so the total rises by the difference. Winter months are a guess
+// (no winter data at this location yet). Revisit once a full year exists.
+// Whole numbers because the covers inputs are integer-only (avg 9.1).
+const CHEFS_COUNTER_2027_GOAL = [8, 8, 8, 9, 10, 10, 9, 9, 8, 10, 10, 10]
+function isChefsCounter(name: string): boolean {
+  return /chef/i.test(name)
 }
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
