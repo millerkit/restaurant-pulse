@@ -27,7 +27,7 @@ function setTab(t: Tab) {
 type Assumed = { operatingDays: number, expectedCovers: number, expectedRevenue: number, maxCapacityCovers: number, assumedFillPct: number | null, assumedAvgCheck: number | null }
 type Actual = { throughDate: string, covers: number | null, revenue: number | null, toastDaysSynced: number, operatingDays: number, maxCapacityCovers: number, actualFillPct: number | null, actualAvgCheck: number | null } | null
 type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolean, assumed: Assumed, actual: Actual }
-type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNight: number, assumedPerCover: number, actualCoversPerNight: number | null, actualPerCover: number | null }
+type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNight: number, assumedPerCover: number, actualCoversPerNight: number | null, actualNights?: number, byWeekday?: Record<number, { covers: number, nights: number }>, actualPerCover: number | null }
 
 const { data: paceData, pending: pacePending, error: paceError, refresh: paceRefresh } = await useFetch('/api/capacity')
 
@@ -527,22 +527,37 @@ function historyTooltip(s: MonthlyDraft): string {
 // Set by History plays for a month with no real data yet — a one-shot
 // button, not a live binding, for the same reason every other "Set..."
 // action on this tab is (see Set by History's own comment above).
-function currentMonthAreaBreakdown(): AreaBreakdownRow[] | null {
+// Early in a month the month-to-date average is one or two nights (often a
+// single weekday, e.g. a lone Sunday), which swings the assumption wildly.
+// Until the month has MIN_NIGHTS_MONTH_TO_DATE real nights, use the trailing
+// 28 days instead (spans the month boundary; closed-season areas are clamped
+// to the target month's capacity when applied).
+const MIN_NIGHTS_MONTH_TO_DATE = 7
+function monthToDateBreakdown(): AreaBreakdownRow[] | null {
   const asOfMonth = paceData.value?.asOfMonth
   if (asOfMonth == null) return null
   return months.value.find(m => m.month === asOfMonth)?.areaBreakdown ?? null
+}
+function usingTrailingWindow(): boolean {
+  const bd = monthToDateBreakdown()
+  const nights = Math.max(0, ...(bd ?? []).map(a => a.actualNights ?? 0))
+  return nights < MIN_NIGHTS_MONTH_TO_DATE && !!paceData.value?.trailing28
+}
+function currentMonthAreaBreakdown(): AreaBreakdownRow[] | null {
+  if (usingTrailingWindow()) return paceData.value?.trailing28?.areaBreakdown ?? null
+  return monthToDateBreakdown()
 }
 function canSetByActuals(s: MonthlyDraft): boolean {
   if (paceData.value?.asOfMonth !== s.month) return false
   const bd = currentMonthAreaBreakdown()
   return !!bd && bd.some(a => a.actualCoversPerNight != null)
 }
-function actualsPreviewTotal(): number | null {
+function actualsPreviewTotal(s: MonthlyDraft): number | null {
   const bd = currentMonthAreaBreakdown()
   if (!bd) return null
   const known = bd.filter(a => a.actualCoversPerNight != null)
   if (known.length === 0) return null
-  return known.reduce((sum, a) => sum + (a.actualCoversPerNight ?? 0), 0)
+  return known.reduce((sum, a) => sum + cappedActual(s, a), 0)
 }
 // True once every area's covers input already equals its real average
 // (rounded the way applySetByActuals writes it), so the button can say
@@ -552,20 +567,48 @@ function actualsAlreadyApplied(s: MonthlyDraft): boolean {
   if (!bd) return false
   return bd
     .filter(row => row.actualCoversPerNight != null)
-    .every(row => s.areaCoversInput[row.areaId] === String(roundCovers(row.actualCoversPerNight as number)))
+    .every(row => s.areaCoversInput[row.areaId] === String(roundCovers(cappedActual(s, row))))
 }
 function setByActualsTooltip(s: MonthlyDraft): string {
   if (canSetByActuals(s) && actualsAlreadyApplied(s)) return `Already applied — every area's covers match its real average so far this month (through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
   if (paceData.value?.asOfMonth !== s.month) return `Only available for the current month (${paceData.value?.asOfMonth != null ? MONTH_NAMES[paceData.value.asOfMonth - 1] : '—'}).`
   if (!canSetByActuals(s)) return `No real Toast covers data synced yet for ${MONTH_NAMES[s.month - 1]}.`
-  return `Set each area's covers to its real average covers/night so far this month (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
+  if (usingTrailingWindow()) return `Fewer than ${MIN_NIGHTS_MONTH_TO_DATE} nights so far this month, so this uses the trailing 28 days (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
+  return `Set each area's covers to its real average covers/night so far this month, weighted by weekday (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
+}
+// Weekday-weighted covers/night: each weekday's own average, weighted by how
+// many of that weekday the target month operates (Tue-Sun; Monday is the
+// standing closure). A window that happens to over-sample Sundays or Fridays
+// no longer skews the assumption. Weekdays with no observation in the window
+// are skipped and the rest renormalized.
+function weekdayWeightedCovers(s: MonthlyDraft, row: AreaBreakdownRow): number {
+  const byDow = row.byWeekday
+  if (!byDow) return row.actualCoversPerNight as number
+  const year = paceData.value?.asOfYear ?? new Date().getFullYear()
+  const daysInMonth = new Date(year, s.month, 0).getDate()
+  let weighted = 0
+  let weight = 0
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(year, s.month - 1, d).getDay()
+    if (dow === 1) continue
+    const obs = byDow[dow]
+    if (!obs || obs.nights === 0) continue
+    weighted += obs.covers / obs.nights
+    weight += 1
+  }
+  return weight > 0 ? weighted / weight : (row.actualCoversPerNight as number)
+}
+function cappedActual(s: MonthlyDraft, row: AreaBreakdownRow): number {
+  const area = areaDrafts.value.find(a => a.id === row.areaId)
+  const cap = area ? areaCapacityForMonth(area, s.month) : Infinity
+  return Math.min(weekdayWeightedCovers(s, row), cap)
 }
 function applySetByActuals(s: MonthlyDraft) {
   const bd = currentMonthAreaBreakdown()
   if (!bd) return
   for (const row of bd) {
     if (row.actualCoversPerNight != null) {
-      s.areaCoversInput[row.areaId] = String(roundCovers(row.actualCoversPerNight))
+      s.areaCoversInput[row.areaId] = String(roundCovers(cappedActual(s, row)))
     }
   }
 }
@@ -986,7 +1029,7 @@ async function save() {
                         >Set by Actuals</button>
                         <span class="setpct-arrow" aria-hidden="true">→</span>
                       </span>
-                      <span v-if="canSetByActuals(s)" class="setpct-result">{{ actualsAlreadyApplied(s) ? '✓ Applied · ' : '' }}≈{{ fmtCoversPerNight(actualsPreviewTotal()) }}/night</span>
+                      <span v-if="canSetByActuals(s)" class="setpct-result">{{ actualsAlreadyApplied(s) ? '✓ Applied · ' : '' }}≈{{ fmtCoversPerNight(actualsPreviewTotal(s)) }}/night</span>
                     </span>
                   </td>
                   <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>

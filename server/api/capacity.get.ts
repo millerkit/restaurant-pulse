@@ -69,7 +69,7 @@ export default defineEventHandler(() => {
 
   const { date: asOfDate } = db.prepare('SELECT MAX(date) AS date FROM daily_line_items').get() as { date: string | null }
   if (!asOfDate) {
-    return { asOfDate: null, asOfYear: null, asOfMonth: null, asOfDay: null, areas, periods: null, months: [] }
+    return { asOfDate: null, asOfYear: null, asOfMonth: null, asOfDay: null, areas, periods: null, months: [], trailing28: null }
   }
   const [asOfYear, asOfMonth] = asOfDate.split('-').map(Number)
 
@@ -251,8 +251,27 @@ export default defineEventHandler(() => {
     `).all(startIso, cappedEnd) as { areaId: number, covers: number, revenue: number, nights: number }[]
     return new Map(rows.map(r => [r.areaId, r]))
   }
+  // Per-area, per-weekday covers/nights (0 = Sunday ... 6 = Saturday), so the
+  // client can weight a short window by the target month's weekday mix.
+  function weekdayCoversForRange(startIso: string, endIso: string) {
+    const cappedEnd = endIso > asOfDate ? asOfDate : endIso
+    const out = new Map<number, Record<number, { covers: number, nights: number }>>()
+    if (startIso > cappedEnd) return out
+    const rows = db.prepare(`
+      SELECT area_id AS areaId, CAST(strftime('%w', date) AS INTEGER) AS dow, SUM(covers) AS covers, COUNT(*) AS nights
+      FROM daily_toast_area_metrics
+      WHERE date BETWEEN ? AND ?
+      GROUP BY area_id, dow
+    `).all(startIso, cappedEnd) as { areaId: number, dow: number, covers: number, nights: number }[]
+    for (const r of rows) {
+      if (!out.has(r.areaId)) out.set(r.areaId, {})
+      out.get(r.areaId)![r.dow] = { covers: r.covers, nights: r.nights }
+    }
+    return out
+  }
   function areaBreakdownForMonth(month: number, startIso: string, endIso: string) {
     const actualByArea = actualAreaForMonth(startIso, endIso)
+    const byWeekday = weekdayCoversForRange(startIso, endIso)
     return areas.map((a) => {
       const act = actualByArea?.get(a.id)
       const actualCovers = act?.covers ?? null
@@ -263,6 +282,8 @@ export default defineEventHandler(() => {
         assumedCoversPerNight: areaMonth.get(`${a.id}:${month}`) ?? 0,
         assumedPerCover: a.per_cover_revenue_food + a.per_cover_revenue_beverage,
         actualCoversPerNight: actualByArea && actualNights > 0 ? (actualCovers ?? 0) / actualNights : null,
+        actualNights,
+        byWeekday: byWeekday.get(a.id) ?? {},
         actualPerCover: actualByArea && actualCovers ? (act!.revenue ?? 0) / actualCovers : null
       }
     })
@@ -297,5 +318,12 @@ export default defineEventHandler(() => {
     }
   })
 
-  return { asOfDate, asOfYear, asOfMonth, areas, periods, months }
+  // Trailing 28 days (ending at asOfDate), regardless of month boundary: lets
+  // "Set by Actuals" use a meaningful sample in the first days of a month,
+  // when the month-to-date figure is one or two nights (and one weekday).
+  const trailing28Start = addDaysIso(asOfDate, -27)
+  const trailing28 = areaBreakdownForMonth(asOfMonth, trailing28Start, asOfDate)
+  const trailing28Nights = Math.max(0, ...trailing28.map(a => a.actualNights))
+
+  return { asOfDate, asOfYear, asOfMonth, areas, periods, months, trailing28: { start: trailing28Start, nights: trailing28Nights, areaBreakdown: trailing28 } }
 })
