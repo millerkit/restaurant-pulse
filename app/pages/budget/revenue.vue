@@ -30,11 +30,16 @@ const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
 // the user's explicit ask, rather than Labor's single-view-with-summary-cards approach.
 const asOfMonth = currentAsOfMonth(YEAR)
 const asOfDay = currentAsOfDay(YEAR)
+// Status colors/shading are noise early in a month (a few days of actuals say little
+// about the month), so the in-progress month stays uncolored until a full week has elapsed.
+// Closed months are unaffected.
+const COLOR_CODING_MIN_DAY = 7
 const asOfLabel = isPlanningYear ? `${YEAR} (planning)` : `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 const targetMonths = computed(() => Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i))
 
 const editMonth = ref(asOfMonth)
 const selectedMonthIsCurrent = computed(() => editMonth.value === asOfMonth && !isPlanningYear)
+const colorCodingActive = computed(() => !(selectedMonthIsCurrent.value && asOfDay < COLOR_CODING_MIN_DAY))
 
 function monthHasBudget(month: number) {
   const data = monthlyData.value[month - 1]
@@ -246,7 +251,12 @@ function computedAccountProjected(acc: BudgetAccount): number {
   const children = directChildren(acc.accountId)
   if (children.length === 0) {
     const actual = computedAccountActual(acc)
-    if (isCoreRevenueAccount(acc)) return projectFromActual(actual)
+    if (isCoreRevenueAccount(acc)) {
+      if (selectedMonthIsCurrent.value && nightlyProjectionUsable.value) {
+        return nightlyCoreProjected(acc.accountId, id => selectedMonthAccountActuals.value[id] || 0, id => parseEditableAmount(editableAccountAmounts.value[id]))
+      }
+      return projectFromActual(actual)
+    }
     return budgetFloor(actual, computedAccountAmount(acc))
   }
   return children.reduce((sum, c) => sum + computedAccountProjected(c), 0)
@@ -265,18 +275,18 @@ function varianceFor(budget: number, actual: number): { kind: 'no-budget' } | { 
 }
 type Variance = ReturnType<typeof varianceFor> | { kind: 'no-actuals' }
 function varianceIcon(v?: Variance): string {
-  if (!v || v.kind !== 'value') return ''
+  if (!v || v.kind !== 'value' || !colorCodingActive.value) return ''
   return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
 }
 // Whole-row shading (see varianceTint in useBudgetData.ts and .var-bad/.var-good in main.css).
 function rowTintClass(v?: Variance): string {
-  return v && v.kind === 'value' ? tintRowClass(v.tint) : ''
+  return v && v.kind === 'value' && colorCodingActive.value ? tintRowClass(v.tint) : ''
 }
 function rowTintStyle(v?: Variance) {
-  return v && v.kind === 'value' ? tintRowStyle(v.tint) : undefined
+  return v && v.kind === 'value' && colorCodingActive.value ? tintRowStyle(v.tint) : undefined
 }
 function varianceClass(v?: Variance): string {
-  if (!v || v.kind !== 'value') return ''
+  if (!v || v.kind !== 'value' || !colorCodingActive.value) return ''
   return `v-${v.status}`
 }
 function varianceDeltaLabel(v?: Variance): string {
@@ -378,8 +388,16 @@ function yearAccountTotal(accountId: number): number {
     const actualToDate = yearActualsByMonth.value[asOfMonth]?.[accountId] ?? 0
     const acc = revenueAccountsById.value.get(accountId)
     if (acc && isCoreRevenueAccount(acc)) {
-      const fraction = asOfMonthExpectedFraction.value
-      total += fraction > 0 ? actualToDate / fraction : actualToDate
+      if (nightlyProjectionUsable.value) {
+        total += nightlyCoreProjected(
+          accountId,
+          id => yearActualsByMonth.value[asOfMonth]?.[id] ?? 0,
+          id => editMonth.value === asOfMonth ? parseEditableAmount(editableAccountAmounts.value[id]) : accountBudgetForMonth(asOfMonth, id)
+        )
+      } else {
+        const fraction = asOfMonthExpectedFraction.value
+        total += fraction > 0 ? actualToDate / fraction : actualToDate
+      }
     } else {
       // Same budget-floor fallback as computedAccountProjected above, for the same reason
       // (Event/Catering/Retail-style accounts don't trickle in steadily) — uses the live
@@ -546,40 +564,80 @@ const revenueNeedsRecompute = computed(() =>
 const revenueRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const revenueRecomputeMessage = ref('')
 
+// Builds the Food/Beverage leaf-account targets for one month from its Capacity projection.
+// Beverage splits by the real sales mix when every account has one, else by that month's
+// own existing budget weight (equal split if the group was all zero).
+function buildCapacityTargets(month: number) {
+  const target = capacityTargetForMonth(month)
+  if (!target) return null
+  const accountsForMonth = (monthlyData.value[month - 1]?.accounts || []).filter(a => a.category === 'revenue')
+  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+  const summary: string[] = []
+  for (const group of ['Food', 'Beverage'] as const) {
+    const groupTarget = group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage
+    const accounts = accountsForMonth.filter(a => a.subcategory === group && isLeafAccount(a))
+    if (accounts.length === 0) continue
+    const mixByAccountId = group === 'Beverage'
+      ? new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
+      : null
+    const usingRealMix = !!mixByAccountId && accounts.every(a => mixByAccountId.get(a.accountId) != null)
+    const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
+    for (const a of accounts) {
+      const weight = usingRealMix
+        ? (mixByAccountId!.get(a.accountId) ?? 0)
+        : (oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length)
+      targets.push({ year: YEAR, month, accountId: a.accountId, amount: Math.round(groupTarget * weight * 100) / 100 })
+    }
+    summary.push(`${group} $${Math.round(groupTarget).toLocaleString()}${group === 'Beverage' ? (usingRealMix ? ' (real Beer/Liquor/Wine/N-A mix)' : ' (no sales mix data yet — used existing budget weight)') : ''}`)
+  }
+  return { targets, summary }
+}
+
 async function recomputeRevenueFromCapacity() {
   revenueRecomputeStatus.value = 'running'
   try {
-    const target = capacityTargetForMonth(editMonth.value)
-    if (!target) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Edit Capacity page`)
+    const built = buildCapacityTargets(editMonth.value)
+    if (!built) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Edit Capacity page`)
+    if (built.targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
 
-    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-    const summary: string[] = []
-    for (const group of ['Food', 'Beverage'] as const) {
-      const groupTarget = group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage
-      const accounts = leafRevenueAccountsForGroup(group)
-      if (accounts.length === 0) continue
-      const mixByAccountId = group === 'Beverage'
-        ? new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
-        : null
-      const usingRealMix = !!mixByAccountId && accounts.every(a => mixByAccountId.get(a.accountId) != null)
-      const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
-      for (const a of accounts) {
-        const weight = usingRealMix
-          ? (mixByAccountId!.get(a.accountId) ?? 0)
-          : (oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length)
-        targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(groupTarget * weight * 100) / 100 })
-      }
-      summary.push(`${group} $${Math.round(groupTarget).toLocaleString()}${group === 'Beverage' ? (usingRealMix ? ' (real Beer/Liquor/Wine/N-A mix)' : ' (no sales mix data yet — used existing budget weight)') : ''}`)
-    }
-    if (targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
-
-    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets: built.targets } })
     await loadYear()
-    revenueRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} Revenue from Capacity assumptions: ${summary.join(', ')}.`
+    revenueRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} Revenue from Capacity assumptions: ${built.summary.join(', ')}.`
     revenueRecomputeStatus.value = 'done'
   } catch (err: any) {
     revenueRecomputeStatus.value = 'error'
     revenueRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
+  }
+}
+
+// Same recompute for every month on this page (current month through Dec, or all 12 for a
+// planning year) in one write — built for setting up next year before it starts. Months with
+// no Capacity projection are skipped and named in the result.
+const yearRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const yearRecomputeMessage = ref('')
+const yearRecomputeLabel = computed(() => `${MONTH_NAMES[targetMonths.value[0] - 1]}–Dec`)
+
+async function recomputeYearRevenueFromCapacity() {
+  if (hasUnsavedChanges.value && !window.confirm('You have unsaved edits on this page; recomputing the year will overwrite them. Continue?')) return
+  if (!window.confirm(`Overwrite ${yearRecomputeLabel.value} ${YEAR} Food and Beverage revenue budgets with the Capacity projection?`)) return
+  yearRecomputeStatus.value = 'running'
+  try {
+    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+    const skipped: string[] = []
+    for (const month of targetMonths.value) {
+      const built = buildCapacityTargets(month)
+      if (!built || built.targets.length === 0) { skipped.push(MONTH_NAMES[month - 1]); continue }
+      targets.push(...built.targets)
+    }
+    if (targets.length === 0) throw new Error('No Capacity assumptions found for any month — check the Edit Capacity page')
+    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
+    await loadYear()
+    const done = targetMonths.value.length - skipped.length
+    yearRecomputeMessage.value = `Recomputed ${done} month(s) of ${YEAR} Revenue from Capacity assumptions${skipped.length ? ` (skipped ${skipped.join(', ')}: no Capacity projection)` : ''}.`
+    yearRecomputeStatus.value = 'done'
+  } catch (err: any) {
+    yearRecomputeStatus.value = 'error'
+    yearRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
   }
 }
 
@@ -669,18 +727,32 @@ async function saveBuyoutRates() {
 // The planned incremental revenue for the selected month — sum across every
 // weekday of count x (rate − normal-night target). A weekday with no target
 // yet (not enough real history) contributes nothing rather than guessing.
-const buyoutIncrementTotal = computed(() => {
+const undatedBuyoutIncrement = computed(() => {
   return buyoutWeekdays.value.reduce((sum, w) => {
     const count = parseCount(buyoutCountInputs.value[w.dow])
     if (count === 0 || w.dollarTarget == null) return sum
     return sum + count * (w.rate - w.dollarTarget)
   }, 0)
 })
+// Dated buyouts (Special Nights below) feed the budget too, so a buyout is entered once:
+// each adds (its expected night revenue − that weekday's normal night). The per-weekday
+// counts above are for buyouts you expect but haven't put on a date yet; adding a dated
+// buyout can retire its matching undated count (see special-nights.post.ts). A weekday
+// with no normal-night target yet contributes nothing, same as the counts.
+const datedBuyouts = computed(() => specialNights.value
+  .filter(n => n.kind === 'buyout')
+  .map((n) => {
+    const w = buyoutWeekdays.value.find(x => x.dow === utcDow(n.date))
+    const normal = w?.dollarTarget ?? null
+    return { date: n.date, expected: n.expectedRevenue, normal, increment: normal != null ? n.expectedRevenue - normal : 0 }
+  }))
+const datedBuyoutIncrement = computed(() => datedBuyouts.value.reduce((sum, b) => sum + b.increment, 0))
+const buyoutIncrementTotal = computed(() => undatedBuyoutIncrement.value + datedBuyoutIncrement.value)
 const FOOD_PCT_FALLBACK = 0.65 // matches import-capacity-projections.mjs's own fallback for the same split, before any real revenue data exists
 const buyoutIncrementFood = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.foodPct ?? FOOD_PCT_FALLBACK))
 const buyoutIncrementBeverage = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.beveragePct ?? (1 - FOOD_PCT_FALLBACK)))
 
-const buyoutHasAnyCount = computed(() => buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) > 0))
+const buyoutHasAnyCount = computed(() => datedBuyouts.value.length > 0 || buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) > 0))
 // Disabled once a fresh Apply would be a no-op — same "nothing changed"
 // disable pattern as the Capacity recompute button.
 const buyoutNeedsApply = computed(() => {
@@ -809,6 +881,155 @@ async function saveRevenue() {
     saveMessage.value = err?.data?.statusMessage || err?.message || 'Save failed'
   }
 }
+// ---- Special nights + night-by-night projection (added 2026-11-05) --------
+// Dated buyouts/closures/event nights (special_nights) and the current month's
+// night-by-night core dine-in projection (server/api/revenue-projection.get.ts). The
+// projection replaces the old "actual ÷ share of operating days elapsed" for core
+// accounts in the current month: actual to date + each remaining night's weekday
+// normal (or its special-night amount), with a booking-pace nudge for the next few
+// nights. A backtest of Aug–Oct put the old method at 8.1% average month-end error vs.
+// 4.0–4.9% for this one once special nights are entered (see CLAUDE.md).
+type SpecialNightKind = 'buyout' | 'closed' | 'offsite' | 'event'
+type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, note: string | null }
+const SPECIAL_KIND_LABEL: Record<SpecialNightKind, string> = {
+  buyout: 'Buyout',
+  closed: 'Closed',
+  offsite: 'Off-site event (no dinner service)',
+  event: 'Ticketed event'
+}
+type ProjectionNight = { date: string, expected: number | null, normalRevenue: number | null, bookingAdjustment: number, special: SpecialNight | null }
+type NightlyProjection = {
+  knownThrough: string | null, actualCoreToDate: number, remainingTotal: number, projectedCoreTotal: number,
+  missingHistory: number, bookingSnapshot: { date: string, time: string } | null, nights: ProjectionNight[]
+}
+
+const nightlyProjection = ref<NightlyProjection | null>(null)
+async function loadNightlyProjection() {
+  if (isPlanningYear) {
+    nightlyProjection.value = null
+    return
+  }
+  try {
+    nightlyProjection.value = await $fetch<NightlyProjection>('/api/revenue-projection', { query: { year: YEAR, month: asOfMonth } })
+  } catch {
+    nightlyProjection.value = null
+  }
+}
+onMounted(loadNightlyProjection)
+// A night with too little same-weekday history can't be projected; rather than show a
+// silently short total, fall back to the old method for the whole month.
+const nightlyProjectionUsable = computed(() => !!nightlyProjection.value && nightlyProjection.value.missingHistory === 0)
+
+// Spreads the remaining-nights total across the core leaf accounts by each one's share of
+// month-to-date actuals (by budget share before anything has synced), so Food vs. each
+// beverage account keep their real mix and the leaves still sum to the night-by-night total.
+function nightlyCoreProjected(accountId: number, actualOf: (id: number) => number, budgetOf: (id: number) => number): number {
+  const proj = nightlyProjection.value
+  if (!proj) return actualOf(accountId)
+  const leaves = revenueAccounts.value.filter(a => isLeafAccount(a) && isCoreRevenueAccount(a))
+  const totalActual = leaves.reduce((sum, a) => sum + Math.max(0, actualOf(a.accountId)), 0)
+  let share: number
+  if (totalActual > 0) {
+    share = Math.max(0, actualOf(accountId)) / totalActual
+  } else {
+    const totalBudget = leaves.reduce((sum, a) => sum + Math.max(0, budgetOf(a.accountId)), 0)
+    share = totalBudget > 0 ? Math.max(0, budgetOf(accountId)) / totalBudget : 1 / Math.max(1, leaves.length)
+  }
+  return actualOf(accountId) + proj.remainingTotal * share
+}
+
+const specialNights = ref<SpecialNight[]>([])
+const specialStatus = ref<'idle' | 'saving' | 'error'>('idle')
+const specialMessage = ref('')
+function isoMonthRange(month: number) {
+  const from = `${YEAR}-${String(month).padStart(2, '0')}-01`
+  const to = new Date(Date.UTC(YEAR, month, 0)).toISOString().slice(0, 10)
+  return { from, to }
+}
+const specialMonthRange = computed(() => isoMonthRange(editMonth.value))
+async function loadSpecialNights() {
+  try {
+    specialNights.value = (await $fetch<{ nights: SpecialNight[] }>('/api/special-nights', { query: specialMonthRange.value })).nights
+  } catch {
+    specialNights.value = []
+  }
+}
+onMounted(loadSpecialNights)
+watch(editMonth, loadSpecialNights)
+
+const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, note: string }>({ date: '', kind: 'buyout', amount: '', note: '' })
+// When a new dated buyout lands on a weekday that still has an undated planner count, offer
+// to retire that count (default on): it's almost certainly the same buyout being given a date.
+const newSpecialReplacesUndated = ref(true)
+const newSpecialUndatedCount = computed(() => {
+  const { date, kind } = newSpecial.value
+  if (kind !== 'buyout' || !date) return 0
+  return parseCount(buyoutCountInputs.value[utcDow(date)])
+})
+function utcDow(iso: string) {
+  return new Date(`${iso}T00:00:00Z`).getUTCDay()
+}
+function defaultBuyoutAmount(date: string): number | null {
+  if (!buyoutRates.value || !date) return null
+  const d = utcDow(date)
+  return d === 0 || d >= 5 ? buyoutRates.value.weekendRate : buyoutRates.value.weekdayRate
+}
+// Prefill: a buyout defaults to the planner's guaranteed minimum for that weekday; a
+// closure or off-site night has no dinner revenue.
+watch(() => [newSpecial.value.date, newSpecial.value.kind] as const, ([date, kind]) => {
+  if (kind === 'closed' || kind === 'offsite') newSpecial.value.amount = '0'
+  else if (kind === 'buyout' && (newSpecial.value.amount === '' || newSpecial.value.amount === '0')) {
+    const a = defaultBuyoutAmount(date)
+    if (a != null) newSpecial.value.amount = String(a)
+  }
+})
+const newSpecialIsMonday = computed(() => !!newSpecial.value.date && utcDow(newSpecial.value.date) === 1)
+
+async function afterSpecialChange() {
+  await Promise.all([loadSpecialNights(), loadBuyoutPlan()])
+  if (editMonth.value === asOfMonth) await loadNightlyProjection()
+}
+async function addSpecialNight() {
+  const { date, kind, amount, note } = newSpecial.value
+  if (!date) {
+    specialStatus.value = 'error'
+    specialMessage.value = 'Pick a date first.'
+    return
+  }
+  specialStatus.value = 'saving'
+  try {
+    await $fetch('/api/special-nights', {
+      method: 'POST',
+      body: { date, kind, expectedRevenue: Math.max(0, parseEditableAmount(amount)), note, replacesUndated: kind === 'buyout' && newSpecialUndatedCount.value > 0 && newSpecialReplacesUndated.value }
+    })
+    newSpecial.value = { date: '', kind: 'buyout', amount: '', note: '' }
+    newSpecialReplacesUndated.value = true
+    specialStatus.value = 'idle'
+    specialMessage.value = ''
+    await afterSpecialChange()
+  } catch (err: unknown) {
+    specialStatus.value = 'error'
+    specialMessage.value = (err as { data?: { statusMessage?: string } })?.data?.statusMessage ?? 'Could not save that night.'
+  }
+}
+async function removeSpecialNight(date: string) {
+  specialStatus.value = 'saving'
+  try {
+    await $fetch('/api/special-nights', { method: 'DELETE', query: { date } })
+    specialStatus.value = 'idle'
+    specialMessage.value = ''
+    await afterSpecialChange()
+  } catch {
+    specialStatus.value = 'error'
+    specialMessage.value = 'Could not remove that night.'
+  }
+}
+
+
+function formatNightDate(iso: string) {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
 </script>
 
 <template>
@@ -838,7 +1059,7 @@ async function saveRevenue() {
               <span class="name">{{ CATEGORY_LABEL.revenue }}</span>
               <span v-if="livePaceCard.noActuals" class="chip warning">No actual data synced</span>
               <span v-else-if="livePaceCard.noBudget" class="chip warning">No budget</span>
-              <span v-else :class="['chip', livePaceCard.status]">{{ livePaceCard.actualPct!.toFixed(1) }}% of budget</span>
+              <span v-else :class="['chip', colorCodingActive ? livePaceCard.status : 'accent']">{{ livePaceCard.actualPct!.toFixed(1) }}% of budget</span>
             </div>
           </div>
         </div>
@@ -871,13 +1092,20 @@ async function saveRevenue() {
             <span v-if="revenueRecomputeStatus === 'done'" class="chip good">{{ revenueRecomputeMessage }}</span>
             <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
           </div>
+          <div v-if="revenueHasCapacityData" class="section-note">
+            <button class="mini-btn" :disabled="yearRecomputeStatus === 'running'" @click="recomputeYearRevenueFromCapacity">
+              Recompute all of {{ yearRecomputeLabel }} {{ YEAR }} from Capacity
+            </button>
+            <span v-if="yearRecomputeStatus === 'done'" class="chip good">{{ yearRecomputeMessage }}</span>
+            <span v-if="yearRecomputeStatus === 'error'" class="chip warning">{{ yearRecomputeMessage }}</span>
+          </div>
           <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Edit Capacity page</NuxtLink>.</div>
         </div>
 
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Buyout Revenue</span>
-            <span class="quiet-note">A buyout swaps a normal night for a guaranteed minimum — only the difference over what that weekday normally makes is new revenue.</span>
+            <span class="quiet-note">A buyout swaps a normal night for a guaranteed minimum — only the difference over what that weekday normally makes is new revenue. Enter a buyout once, with its date, under Special Nights below; it counts here automatically. The counts in this panel are only for buyouts you expect but haven't put on a date yet.</span>
           </div>
 
           <div class="section-note buyout-rates-row">
@@ -889,6 +1117,11 @@ async function saveRevenue() {
             <span v-if="rateSaveStatus === 'error'" class="chip warning">Couldn't save rates</span>
           </div>
 
+          <div v-if="datedBuyouts.length" class="section-note">
+            Dated buyouts in {{ MONTH_NAMES[editMonth - 1] }}:
+            <span v-for="(b, i) in datedBuyouts" :key="b.date"><strong>{{ formatNightDate(b.date) }}</strong> ${{ Math.round(b.expected).toLocaleString() }}<template v-if="b.normal != null"> (+${{ Math.round(b.increment).toLocaleString() }} over a normal night)</template><template v-else> (no normal-night target yet — not counted)</template>{{ i < datedBuyouts.length - 1 ? '; ' : '.' }}</span>
+          </div>
+          <div class="section-note small">Not yet on the calendar (no date):</div>
           <div class="buyout-weekday-grid">
             <div v-for="w in buyoutWeekdays" :key="w.dow" class="buyout-weekday-cell">
               <span class="buyout-weekday-label">{{ w.short }}</span>
@@ -905,6 +1138,7 @@ async function saveRevenue() {
             <template v-if="buyoutHasAnyCount">
               Planned buyout revenue for {{ MONTH_NAMES[editMonth - 1] }}:
               <strong>+${{ Math.round(buyoutIncrementTotal).toLocaleString() }}</strong>
+              <template v-if="datedBuyouts.length && undatedBuyoutIncrement !== 0">(dated ${{ Math.round(datedBuyoutIncrement).toLocaleString() }} + not-yet-dated ${{ Math.round(undatedBuyoutIncrement).toLocaleString() }})</template>
               (Food ${{ Math.round(buyoutIncrementFood).toLocaleString() }} / Beverage ${{ Math.round(buyoutIncrementBeverage).toLocaleString() }}<template v-if="!buyoutFoodBeverageMix.hasData"> — no real sales data yet, used a 65/35 fallback split</template>).
             </template>
             <template v-else>No buyouts planned for {{ MONTH_NAMES[editMonth - 1] }} yet.</template>
@@ -916,6 +1150,71 @@ async function saveRevenue() {
             <span v-if="buyoutApplyStatus === 'done'" class="chip good">{{ buyoutApplyMessage }}</span>
             <span v-if="buyoutApplyStatus === 'error'" class="chip warning">{{ buyoutApplyMessage }}</span>
           </div>
+        </div>
+
+        <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
+          <div class="live-pace-head">
+            <span class="chip accent">Special Nights</span>
+            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. The current month's Projected figure uses these instead of a normal night, and the Dashboard's Next 7 Nights panel shows them. Expected revenue is core dine-in only: a buyout's amount, $0 for a closure or off-site night.</span>
+          </div>
+          <table v-if="specialNights.length" class="special-table">
+            <thead>
+              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Expected dine-in revenue</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="n in specialNights" :key="n.date">
+                <th scope="row">{{ formatNightDate(n.date) }}</th>
+                <td>{{ SPECIAL_KIND_LABEL[n.kind] }}</td>
+                <td class="num">${{ Math.round(n.expectedRevenue).toLocaleString() }}</td>
+                <td class="note-cell">{{ n.note ?? '' }}</td>
+                <td><button class="mini-btn" :disabled="specialStatus === 'saving'" @click="removeSpecialNight(n.date)">Remove</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="quiet-note small">None entered for {{ MONTH_NAMES[editMonth - 1] }}.</div>
+          <form class="section-note special-add-row" @submit.prevent="addSpecialNight">
+            <input v-model="newSpecial.date" type="date" class="rate-input date-input" :min="specialMonthRange.from" :max="specialMonthRange.to" aria-label="Date" required />
+            <select v-model="newSpecial.kind" class="rate-input kind-input" aria-label="Type">
+              <option v-for="(label, k) in SPECIAL_KIND_LABEL" :key="k" :value="k">{{ label }}</option>
+            </select>
+            <span>$</span>
+            <input v-model="newSpecial.amount" type="text" inputmode="numeric" class="rate-input" placeholder="0" aria-label="Expected dine-in revenue" />
+            <input v-model="newSpecial.note" type="text" class="rate-input note-input" placeholder="Note (optional)" maxlength="200" aria-label="Note" />
+            <button type="submit" class="mini-btn" :disabled="specialStatus === 'saving'">Add night</button>
+            <label v-if="newSpecialUndatedCount > 0" class="replace-undated">
+              <input v-model="newSpecialReplacesUndated" type="checkbox" />
+              This is the {{ Number(newSpecialUndatedCount.toFixed(2)) }} not-yet-dated {{ formatNightDate(newSpecial.date).split(',')[0] }} buyout in the planner — retire it so it isn't counted twice
+            </label>
+            <span v-if="newSpecialIsMonday" class="chip warning">⚠ Mondays are already closed</span>
+            <span v-if="specialStatus === 'error'" class="chip warning">{{ specialMessage }}</span>
+          </form>
+          <div class="quiet-note small">Adding a date that's already listed replaces it.</div>
+          <div class="quiet-note small">
+            A buyout here also adds (its revenue − a normal night) to the budget once you click Apply in the Buyout Revenue panel above. Removing one does not restore a planner count.
+          </div>
+
+          <details v-if="selectedMonthIsCurrent && nightlyProjection" class="nightly-detail">
+            <summary>How {{ MONTH_NAMES[editMonth - 1] }}'s dine-in revenue is projected, night by night</summary>
+            <div class="quiet-note small">
+              ${{ Math.round(nightlyProjection.actualCoreToDate).toLocaleString() }} synced<template v-if="nightlyProjection.knownThrough"> through {{ formatNightDate(nightlyProjection.knownThrough) }}</template>
+              + ${{ Math.round(nightlyProjection.remainingTotal).toLocaleString() }} expected over the remaining nights
+              = <strong>${{ Math.round(nightlyProjection.projectedCoreTotal).toLocaleString() }}</strong>.
+              <template v-if="nightlyProjection.bookingSnapshot">Bookings as of the OpenTable upload on {{ formatNightDate(nightlyProjection.bookingSnapshot.date) }}.</template>
+            </div>
+            <table class="special-table">
+              <thead><tr><th scope="col">Night</th><th scope="col" class="num">Normal night</th><th scope="col" class="num">Bookings</th><th scope="col" class="num">Expected</th></tr></thead>
+              <tbody>
+                <tr v-for="n in nightlyProjection.nights" :key="n.date">
+                  <th scope="row">{{ formatNightDate(n.date) }}</th>
+                  <td class="num">{{ n.normalRevenue != null ? `$${Math.round(n.normalRevenue).toLocaleString()}` : '—' }}</td>
+                  <td class="num">{{ n.special ? '' : Math.abs(n.bookingAdjustment) >= 1 ? `${n.bookingAdjustment > 0 ? '+' : '−'}$${Math.round(Math.abs(n.bookingAdjustment)).toLocaleString()}` : '' }}</td>
+                  <td class="num">
+                    <template v-if="n.special">{{ SPECIAL_KIND_LABEL[n.special.kind] }} · </template>{{ n.expected != null ? `$${Math.round(n.expected).toLocaleString()}` : 'not enough history' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
         </div>
 
         <div v-if="!viewingYearTotal" class="action-row">
@@ -942,7 +1241,9 @@ async function saveRevenue() {
             >{{ hideZeroRows ? 'Show' : 'Hide' }} $0 rows</button>
           </div>
           <div v-if="!viewingYearTotal && selectedMonthIsCurrent" class="quiet-note projected-note">
-            Projected for Event Sales, Catering, Retail, and Other Service Income uses that account's own budget (floored at actual-to-date) instead of a straight-line extrapolation — those land in large, sporadic amounts rather than a steady daily trickle.
+            <template v-if="nightlyProjectionUsable">Projected for core dine-in Food/Beverage is built night by night: synced sales so far, plus each remaining night's recent weekday average (or its Special Night amount below), nudged by OpenTable bookings for the next few nights.</template>
+            <template v-else>Projected for core dine-in Food/Beverage extrapolates sales so far by the share of operating days elapsed (not enough recent nights to build it night by night).</template>
+            Event Sales, Catering, Retail, and Other Service Income use that account's own budget (floored at actual-to-date) — those land in large, sporadic amounts rather than a steady daily trickle.
           </div>
           <div class="month-tabs">
             <button
@@ -1319,6 +1620,21 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   cursor: pointer;
 }
 .mini-btn:disabled { opacity: 0.5; cursor: default; }
+
+.special-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0; }
+.special-table th, .special-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--hair); font-weight: 500; color: var(--ink-2); }
+.special-table thead th { font-size: 11px; font-weight: 700; color: var(--ink-3); }
+.special-table tbody th { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.special-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.special-table .note-cell { color: var(--ink-3); }
+.special-add-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.special-add-row .date-input { width: 140px; }
+.special-add-row .kind-input { width: auto; }
+.special-add-row .note-input { width: 180px; }
+.special-add-row .replace-undated { flex-basis: 100%; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.nightly-detail { margin-top: 8px; }
+.nightly-detail summary { font-size: 12px; font-weight: 700; color: var(--accent-text); cursor: pointer; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; margin-bottom: 10px; }
 .action-btn {

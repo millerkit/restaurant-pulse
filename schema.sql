@@ -750,3 +750,62 @@ CREATE TABLE sync_runs (
 --   FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
 --   WHERE a.category = 'opex' AND a.cost_behavior = 'variable' AND dli.date BETWEEN ? AND ?
 --   GROUP BY a.subcategory ORDER BY SUM(dli.amount) DESC;
+
+-- OpenTable reservations (added 2026-11-04), one row per reservation or walk-in
+-- from a GuestCenter CSV export, for forecasting covers from the booking curve.
+-- Deliberately NO guest names, phones, emails, notes or tags: the importer
+-- (server/utils/opentable-import.mjs) only reads the columns below and never
+-- sees the rest. Created/canceled timestamps let any past "as of" snapshot be
+-- reconstructed (booked on day D if created_at <= D and not yet canceled), so
+-- re-importing does not need to keep old snapshots. An import REPLACES every
+-- row whose visit_date falls inside the uploaded file's date range.
+-- Times are restaurant-local ('YYYY-MM-DD HH:MM'); status is OpenTable's raw text.
+CREATE TABLE reservations (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  visit_date        TEXT NOT NULL,
+  visit_time        TEXT,
+  created_at        TEXT,
+  canceled_at       TEXT,
+  no_show_at        TEXT,
+  seated_at         TEXT,
+  size              INTEGER NOT NULL,
+  status            TEXT NOT NULL,
+  tables            TEXT,
+  area_assigned     TEXT,
+  area_booked       TEXT,
+  source            TEXT,
+  online_waitlist   INTEGER NOT NULL DEFAULT 0,
+  experience_title  TEXT,
+  prepayment_status TEXT,
+  imported_at       TEXT NOT NULL
+);
+CREATE INDEX idx_reservations_visit_date ON reservations (visit_date);
+
+-- One row per CSV upload, for the Reservations page's "what's loaded" summary.
+CREATE TABLE reservation_imports (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  imported_at   TEXT NOT NULL,
+  rows          INTEGER NOT NULL,
+  date_from     TEXT NOT NULL,
+  date_to       TEXT NOT NULL,
+  replaced_rows INTEGER NOT NULL
+);
+
+-- Dated nights that aren't ordinary dinner service (added 2026-11-05): buyouts,
+-- closures (holidays etc.), off-site events and ticketed event nights. Used by the
+-- Revenue tab's night-by-night current-month projection and the Dashboard's Next 7
+-- Nights panel. expected_revenue is CORE dine-in revenue expected that night (the
+-- accounts in CORE_REVENUE_ACCOUNT_NUMBERS): a buyout rings into core, so its amount
+-- goes here; a closure or off-site night is $0; a ticketed event's ticket revenue
+-- posts to Event Sales (projected separately from its own budget), so only any
+-- regular dinner revenue alongside it belongs here. A dated buyout also feeds the
+-- budget (expected_revenue minus that weekday's normal night, in the Revenue tab's
+-- Buyout Revenue panel); revenue_buyout_plan's per-weekday counts remain only for
+-- buyouts expected but not yet dated.
+CREATE TABLE special_nights (
+  date             TEXT PRIMARY KEY,
+  kind             TEXT NOT NULL CHECK (kind IN ('buyout', 'closed', 'offsite', 'event')),
+  expected_revenue REAL NOT NULL DEFAULT 0 CHECK (expected_revenue >= 0),
+  note             TEXT,
+  updated_at       TEXT NOT NULL
+);

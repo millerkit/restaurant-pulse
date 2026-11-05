@@ -20,6 +20,10 @@ const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
 // the real date, not a frozen narration date.
 const asOfMonth = currentAsOfMonth(YEAR)
 const asOfDay = currentAsOfDay(YEAR)
+// Status colors/shading are noise early in a month (a few days of actuals say little
+// about the month), so the in-progress month stays uncolored until a full week has elapsed.
+// Closed months are unaffected.
+const COLOR_CODING_MIN_DAY = 7
 const asOfLabel = isPlanningYear ? `${YEAR} (planning)` : `${MONTH_NAMES[asOfMonth - 1]} ${asOfDay}`
 
 function monthHasBudget(month: number) {
@@ -494,18 +498,18 @@ function budgetActualVariance(category: Category, budget: number, actual: number
 // make materiality visible at a glance regardless of the line's size.
 type Variance = ReturnType<typeof budgetActualVariance> | { kind: 'no-actuals' }
 function varianceIcon(v?: Variance): string {
-  if (!v || v.kind !== 'value') return ''
+  if (!v || v.kind !== 'value' || !colorCodingActive.value) return ''
   return v.status === 'good' ? '✓' : (v.delta >= 0 ? '▲' : '▼')
 }
 // Whole-row shading (see varianceTint in useBudgetData.ts and .var-bad/.var-good in main.css).
 function rowTintClass(v?: Variance): string {
-  return v && v.kind === 'value' ? tintRowClass(v.tint) : ''
+  return v && v.kind === 'value' && colorCodingActive.value ? tintRowClass(v.tint) : ''
 }
 function rowTintStyle(v?: Variance) {
-  return v && v.kind === 'value' ? tintRowStyle(v.tint) : undefined
+  return v && v.kind === 'value' && colorCodingActive.value ? tintRowStyle(v.tint) : undefined
 }
 function varianceClass(v?: Variance): string {
-  if (!v || v.kind !== 'value') return ''
+  if (!v || v.kind !== 'value' || !colorCodingActive.value) return ''
   return `v-${v.status}`
 }
 function varianceDeltaLabel(v?: Variance): string {
@@ -667,6 +671,7 @@ const liveDraftNetIncome = computed(() => netIncome({
 // viewingAnnualTotal always wins.
 const selectedMonthClosed = computed(() => !viewingAnnualTotal.value && isMonthClosed(YEAR, editMonth.value))
 const selectedMonthIsCurrent = computed(() => !viewingAnnualTotal.value && isMonthCurrent(YEAR, editMonth.value))
+const colorCodingActive = computed(() => !(selectedMonthIsCurrent.value && asOfDay < COLOR_CODING_MIN_DAY))
 
 const monthActualVsBudgetCards = computed(() => {
   if (!selectedMonthClosed.value) return null
@@ -1470,11 +1475,11 @@ function exportForQuickBooks() {
               <span class="name">{{ card.label }}</span>
               <span v-if="card.noActuals" class="chip warning">No actual data synced</span>
               <span v-else-if="card.noBudget" class="chip warning">No budget</span>
-              <span v-else :class="['chip', card.status]">{{ card.actualPct.toFixed(1) }}% of budget</span>
+              <span v-else :class="['chip', colorCodingActive ? card.status : 'accent']">{{ card.actualPct.toFixed(1) }}% of budget</span>
             </div>
           </div>
           <div class="live-pace-net">
-            Net income (draft): <strong :class="liveDraftNetIncome >= 0 ? 'good' : 'critical'">{{ liveDraftNetIncome >= 0 ? '+' : '' }}${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
+            Net income (draft): <strong :class="colorCodingActive ? (liveDraftNetIncome >= 0 ? 'good' : 'critical') : ''">{{ liveDraftNetIncome >= 0 ? '+' : '' }}${{ Math.round(liveDraftNetIncome).toLocaleString() }}</strong>
           </div>
         </div>
 

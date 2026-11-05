@@ -6,6 +6,47 @@ useHead({ title: `${site.restaurantName} — Weekly Performance` })
 
 const { data, pending, error, refresh } = await useFetch('/api/dashboard')
 
+// Next 7 nights booking pace (server/api/booking-pace.get.ts). Fetched apart from
+// the Dashboard data so a missing reservations table can't break the rest of the page.
+type PaceNight = {
+  date: string, daysOut: number, inUpload: boolean, booked: number | null, typicalBooked: number | null,
+  weekdayAvgCovers: number | null, historyNights: number, pace: number | null, estimate: number | null,
+  special: { kind: 'buyout' | 'closed' | 'offsite' | 'event', expectedRevenue: number, note: string | null } | null
+}
+// A dated special night (entered on the Revenue tab) replaces the pace chip/estimate.
+function specialChip(n: PaceNight): { cls: string, label: string } | null {
+  if (!n.special) return null
+  const amount = n.special.expectedRevenue > 0 ? ` · $${Math.round(n.special.expectedRevenue).toLocaleString()}` : ''
+  switch (n.special.kind) {
+    case 'buyout': return { cls: 'event', label: `★ Buyout${amount}` }
+    case 'event': return { cls: 'event', label: `★ Event night${amount}` }
+    case 'offsite': return { cls: 'neutral', label: '◦ Off-site event — no dinner service' }
+    default: return { cls: 'neutral', label: '◦ Closed' }
+  }
+}
+type BookingPace =
+  | { available: false, reason: string }
+  | { available: true, snapshotDate: string, snapshotTime: string, uploadedThrough: string, staleDays: number,
+      staleAfterDays: number, estimateMaxDaysOut: number, nights: PaceNight[] }
+const { data: bookingPace } = await useFetch<BookingPace>('/api/booking-pace')
+
+// Pace = booked now / typical booked at this distance out for the weekday.
+// Icon + label on every chip, never color alone.
+function paceChip(n: PaceNight): { cls: string, label: string } | null {
+  if (n.booked == null) return null
+  if (n.booked === 0 && (n.typicalBooked ?? 0) >= 10) return { cls: 'warning', label: '⚠ No bookings — closed?' }
+  if (n.pace == null) return null
+  if (n.pace >= 1.1) return { cls: 'good', label: '▲ Ahead of pace' }
+  if (n.pace >= 0.9) return { cls: 'good', label: '✓ On pace' }
+  if (n.pace >= 0.75) return { cls: 'warning', label: '▼ Behind pace' }
+  return { cls: 'serious', label: '▼ Well behind pace' }
+}
+function formatSnapshot(date: string, time: string) {
+  const [h = 0, m = 0] = time.split(':').map(Number)
+  const t = `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`
+  return `${formatWeekdayDate(date)}, ${t}`
+}
+
 // ---- date/time formatting (all daily_line_items dates are UTC-anchored
 // ISO strings, e.g. '2026-07-27' — parsed/formatted in UTC throughout so a
 // browser west of UTC doesn't roll the displayed date back a day) --------
@@ -315,6 +356,38 @@ function meterStatusLabel(status: string | null) {
         </form>
       </section>
 
+      <section v-if="bookingPace?.available">
+        <div class="section-label">Next 7 Nights — OpenTable bookings vs. what's usually on the book by now</div>
+        <div class="week-day-row seven">
+          <div v-for="n in bookingPace.nights" :key="n.date" class="day-card">
+            <div class="day-label">{{ formatWeekdayDate(n.date) }}<span class="days-out"> · {{ n.daysOut === 0 ? 'tonight' : n.daysOut === 1 ? 'tomorrow' : `in ${n.daysOut} days` }}</span></div>
+            <template v-if="n.special">
+              <div v-if="n.booked" class="day-actual">{{ n.booked }} booked</div>
+              <span :class="['chip', specialChip(n)!.cls]">{{ specialChip(n)!.label }}</span>
+              <div v-if="n.special.note" class="day-target">{{ n.special.note }}</div>
+            </template>
+            <template v-else-if="n.booked != null">
+              <div class="day-actual">{{ n.booked }} booked</div>
+              <div class="day-target" v-if="n.typicalBooked != null">Usually {{ n.typicalBooked }} by now</div>
+              <span v-if="paceChip(n)" :class="['chip', paceChip(n)!.cls]">{{ paceChip(n)!.label }}</span>
+              <div class="day-target" v-if="n.estimate != null">Estimate <strong>{{ n.estimate }} covers</strong></div>
+              <div class="day-target" v-else-if="n.weekdayAvgCovers != null">Usually {{ n.weekdayAvgCovers }} covers total</div>
+            </template>
+            <div v-else class="day-actual quiet">Not in the last upload</div>
+          </div>
+        </div>
+        <div class="quiet-note">
+          Bookings as of the last OpenTable upload ({{ formatSnapshot(bookingPace.snapshotDate, bookingPace.snapshotTime) }}), walk-ins excluded.
+          "Usually" is the last 6 same-weekday nights at the same number of days out. Total-covers estimates (Toast, including walk-ins) are shown only
+          {{ bookingPace.estimateMaxDaysOut }} days out or less — further out, the book hasn't predicted final covers better than the weekday average.
+          Buyouts and closures come from Special Nights on the <NuxtLink to="/budget/revenue">Revenue</NuxtLink> tab.
+        </div>
+        <div v-if="bookingPace.staleDays >= bookingPace.staleAfterDays" class="drill-card">
+          <span class="chip warning">⚠ Bookings {{ bookingPace.staleDays }} days old</span>
+          <span class="quiet-note">Upload a fresh export on the <NuxtLink to="/reservations">Reservations</NuxtLink> tab — pace and estimates use the book as of the last upload.</span>
+        </div>
+      </section>
+
       <!-- COGS / labor vs revenue -->
       <section>
         <div class="section-label">Cost Pace — Month to Date</div>
@@ -541,6 +614,10 @@ function meterStatusLabel(status: string | null) {
   color: var(--ink);
 }
 .day-card .day-actual.quiet { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.week-day-row.seven { grid-template-columns: repeat(7, 1fr); }
+.chip.neutral { color: var(--ink-2); background: var(--surface-alt); }
+.day-card .days-out { font-weight: 500; }
+.day-card .chip { align-self: flex-start; }
 
 .benchmark-form {
   display: flex;
@@ -695,6 +772,6 @@ function meterStatusLabel(status: string | null) {
 @media (max-width: 760px) {
   .hero-row, .meter-row { grid-template-columns: 1fr; }
   .compare-row, .stat-row { grid-template-columns: 1fr 1fr; }
-  .week-day-row { grid-template-columns: 1fr 1fr; }
+  .week-day-row, .week-day-row.seven { grid-template-columns: 1fr 1fr; }
 }
 </style>

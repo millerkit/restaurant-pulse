@@ -4857,6 +4857,124 @@ in `weekly-targets.ts`). This is step 1 of 3 (Capacity); the rest is below.
   `revenue-modeling.get.ts`). Revenue Modeling still multiplies every area by one `operatingNightsPerYear`.
   The Labor tab's Tuesday Chef's hours must be cut by hand (variable labor scales with covers, not schedules).
 
+## OpenTable reservation importer — 2026-11-04
+
+First step toward forecasting covers from reservations (booking curve: how much of a night is
+booked N days out vs. its final covers, plus walk-in and no-show rates). This pass is
+ingestion only; no forecast is built yet, deliberately, until a full export with Created/Canceled
+dates shows what the data supports. OpenTable's API is partner-only, so this is CSV upload.
+
+- **`reservations` / `reservation_imports`** (schema.sql): one row per reservation or walk-in, with
+  visit/created/canceled/no-show/seated timestamps, size, status, tables, area, source, experience
+  title and prepayment status. **No guest names, phones, emails, notes, tags or "Private Dining
+  Title"** (that column is just "<first name>'s Event"): the importer only reads a whitelist of
+  columns (`COLUMN_MAP` in `server/utils/opentable-import.mjs`). Never commit a raw export.
+- **Replace-by-range, not upsert**: the export has no reservation id, so an upload deletes every
+  stored row whose `visit_date` falls inside the file's date range and inserts the file's rows
+  (one transaction). A newer export of the same dates safely supersedes an older one. History of
+  past booking states isn't stored; it's reconstructable (booked on day D if `created_at` <= D and
+  not canceled by D).
+- Accepts both formats seen so far (the emailed CSV with a separate Visit Time column, and the
+  on-screen "Jun 20, 2026 9:54 pm" style). Times are restaurant-local; `status` is OpenTable's raw
+  text (e.g. "Assumed Finished", "Not Confirmed"). The upload warns if Created/Canceled/No-show
+  columns are missing, because the booking curve can't be built without them.
+- **Upload page**: `/reservations` (`app/pages/reservations.vue`, nav "Reservations"), routes
+  `POST /api/reservations/import` (raw CSV body) and `GET /api/reservations` (what's loaded).
+- **Production rollout**: run `node scripts/add-reservations-tables.mjs` on the volume BEFORE
+  `fly deploy`, or both routes 500 on the missing tables. Local dev is migrated.
+- **Columns to request in GuestCenter**: Visit Date, Created Date, Created Lead Time, Canceled
+  Date, No-show Date, Seated Date, Size, Status, Table, Dining Area Assigned, Dining Area Booked,
+  Source, Online Waitlist, Experience Title, Prepayment Status; include every status. POS columns
+  come back blank (OpenTable isn't receiving Toast checks), so skip them.
+- Verified: parser and replace-on-reimport against the 2026-11-04 export on a scratch DB copy (305
+  rows, re-import replaced 305, no PII in stored rows) and typecheck of the new files. Not clicked
+  through in a browser (local dev is behind Basic Auth).
+
+## Booking pace: next 7 nights — 2026-11-05
+
+Built from the full OpenTable export (5,176 reservations, Jun 20–Dec 17, with cancellations; uploaded to
+production 2026-11-05). **Backtest first** (scratch scripts, 66 nights Aug 11–Oct 29, each forecast using
+only data known at the time, scored against Toast covers): the book improves on a trailing 6-same-weekday
+Toast average only close in — mean abs error 14.4% → 11.6% same day, 13.1% one day out, 13.5% three days
+out — and adds nothing at 7+ days (scaling the book up by the booking curve was far worse: 47% error at 14
+days, 137% at 28). Correlation of "booked vs. usual" with "covers vs. usual" is 0.66 same day, 0.44 at 3
+days, 0.12 at 14. So no 3–4 week forecast from bookings yet; Capacity/weekday goals stay the long-range
+source. Re-run in January, after holiday-party bookings, with more data.
+
+- **Other findings**: median share of the final book in hand — 15% at 28 days, 31% at 21, 53% at 14, 76% at
+  7, 94% at 1 (Saturday books earliest, Sunday latest). ~23% of booked covers cancel; no-shows ~0.3%.
+  OpenTable booked + walk-in covers ≈ 95% of Toast covers every month. Walk-ins fell from 738 covers (Jul)
+  to 473 (Oct) while booked held steady (patio closing, presumably), so Toast/booked fell from ~1.6 to ~1.4.
+- **[`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts)** (own route, so a missing
+  reservations table can't break the Dashboard): for the next 7 operating nights from local today, covers
+  on the book (walk-ins excluded) as of the **latest upload's time**, vs. the mean booked at the same days
+  out for the last 6 same-weekday open nights (reconstructed from `created_at`/`canceled_at`, at the
+  upload's time of day). Within 3 days out it adds an estimate: the weekday's Toast-covers average +
+  k × (booked − usual booked), k fitted per days-out on the last 60 nights (least squares through the
+  origin, clamped 0–3). A `Cancelled` row with no cancel time counts as never booked.
+- **Dashboard panel** "Next 7 Nights" ([`app/pages/index.vue`](app/pages/index.vue), under This Week's
+  Targets): booked vs. usual, a pace chip (≥110% ahead, 90–110% on pace, 75–90% behind, <75% well behind;
+  0 booked when usually ≥10 reads "No bookings — closed?"), and the estimate or the weekday average. Warns
+  when the upload is 2+ days old. **The book only refreshes when a new export is uploaded** — weekly at
+  least, ideally before staffing/ordering decisions.
+- **Known limits**: "usual" comes from the last 6 same-weekday nights, so it lags real changes (e.g. the
+  Chef's Counter Tuesday closure from Dec 1 will read as behind pace on Tuesdays for a few weeks); holiday
+  closures show as "No bookings"; buyouts/large parties swing the book.
+- No schema change. Verified locally against the real export loaded into local dev (route output and SSR
+  HTML checked; Nov 12 shows "No bookings — closed?"). Not visually checked in a browser (Basic Auth).
+
+## Night-by-night revenue projection + Special Nights — 2026-11-05
+
+Follow-on to the booking-pace work above. **Backtest first** (scratch scripts; Aug–Oct, projecting the
+month-end from days 7, 14 and 21, 9 projections; Toast nightly dinner sales as the revenue measure,
+since local QBO revenue stops Jul 28): mean month-end error was 8.1% for the old method (actual ÷ share
+of operating days elapsed), 7.1% weekday-weighted, 7.2% night by night, 6.8% night by night + bookings.
+With the off-nights known ahead (Sat Sep 26 off-site catering, Wed Sep 30 buyout, Sun Oct 11 closed) it
+drops to 4.9% / 3.9% / 4.0% / 3.7%. So **dated special nights are the big win**, weekday shape is worth
+~1pt, and bookings under half a point on a month total. September also ran ~10% under its weekday
+averages on ordinary nights, which no method foresees.
+
+- **`special_nights`** (schema.sql): date PK, kind (`buyout` / `closed` / `offsite` / `event`),
+  `expected_revenue` = **core dine-in** revenue expected that night (a buyout rings into core; $0 for a
+  closure or off-site night; a ticketed event's tickets post to Event Sales, projected separately), note.
+  Routes: `GET /api/special-nights?from&to`, `POST /api/special-nights` (upsert by date),
+  `DELETE /api/special-nights?date=`. Readers (`server/utils/special-nights.ts`) treat a missing table
+  as "none", so only saving fails before the migration.
+- **Buyouts are entered once, with a date (merged 2026-11-05).** A dated `buyout` special night feeds the
+  projection (its full night revenue) AND the budget: the Revenue tab's Buyout Revenue panel counts it as
+  (expected revenue − that weekday's normal night) in its Planned/Apply figure, alongside the planner's
+  per-weekday counts (`revenue_buyout_plan`), which are now only for buyouts expected but **not yet dated**
+  (labelled that way in the panel). A mismatch note used to compare the two; that's gone. Adding a dated
+  buyout on a weekday that still has an undated count shows a checkbox (default on) to retire that count:
+  `POST /api/special-nights` with `replacesUndated` reduces it by the new buyout's worth in "standard buyout"
+  units, (price − normal) / (rate − normal), clamped at 0 (so a same-priced buyout takes it to exactly 0), in
+  the same transaction. Removing a dated buyout does not restore a count. **The budget only changes when
+  Apply is clicked**; the panel's Apply button lights up when dated buyouts change.
+- **[`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts)**: core revenue synced
+  so far this month + each remaining Tue–Sun night = its special-night amount, else the weekday's mean core
+  revenue over its last 6 ordinary open nights (Toast covers ≥ 15, positive core revenue, special nights
+  and `excludeSpendOutliers` nights left out) + the booking-pace covers adjustment × that weekday's
+  revenue per cover for nights the booking estimate covers (≤3 days from the upload). Returns
+  `missingHistory` (nights with <3 same-weekday history); the client falls back to the old method then.
+- **Booking-pace math moved to [`server/utils/booking-pace.ts`](server/utils/booking-pace.ts)**
+  (`computeBookingPace`), shared by the Dashboard route and the projection. The Dashboard route now adds
+  each night's special night; the panel shows "★ Buyout · $X" / "★ Event night" / "◦ Closed" / "◦ Off-site
+  event" instead of a pace chip.
+- **Revenue tab** ([`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue)): a Special Nights panel
+  for the selected month (add/replace/remove; buyouts prefill the planner's guaranteed minimum for that
+  weekday, closures/off-site prefill $0), and for the current month a collapsible night-by-night
+  breakdown. The current month's **Projected** for core leaf accounts (and the Year Total's current-month
+  piece) = actual + the remaining-nights total spread across core leaves by month-to-date share (budget
+  share before any sync). The **Budget column is untouched**. Projection and special nights load on the
+  client, so the server-rendered page shows the fallback note until they arrive.
+- **Production rollout**: run `node scripts/add-special-nights.mjs` on the volume BEFORE `fly deploy`
+  (otherwise saving a special night returns an explicit "run add-special-nights.mjs" error). Then enter
+  Nov 12 (full buyout) on the Revenue tab. Budget Pace's month projection still uses the old method.
+- Verified locally: routes (incl. 400 on a bad kind), a test Nov 12 buyout flowing into the projection
+  (+$1,139 vs. a normal Thursday) and the Dashboard panel, then removed; typecheck shows no new errors.
+  Local dev's history is stale (QBO through Jul 28), so its numbers are only plumbing checks; the
+  Revenue tab was not clicked through in a browser (Basic Auth).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -5111,6 +5229,9 @@ was deployed:
 - [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue) — Edit Monthly Budget, incl. the live pace preview (route `/budget/edit`) — Revenue is read-only here (see below)
 - [`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue) — Revenue tab: the real editable revenue projection, incl. the "Recompute from Capacity" sync (route `/budget/revenue`)
 - [`app/pages/budget/labor.vue`](app/pages/budget/labor.vue) — Labor tab: rates/hours/salaries modeling (route `/budget/labor`)
+- [`app/pages/reservations.vue`](app/pages/reservations.vue) / [`server/utils/opentable-import.mjs`](server/utils/opentable-import.mjs) — OpenTable CSV upload and importer (route `/reservations`; see "OpenTable reservation importer")
+- [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection and dated special nights (see "Night-by-night revenue projection")
+- [`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts) — Next 7 Nights booking pace on the Dashboard (see "Booking pace: next 7 nights")
 - [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)
 - [`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts) / [`scripts/backfill-toast-employee-hours.mjs`](scripts/backfill-toast-employee-hours.mjs) — per-employee hours + names from Toast's Labor API
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
