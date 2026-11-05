@@ -2,15 +2,10 @@
 import site from '~/config/site.json'
 import { CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, currentAsOfDay, currentAsOfMonth, daysInMonth, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
 
-// Mirrors server/utils/core-revenue.ts's CORE_REVENUE_ACCOUNT_NUMBERS — duplicated rather
-// than imported since server/utils isn't part of the client bundle (see this file's other
-// duplicated-across-the-boundary constants throughout the codebase, e.g. Toast's
-// MAX_PLAUSIBLE_GUESTS_PER_ORDER). Deliberately excludes Event Sales (4100s), Catering
-// (4200s), Retail (4300s), and Other Service Income (4400) — those land in large, sporadic
-// amounts (a booked event or a private buyout) rather than a steady daily trickle, so a
-// straight-line actual-to-date extrapolation over- or understates the month wildly depending
-// on whether that booking has posted yet (see computedAccountProjected below).
-const CORE_REVENUE_ACCOUNT_NUMBERS = ['4000', '4010', '4020', '4022', '4024', '4026', '4028']
+// The projection rules (core dine-in vs. Event Sales/Catering/Retail/Other Service Income, which
+// land in large sporadic amounts) live in app/utils/revenueProjection.ts, shared with Edit
+// Budget so the two pages can't disagree. See computedAccountProjected below.
+import { budgetFloor, isCoreRevenueAccountNumber, nightlyProjectionUsable as nightlyUsable, coreRevenueShares } from '~/utils/revenueProjection'
 
 useHead({ title: `${site.restaurantName} — Revenue` })
 
@@ -227,17 +222,7 @@ function projectFromActual(actual: number): number {
   return actual / fraction
 }
 function isCoreRevenueAccount(acc: BudgetAccount): boolean {
-  return acc.accountNumber !== null && CORE_REVENUE_ACCOUNT_NUMBERS.includes(acc.accountNumber)
-}
-// The "floor at actual-to-date" fallback below (used for Event/Catering/Retail-style
-// accounts) has to be sign-aware: most revenue accounts are budgeted positive, where "actual
-// already exceeds budget" should win via Math.max. But a contra-revenue account (e.g. 4900
-// Contra-Income/4910 Discounts & Comps) is budgeted *negative*, where Math.max(0, -2200)
-// would wrongly resolve to $0 — silently dropping the expected discount from the projected
-// total — instead of the intended $-2,200. Math.min is the correct floor once budget is
-// negative (bigger real discount than planned should still win over the budgeted estimate).
-function budgetFloor(actual: number, budget: number): number {
-  return budget >= 0 ? Math.max(actual, budget) : Math.min(actual, budget)
+  return isCoreRevenueAccountNumber(acc.accountNumber)
 }
 // Leaf accounts decide their own projection method (core dine-in gets the day-fraction
 // extrapolation; Event/Catering/Retail-style accounts fall back to their own budget — the
@@ -918,7 +903,7 @@ async function loadNightlyProjection() {
 onMounted(loadNightlyProjection)
 // A night with too little same-weekday history can't be projected; rather than show a
 // silently short total, fall back to the old method for the whole month.
-const nightlyProjectionUsable = computed(() => !!nightlyProjection.value && nightlyProjection.value.missingHistory === 0)
+const nightlyProjectionUsable = computed(() => nightlyUsable(nightlyProjection.value))
 
 // Spreads the remaining-nights total across the core leaf accounts by each one's share of
 // month-to-date actuals (by budget share before anything has synced), so Food vs. each
@@ -926,15 +911,8 @@ const nightlyProjectionUsable = computed(() => !!nightlyProjection.value && nigh
 function nightlyCoreProjected(accountId: number, actualOf: (id: number) => number, budgetOf: (id: number) => number): number {
   const proj = nightlyProjection.value
   if (!proj) return actualOf(accountId)
-  const leaves = revenueAccounts.value.filter(a => isLeafAccount(a) && isCoreRevenueAccount(a))
-  const totalActual = leaves.reduce((sum, a) => sum + Math.max(0, actualOf(a.accountId)), 0)
-  let share: number
-  if (totalActual > 0) {
-    share = Math.max(0, actualOf(accountId)) / totalActual
-  } else {
-    const totalBudget = leaves.reduce((sum, a) => sum + Math.max(0, budgetOf(a.accountId)), 0)
-    share = totalBudget > 0 ? Math.max(0, budgetOf(accountId)) / totalBudget : 1 / Math.max(1, leaves.length)
-  }
+  const leaves = revenueAccounts.value.filter(a => isLeafAccount(a))
+  const share = coreRevenueShares(leaves, actualOf, budgetOf).get(accountId) ?? 0
   return actualOf(accountId) + proj.remainingTotal * share
 }
 

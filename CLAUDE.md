@@ -4967,6 +4967,14 @@ averages on ordinary nights, which no method foresees.
   piece) = actual + the remaining-nights total spread across core leaves by month-to-date share (budget
   share before any sync). The **Budget column is untouched**. Projection and special nights load on the
   client, so the server-rendered page shows the fallback note until they arrive.
+- **Edit Budget uses the same projection (2026-11-05)**: its Revenue lines for the current month were still
+  straight-lined (and projected Event/Retail at $0 until they posted), so the two pages disagreed on
+  "Projected" (e.g. $179,895 vs. $215,878) — easy to misread as the Budget figure. The rules now live in
+  [`app/utils/revenueProjection.ts`](app/utils/revenueProjection.ts) (`projectRevenueLeaf`, `coreRevenueShares`,
+  `budgetFloor`), used by both pages: core dine-in = actual + its share of the night-by-night remaining
+  total; Event/Catering/Retail/contra = own budget floored at actual (sign-aware). Edit Budget fetches
+  `/api/revenue-projection` once on load, so reload it after changing special nights on the Revenue tab; its
+  Total tab's current-month piece follows the same rules. Budget Pace's month projection is still the old one.
 - **Production rollout**: run `node scripts/add-special-nights.mjs` on the volume BEFORE `fly deploy`
   (otherwise saving a special night returns an explicit "run add-special-nights.mjs" error). Then enter
   Nov 12 (full buyout) on the Revenue tab. Budget Pace's month projection still uses the old method.

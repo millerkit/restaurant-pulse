@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
+import { coreRevenueShares, projectRevenueLeaf, type NightlyProjectionSummary } from '~/utils/revenueProjection'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -105,6 +106,20 @@ async function loadCurrentMonthActuals() {
   }
 }
 onMounted(loadCurrentMonthActuals)
+
+// Night-by-night core dine-in projection for the current month (server/api/revenue-projection.get.ts),
+// the same one the Revenue tab uses, so revenue lines here can't disagree with it. Loaded once;
+// special nights are edited on the Revenue tab, so reload this page to pick up a change there.
+const revenueNightly = ref<NightlyProjectionSummary | null>(null)
+async function loadRevenueNightly() {
+  if (!isMonthCurrent(YEAR, asOfMonth)) return
+  try {
+    revenueNightly.value = await $fetch<NightlyProjectionSummary>('/api/revenue-projection', { query: { year: YEAR, month: asOfMonth } })
+  } catch {
+    revenueNightly.value = null
+  }
+}
+onMounted(loadRevenueNightly)
 
 // Synthesizes a MonthData-shaped object summing each account's amount across all 12 months, so
 // it can stand in for a real month's data and let every existing piece of account-tree
@@ -429,9 +444,30 @@ function computedAccountProjected(acc: BudgetAccount): number {
   const children = directChildren(acc.accountId)
   if (children.length > 0) return children.reduce((sum, c) => sum + computedAccountProjected(c), 0)
   const actual = computedAccountActual(acc)
+  if (acc.category === 'revenue') {
+    // Same rules as the Revenue tab (app/utils/revenueProjection.ts): core dine-in = actual + its share
+    // of the night-by-night remaining total (current month only); event/catering/retail = own budget
+    // floored at actual.
+    const useNightly = selectedMonthIsCurrent.value && editMonth.value === asOfMonth
+    return projectRevenueLeaf({
+      accountNumber: acc.accountNumber,
+      actual,
+      budget: computedAccountAmount(acc),
+      share: useNightly ? selectedMonthRevenueShares.value.get(acc.accountId) : undefined,
+      nightly: useNightly ? revenueNightly.value : null,
+      straightLine: a => projectFromActual(a, acc.category)
+    })
+  }
   if (projectionRule(acc) === 'lump') return Math.max(actual, computedAccountAmount(acc))
   return projectFromActual(actual, acc.category)
 }
+const selectedMonthRevenueShares = computed(() => {
+  const leaves = (editMonthData.value?.accounts || []).filter(a => a.category === 'revenue' && isLeafAccount(a))
+  return coreRevenueShares(leaves, id => selectedMonthAccountActuals.value[id] || 0, id => {
+    const a = leaves.find(l => l.accountId === id)
+    return a ? computedAccountAmount(a) : 0
+  })
+})
 function categoryProjectedTotal(cat: Category): number {
   const roots = (editMonthData.value?.accounts || []).filter(a => a.category === cat && a.parentAccountId === null)
   return roots.reduce((sum, a) => sum + computedAccountProjected(a), 0)
@@ -579,9 +615,26 @@ const currentMonthLaborFraction = computed<number | null>(() => {
 })
 // Same per-account rules as computedAccountProjected (projectionRule), but for a leaf of the
 // current month regardless of which tab is open.
+const currentMonthRevenueShares = computed(() => {
+  const leaves = (monthlyData.value[asOfMonth - 1]?.accounts ?? []).filter(a => a.category === 'revenue' && !(monthlyData.value[asOfMonth - 1]?.accounts ?? []).some(c => c.parentAccountId === a.accountId))
+  return coreRevenueShares(leaves, id => currentMonthActuals.value[id] || 0, id => leaves.find(l => l.accountId === id)?.amount ?? 0)
+})
 function currentMonthLeafProjection(acc: BudgetAccount): number {
   const budget = acc.amount ?? 0
   const actual = currentMonthActuals.value[acc.accountId] || 0
+  if (acc.category === 'revenue') {
+    return projectRevenueLeaf({
+      accountNumber: acc.accountNumber,
+      actual,
+      budget,
+      share: currentMonthRevenueShares.value.get(acc.accountId),
+      nightly: revenueNightly.value,
+      straightLine: a => {
+        const fraction = operatingFractionForMonth(asOfMonth, currentMonthLatestSynced.value, currentMonthWeekdayWeights.value)
+        return fraction > 0 ? a / fraction : a
+      }
+    })
+  }
   if (projectionRule(acc) === 'lump') return Math.max(actual, budget)
   const fraction = acc.category === 'labor' && currentMonthLaborFraction.value !== null
     ? currentMonthLaborFraction.value
