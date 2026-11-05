@@ -4753,6 +4753,13 @@ so next year can be planned in the same screens. Budget Pace and every other pag
   COGS, variable opex, event/catering/retail and buyouts are deliberately not touched, so 2027 net income reads far too
   high until they're budgeted. It runs client-side against whichever DB the app is on (local dev's budget differs from
   production's), and shows how many existing entries it would replace.
+- **The starter collapses once the year has a budget (2026-11-05)**: once any month of the planning year has a saved
+  budget entry (decided when the page first loads, so applying it to an empty year doesn't collapse the panel),
+  Edit Budget shows it only as a "Rebuild 2027 from scratch…" disclosure with a warning. Rebuilding replaces
+  Food/Beverage revenue (undoing buyout amounts applied from the Revenue tab's planner, which `revenue_buyout_applied`
+  would still think are applied), fixed expenses carried from December (including seasonal gas/electricity), and
+  labor. To change labor alone, save it on the Labor tab, which writes all twelve months of a planning year. The
+  full starter shows only for an empty year (e.g. 2028, once the year toggle covers it).
 - **7020 Loan Interest is the exception to "carry December forward"**: December includes the one-time Dec 20 catch-up
   interest, so by default it is budgeted from `loan_schedule`'s regular monthly interest for 2027
   ([`server/api/budget/loan-interest.get.ts`](server/api/budget/loan-interest.get.ts)); a checkbox restores the plain

@@ -14,6 +14,15 @@ const YEAR = selectedYear.value
 const isPlanningYear = YEAR > new Date().getFullYear()
 
 const { monthlyData, loadError, loadYear } = useBudgetYear(YEAR)
+// Whether a planning year already had budget entries when the page first loaded (null until then).
+// Decides if the "Build next year's budget" starter shows in full (empty year) or is tucked away behind
+// a warning (already built). Decided once, not live, so applying the starter to an empty year doesn't
+// collapse the panel (and its "done" message) the moment the data reloads.
+const planningYearStartedWithBudget = ref<boolean | null>(null)
+watch(monthlyData, (months) => {
+  if (planningYearStartedWithBudget.value !== null || months.length < 12 || !months.every(Boolean)) return
+  planningYearStartedWithBudget.value = months.some(m => m.accounts.some(a => a.amount !== null))
+}, { immediate: true })
 const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
 
 // Real "as of" month/day the Live Preview card paces against — see
@@ -1516,7 +1525,20 @@ function exportForQuickBooks() {
     </div>
 
     <template v-else>
-      <BuildNextYearBudget v-if="isPlanningYear" :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
+      <!-- The starter is for an empty year. Once the year already has budget entries it is tucked away
+           behind a warning, since re-running it replaces them (see planningYearHasBudget below). -->
+      <BuildNextYearBudget v-if="isPlanningYear && planningYearStartedWithBudget === false" :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
+      <details v-else-if="isPlanningYear && planningYearStartedWithBudget === true" class="rebuild-details">
+        <summary>Rebuild {{ YEAR }} from scratch…</summary>
+        <div class="quiet-note rebuild-warning">
+          {{ YEAR }} already has a budget, so you probably don't want this. Rebuilding replaces the starter's accounts with fresh numbers:
+          Food/Beverage revenue from the Capacity tab (which undoes any buyout amounts applied from the Revenue tab's planner, so they'd need re-applying),
+          fixed expenses carried from December (including seasonal gas and electricity, if you'd adjusted them), and labor from the Labor tab.
+          If you only changed labor, save it on the Labor tab instead; it already writes all twelve months of {{ YEAR }}.
+          Keep this for starting a new year from an empty budget.
+        </div>
+        <BuildNextYearBudget :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
+      </details>
       <section>
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
@@ -1936,6 +1958,9 @@ function exportForQuickBooks() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.rebuild-details { margin-bottom: 18px; }
+.rebuild-details > summary { font-size: 12.5px; font-weight: 700; color: var(--accent-text); cursor: pointer; }
+.rebuild-details .rebuild-warning { margin: 8px 0 10px; line-height: 1.5; }
 
 /* ---------- row filter toggles ---------- */
 .pl-table-card .table-head { padding: 12px 14px 8px; }
