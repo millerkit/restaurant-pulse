@@ -123,6 +123,12 @@ const outlook = computed(() => {
     currentMonthRevenueProjection
   })
 })
+const OUTLOOK_TITLE: Record<string, string> = { budget: 'Budget', pace: 'Recent pace', paceSpecials: 'Pace + night-by-night' }
+const OUTLOOK_NOTE: Record<string, string> = {
+  budget: 'The plan: real actuals so far, budget for the rest of the year.',
+  pace: 'Revenue, COGS, labor and operating expenses for the rest of the year at the ratios below.',
+  paceSpecials: "Same pace, with this month's revenue built night by night (special nights, bookings)."
+}
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const outlookMonthsLabel = computed(() => {
   const used = outlook.value?.monthsUsed ?? []
@@ -386,36 +392,23 @@ async function submitPlan() {
           </template>
         </div>
         <div v-if="outlook" class="outlook">
-          <div class="outlook-head">
-            <span class="chip accent">Year-end outlook</span>
-            <span class="quiet-note">Where the year could land if the rest of it runs like the last few months did against budget. The budget scenario above is the plan; these two show how much it moves.</span>
+          <div class="section-head">
+            <div class="section-label">Year-End Outlook</div>
+            <div class="section-note">If the rest of {{ YEAR }} runs like recent months did against budget</div>
           </div>
-          <div class="pl-table-card">
-            <table class="pl-table outlook-table">
-              <caption>Year-end revenue and Net Income by scenario</caption>
-              <thead>
-                <tr>
-                  <th scope="col" class="text-cell">Scenario</th>
-                  <th scope="col">Revenue</th>
-                  <th scope="col">Net Income</th>
-                  <th scope="col">vs. profit needed</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="sc in outlook.scenarios" :key="sc.key">
-                  <th scope="row" class="text-cell">{{ sc.label }}</th>
-                  <td class="amount">{{ fmt(sc.totals.revenue) }}</td>
-                  <td class="amount">{{ fmt(sc.netIncome) }}</td>
-                  <td class="amount">
-                    <template v-if="breakevenNetIncomeAfterGiftCards !== null">
-                      <span :class="['chip', sc.netIncome >= breakevenNetIncomeAfterGiftCards ? 'good' : 'critical']">
-                        {{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? '✓ ' : '▲ short ' }}{{ fmt(Math.abs(sc.netIncome - breakevenNetIncomeAfterGiftCards)) }}{{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? ' above' : '' }}
-                      </span>
-                    </template>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div :class="['hero-row', outlook.scenarios.length === 3 ? 'three-up' : 'two-up']">
+            <div v-for="sc in outlook.scenarios" :key="sc.key" :class="['hero-card', sc.key === 'budget' && 'anchor']">
+              <div class="hero-top">
+                <span class="period">{{ OUTLOOK_TITLE[sc.key] }}</span>
+                <span v-if="breakevenNetIncomeAfterGiftCards !== null" :class="['chip', sc.netIncome >= breakevenNetIncomeAfterGiftCards ? 'good' : 'critical']">
+                  {{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? `✓ ${fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards)} above needed` : `▲ ${fmt(breakevenNetIncomeAfterGiftCards - sc.netIncome)} short` }}
+                </span>
+              </div>
+              <div class="figure">{{ fmt(sc.netIncome) }}</div>
+              <div class="caption">Net Income · {{ fmt(sc.totals.revenue) }} revenue<template v-if="sc.key !== 'budget'">
+                · {{ fmt(sc.netIncome - outlook.scenarios[0]!.netIncome) }} vs. budget</template></div>
+              <div class="caption">{{ OUTLOOK_NOTE[sc.key] }}</div>
+            </div>
           </div>
           <div class="quiet-note small">
             Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out). Against budget those months ran
@@ -706,9 +699,8 @@ async function submitPlan() {
 </template>
 
 <style scoped>
-.outlook { margin: 14px 0 4px; }
-.outlook-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
-.outlook-table .text-cell, .outlook-table th.text-cell { text-align: left; white-space: normal; }
+.outlook { margin: 18px 0 4px; }
+.outlook .hero-card .figure { font-size: 30px; }
 .hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 1rem; }
 .hero-row.two-up { grid-template-columns: 1fr 1fr; }
 .hero-row.three-up { grid-template-columns: 1fr 1fr 1fr; }
