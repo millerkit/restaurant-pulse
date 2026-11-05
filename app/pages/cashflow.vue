@@ -20,6 +20,7 @@ type ReserveSustainability = {
   bufferNeededForRecommendedRate: number
   projectedYearEndBalance: number | null
   surplusVsNeeded: number | null
+  lowestBalanceBeforeYearEnd: number | null
   onTrack: boolean | null
   suggestedRemainderOfYearRate: number | null
   operatingCashFreedPerWeek: number | null
@@ -650,8 +651,15 @@ async function submitPlan() {
               which needs about {{ fmt(data.reserve.sustainability.bufferNeededForRecommendedRate) }} already banked by
               Jan 1 to never dip negative.
               <template v-if="data.reserve.sustainability.projectedYearEndBalance !== null">
-                At the current pace, you're on track to carry <strong>{{ fmt(data.reserve.sustainability.projectedYearEndBalance) }}</strong>
-                into {{ data.reserve.sustainability.sustainYear }}<template v-if="data.reserve.sustainability.surplusVsNeeded !== null && data.reserve.sustainability.surplusVsNeeded >= 0"> — {{ fmt(data.reserve.sustainability.surplusVsNeeded) }} more than that needs.</template><template v-else-if="data.reserve.sustainability.surplusVsNeeded !== null"> — {{ fmt(Math.abs(data.reserve.sustainability.surplusVsNeeded)) }} short of what that needs.</template>
+                <template v-if="(data.reserve.sustainability.lowestBalanceBeforeYearEnd ?? 0) < 0">
+                  At the current pace the account runs about <strong>{{ fmt(Math.abs(data.reserve.sustainability.lowestBalanceBeforeYearEnd!)) }} short</strong>
+                  at its lowest point before year end (right after the {{ fmtDate(data.reserve.catchUpDate!) }} payment, before the next deposit lands),
+                  even though it would end the year with {{ fmt(data.reserve.sustainability.projectedYearEndBalance) }}<template v-if="data.reserve.sustainability.surplusVsNeeded !== null && data.reserve.sustainability.surplusVsNeeded >= 0"> (more than the {{ fmt(data.reserve.sustainability.bufferNeededForRecommendedRate) }} {{ data.reserve.sustainability.sustainYear }} needs)</template>.
+                </template>
+                <template v-else>
+                  At the current pace, you're on track to carry <strong>{{ fmt(data.reserve.sustainability.projectedYearEndBalance) }}</strong>
+                  into {{ data.reserve.sustainability.sustainYear }}<template v-if="data.reserve.sustainability.surplusVsNeeded !== null && data.reserve.sustainability.surplusVsNeeded >= 0"> — {{ fmt(data.reserve.sustainability.surplusVsNeeded) }} more than that needs.</template><template v-else-if="data.reserve.sustainability.surplusVsNeeded !== null"> — {{ fmt(Math.abs(data.reserve.sustainability.surplusVsNeeded)) }} short of what that needs.</template>
+                </template>
               </template>
               <template v-if="data.reserve.sustainability.suggestedRemainderOfYearRate !== null && data.reserve.currentWeeklyAmount">
                 <template v-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null && data.reserve.sustainability.operatingCashFreedPerWeek > 0">
@@ -666,7 +674,7 @@ async function submitPlan() {
                   {{ data.reserve.catchUpDate!.slice(0, 4) }} to be {{ data.reserve.sustainability.sustainYear }}-ready.
                 </template>
                 <template v-else-if="data.reserve.sustainability.operatingCashFreedPerWeek !== null">
-                  The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week isn't quite enough — at least
+                  The current {{ fmt(data.reserve.currentWeeklyAmount) }}/week isn't enough to stay above zero all the way through — at least
                   <strong>{{ fmt(data.reserve.sustainability.suggestedRemainderOfYearRate) }}/week</strong> for the rest of
                   {{ data.reserve.catchUpDate!.slice(0, 4) }} is needed to be {{ data.reserve.sustainability.sustainYear }}-ready.
                 </template>

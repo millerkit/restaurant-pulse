@@ -325,6 +325,7 @@ export default defineEventHandler((event) => {
       bufferNeededForRecommendedRate: number
       projectedYearEndBalance: number | null
       surplusVsNeeded: number | null
+      lowestBalanceBeforeYearEnd: number | null
       onTrack: boolean | null
       suggestedRemainderOfYearRate: number | null
       operatingCashFreedPerWeek: number | null
@@ -353,6 +354,7 @@ export default defineEventHandler((event) => {
 
       const yearEnd = `${catchUpDate.slice(0, 4)}-12-31`
       let projectedYearEndBalance: number | null = null
+      let lowestBalanceBeforeYearEnd: number | null = null
       let suggestedRemainderOfYearRate: number | null = null
       if (currentWeeklyAmount) {
         // "If nothing changes between now and year end" — continues the
@@ -361,7 +363,12 @@ export default defineEventHandler((event) => {
         // time (unlike projectedBalanceAtCatchUp above, which deliberately
         // stops just short of it) — the real balance actually carried
         // into sustainYear.
-        projectedYearEndBalance = simulateReserveBalance(saved, asOfIso, yearEnd, currentWeeklyAmount, reserveFundedRows).endBalance
+        const yearSim = simulateReserveBalance(saved, asOfIso, yearEnd, currentWeeklyAmount, reserveFundedRows)
+        projectedYearEndBalance = yearSim.endBalance
+        // The year-end balance alone can look fine while the account dips
+        // negative in between (e.g. right after the Dec 20 payment, before
+        // the next Monday deposit), so track the low point too.
+        lowestBalanceBeforeYearEnd = yearSim.minBalance
         // The least that needs to keep moving into the reserve for the
         // rest of THIS year to still land at bufferNeededForRecommendedRate
         // by year end (while still safely covering the catch-up payment
@@ -403,7 +410,8 @@ export default defineEventHandler((event) => {
         bufferNeededForRecommendedRate,
         projectedYearEndBalance,
         surplusVsNeeded,
-        onTrack: surplusVsNeeded !== null ? surplusVsNeeded >= 0 : null,
+        lowestBalanceBeforeYearEnd,
+        onTrack: surplusVsNeeded !== null ? surplusVsNeeded >= 0 && (lowestBalanceBeforeYearEnd ?? 0) >= 0 : null,
         suggestedRemainderOfYearRate,
         operatingCashFreedPerWeek,
         operatingCashFreedTotal: operatingCashFreedPerWeek !== null ? operatingCashFreedPerWeek * remainderOfYearWeeks : null,
