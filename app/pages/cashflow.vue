@@ -183,6 +183,15 @@ const dscrScoped = computed<number | null>(() => {
   const denom = data.value.covenantScoped.annualDebtService.total
   return denom > 0 ? projectedEbitdaScoped.value / denom : null
 })
+const fcfEarned = computed(() => {
+  const f = data.value?.thisYear.freeCashFlow
+  return f ? f.netIncome + f.depreciation + f.preOpeningNonCashAddBack : 0
+})
+const fcfTowardLoans = computed(() => {
+  const f = data.value?.thisYear.freeCashFlow
+  return f ? f.principal + f.reserveTransfers : 0
+})
+
 function fmtRatio(n: number) {
   return `${n.toFixed(2)}x`
 }
@@ -329,31 +338,33 @@ async function submitPlan() {
         <div class="hero-row">
           <div class="hero-card anchor">
             <div class="hero-top">
-              <span class="period">{{ YEAR }} year-to-date</span>
+              <span class="period">{{ YEAR }} year-to-date: loans funded vs. cash earned</span>
               <span :class="['chip', data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'good' : 'critical']">
-                {{ data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'Positive' : 'Negative' }}
+                {{ data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'Covered' : 'Short' }}
               </span>
             </div>
             <div class="figure">{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</div>
-            <div class="caption">Net Income + Depreciation − direct SBA principal − Reserve transfers</div>
+            <div class="caption">{{ data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'The business has earned more cash than has gone toward the loans.' : 'More has gone toward the loans than the business has earned in cash.' }}</div>
             <div v-if="!data.thisYear.freeCashFlow.hasData" class="caption">No synced actuals for this period yet — Net Income is $0 below.</div>
           </div>
         </div>
 
         <div class="fcf-breakdown">
-          <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
-          <div class="fcf-row"><span>+ Depreciation (non-cash add-back)</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
-          <div v-for="adj in data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0)" :key="adj.label" class="fcf-row"><span>+ {{ adj.label }} (non-cash add-back)</span><span>{{ fmt(adj.amount) }}</span></div>
-          <div class="fcf-row"><span>− SBA principal paid directly from operating cash (through Oct 12; from Nov it runs through the reserve)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
-          <div class="fcf-row"><span>− Loan reserve transfers</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
-          <div class="fcf-row total"><span>= Free Cash Flow</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
+          <div class="fcf-row"><span>Cash the business earned</span><span>{{ fmt(fcfEarned) }}</span></div>
+          <div class="fcf-row"><span>Put toward loans (SBA + loan reserve)</span><span>{{ fmt(-fcfTowardLoans) }}</span></div>
+          <div class="fcf-row total"><span>{{ data.thisYear.freeCashFlow.freeCashFlow >= 0 ? 'Left over after the loans' : 'Short of covering the loans so far' }}</span><span>{{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</span></div>
         </div>
-        <div class="section-note">
-          The other 9 loans' principal ({{ fmt(data.thisYear.freeCashFlow.reserveFundedPrincipal) }}) and catch-up interest ({{ fmt(data.thisYear.freeCashFlow.reserveFundedCatchUpInterest) }}) are paid out of the loan reserve account, not directly from operating cash — as are the SBA payments from Nov 12 on — already covered by the reserve transfers above, so they aren't subtracted a second time.
-        </div>
-        <div v-if="data.thisYear.freeCashFlow.preOpeningNonCashAddBack !== 0" class="section-note">
-          Includes a total {{ fmt(data.thisYear.freeCashFlow.preOpeningNonCashAddBack) }} add-back for pre-opening reclassification/catch-up entries booked well after the fact ({{ data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0).map(a => `${a.label}: ${fmt(a.amount)}`).join('; ') }}) — real P&amp;L expenses, but not current-period cash: that spending was already paid out of loan proceeds before the restaurant opened at its current location, well before this reserve-tracking period began, so it's excluded here to avoid counting the same cash outflow twice.
-        </div>
+        <details class="fcf-details">
+          <summary>Show the math</summary>
+          <div class="fcf-breakdown">
+            <div class="fcf-row"><span>Net Income (from QBO P&amp;L)</span><span>{{ fmt(data.thisYear.freeCashFlow.netIncome) }}</span></div>
+            <div v-if="data.thisYear.freeCashFlow.depreciation !== 0" class="fcf-row"><span>+ Depreciation</span><span>{{ fmt(data.thisYear.freeCashFlow.depreciation) }}</span></div>
+            <div v-for="adj in data.thisYear.freeCashFlow.nonCashAdjustments.filter(a => a.amount !== 0)" :key="adj.label" class="fcf-row"><span>+ {{ adj.label }} (already paid with loan proceeds)</span><span>{{ fmt(adj.amount) }}</span></div>
+            <div class="fcf-row"><span>= Cash the business earned</span><span>{{ fmt(fcfEarned) }}</span></div>
+            <div class="fcf-row"><span>− SBA principal paid directly (through Oct 12)</span><span>{{ fmt(-data.thisYear.freeCashFlow.principal) }}</span></div>
+            <div class="fcf-row"><span>− Transfers into the loan reserve</span><span>{{ fmt(-data.thisYear.freeCashFlow.reserveTransfers) }}</span></div>
+          </div>
+        </details>
       </section>
 
       <!-- Year-end projection — how much profit is needed to actually
@@ -399,6 +410,16 @@ async function submitPlan() {
               <div class="caption">Net Income · {{ fmt(sc.totals.revenue) }} revenue<template v-if="sc.key !== 'budget'">
                 · {{ fmt(sc.netIncome - outlook.scenarios[0]!.netIncome) }} vs. budget</template></div>
               <div class="caption">{{ OUTLOOK_NOTE[sc.key] }}</div>
+              <div v-if="breakevenNetIncomeAfterGiftCards !== null" class="outlook-fcf">
+                <div class="outlook-fcf-row">
+                  <span>Projected year-end Free Cash Flow</span>
+                  <strong :class="sc.netIncome - breakevenNetIncomeAfterGiftCards >= 0 ? 'pos' : 'neg'">{{ fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards) }}</strong>
+                </div>
+                <div v-if="data.yearProjection.giftCardCash > 0" class="outlook-fcf-row sub">
+                  <span>Without gift card cash</span>
+                  <span>{{ fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards - data.yearProjection.giftCardCash) }}</span>
+                </div>
+              </div>
             </div>
           </div>
           <div class="quiet-note small">
@@ -737,6 +758,13 @@ async function submitPlan() {
   font-size: 13px; border-bottom: 1px solid var(--hair); font-variant-numeric: tabular-nums;
 }
 .fcf-row:last-child { border-bottom: none; }
+.outlook-fcf { margin-top: auto; border-top: 1px solid var(--hair); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
+.outlook-fcf-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--ink); }
+.outlook-fcf-row strong { font-size: 15px; }
+.outlook-fcf-row.sub { font-size: 12px; color: var(--ink-3); }
+.fcf-details { margin-top: 10px; }
+.fcf-details summary { cursor: pointer; font-size: 13px; color: var(--ink-3); padding: 4px 0; }
+.fcf-details .fcf-breakdown { margin-top: 8px; }
 .fcf-row.total { font-weight: 700; padding-top: 10px; border-top: 1px solid var(--hair); }
 
 .cf-table-card {
