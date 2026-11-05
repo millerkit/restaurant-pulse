@@ -453,6 +453,9 @@ function meterStatusLabel(status: string | null) {
             <span :class="['chip', yearView.revenue!.status]">{{ yearView.revenue!.paceOfExpectedPct !== null ? `${yearView.revenue!.paceOfExpectedPct.toFixed(1)}% of expected pace` : '—' }}</span>
             <span>${{ Math.round(yearView.revenue!.target).toLocaleString() }}</span>
           </div>
+          <div class="quiet-note">
+            On track to land at ${{ Math.round(data.yearToDate.projectedRevenue).toLocaleString() }} if the rest of the year hits budget (closed months at actual, as on the Edit Budget Total tab).
+          </div>
           <div class="quiet-note" v-if="data.yearToDate.unbudgetedPastMonthCount > 0">
             {{ data.yearToDate.unbudgetedPastMonthCount }} month{{ data.yearToDate.unbudgetedPastMonthCount === 1 ? '' : 's' }} this year {{ data.yearToDate.unbudgetedPastMonthCount === 1 ? 'has' : 'have' }} no revenue budget set — the annual target above uses actual revenue for those months instead.
           </div>

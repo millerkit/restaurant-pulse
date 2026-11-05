@@ -168,6 +168,23 @@ export default defineEventHandler((event) => {
     return totals
   }
 
+  // Where the year lands if remaining months hit budget: fully-elapsed months
+  // at their actual (budget if nothing synced), the current and future
+  // months at budget. Matches the Edit Budget Total tab's revenue figure.
+  function projectedYearRevenue(
+    budgets: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    actuals: Record<keyof typeof EMPTY_TOTALS, (number | null)[]>,
+    asOfMonth: number
+  ) {
+    let sum = 0
+    for (let m = 1; m <= 12; m++) {
+      const b = budgets.revenue[m - 1]
+      const a = actuals.revenue[m - 1]
+      sum += m < asOfMonth ? (a ?? b ?? 0) : (b ?? 0)
+    }
+    return sum
+  }
+
   // Per-category target by month, for the year view's "expected pace" line
   // — same hybrid logic as hybridAnnualTarget (budget where set, actual
   // fallback for a fully-elapsed unbudgeted month, null/0 otherwise). The
@@ -372,6 +389,7 @@ export default defineEventHandler((event) => {
     yearToDate: {
       actuals: categoryTotalsForRange(yearStart, asOfDate),
       budget: hybridAnnualTarget(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
+      projectedRevenue: projectedYearRevenue(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
       monthlyCategoryBudget: monthlyCategoryTargets(monthlyBudgetsByCategory, monthlyActualsByCategory, asOfMonth),
       unbudgetedPastMonthCount: Array.from({ length: asOfMonth - 1 }, (_, i) => i + 1)
         .filter(m => monthlyBudgetsByCategory.revenue[m - 1] == null).length
