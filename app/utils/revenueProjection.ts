@@ -70,3 +70,27 @@ export function projectRevenueLeaf(args: {
   }
   return args.straightLine(args.actual)
 }
+
+// The whole current month's projected revenue (every revenue leaf) by the same rules, for pages
+// that need one number rather than a per-account figure (the Cash Flow year-end outlook).
+// Returns null when the night-by-night projection isn't usable, rather than guessing.
+export function projectMonthRevenue(
+  accounts: { accountId: number, accountNumber: string | null, category: string, parentAccountId: number | null, amount: number | null }[],
+  actualOf: (accountId: number) => number,
+  nightly: NightlyProjectionSummary | null | undefined
+): number | null {
+  if (!nightlyProjectionUsable(nightly)) return null
+  const revenue = accounts.filter(a => a.category === 'revenue')
+  const parentIds = new Set(revenue.map(a => a.parentAccountId))
+  const leaves = revenue.filter(a => !parentIds.has(a.accountId))
+  const budgetOf = (id: number) => leaves.find(l => l.accountId === id)?.amount ?? 0
+  const shares = coreRevenueShares(leaves, actualOf, budgetOf)
+  return leaves.reduce((sum, a) => sum + projectRevenueLeaf({
+    accountNumber: a.accountNumber,
+    actual: actualOf(a.accountId),
+    budget: budgetOf(a.accountId),
+    share: shares.get(a.accountId),
+    nightly,
+    straightLine: x => x
+  }), 0)
+}

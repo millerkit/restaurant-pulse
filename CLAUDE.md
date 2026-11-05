@@ -4983,6 +4983,40 @@ averages on ordinary nights, which no method foresees.
   Local dev's history is stale (QBO through Jul 28), so its numbers are only plumbing checks; the
   Revenue tab was not clicked through in a browser (Basic Auth).
 
+## Year-end outlook on the Cash Flow tab — 2026-11-05
+
+Raised by the user after the OpenTable work: the goal was a more accurate year-end picture (can the year
+get close to break-even, and cover the December interest and loan payments?), and the Budget page's Total
+Net Income doesn't move with better projections by design (budget for the current/future months, real
+actuals for closed ones). Honest sizing: better dine-in projection is worth roughly ±$10K of profit over
+Nov–Dec; the year is decided more by one-time items (other income, the Mass Ave sale), costs, and December's
+holiday/buyout business.
+
+- **Where**: [`app/pages/cashflow.vue`](app/pages/cashflow.vue), inside Year-End Projection, right under the
+  existing "Profit needed" / "Profit projected" cards. The Budget page's Total tab is unchanged.
+- **Three scenarios** ([`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts), pure functions, tested against
+  a hand calculation): (1) budget for the rest of the year, the existing projection; (2) **recent pace**:
+  for the current month through December, revenue, COGS, labor and opex = monthly budget × how that
+  category ran against budget over the last up-to-3 closed months from August on (opening months excluded,
+  like the COGS recompute); (3) pace with the current month's revenue replaced by the Revenue tab's
+  night-by-night projection (special nights, bookings), with that month's COGS scaled by the same revenue
+  difference. Other income/expense stay at budget in every scenario (one-time items). Each row shows
+  year-end revenue, Net Income, and the gap to the profit needed to cover the loans. The ratios used are
+  printed under the table.
+- **Current-month revenue** for scenario 3 comes from `projectMonthRevenue()` in
+  [`app/utils/revenueProjection.ts`](app/utils/revenueProjection.ts) (the same rules as the Revenue tab and
+  Edit Budget); the row is omitted when the night-by-night projection isn't usable. The whole section is
+  hidden when no closed month since August has actuals.
+- **Caveats**: three months is a thin sample; the ratios are against budgets as currently saved (a closed
+  month's budget edited after the fact changes them); labor and opex are held to their pace ratios rather than
+  modeled; no December-specific effects (holiday parties, buyouts) beyond the budget unless entered as
+  special nights, which only affect the current month.
+- No server change, no schema change, no migration. Verified: the scenario math against a hand calculation
+  (including the no-usable-months case), and real local API data through the same functions (an independent
+  recomputation of the pace row matched exactly), using temporary synthetic Aug–Oct actuals that were then
+  removed. Local dev has no real Aug–Oct actuals, so the section is hidden there; it was not clicked through
+  in a browser. Check it on production after deploying.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -5238,6 +5272,7 @@ was deployed:
 - [`app/pages/budget/revenue.vue`](app/pages/budget/revenue.vue) — Revenue tab: the real editable revenue projection, incl. the "Recompute from Capacity" sync (route `/budget/revenue`)
 - [`app/pages/budget/labor.vue`](app/pages/budget/labor.vue) — Labor tab: rates/hours/salaries modeling (route `/budget/labor`)
 - [`app/pages/reservations.vue`](app/pages/reservations.vue) / [`server/utils/opentable-import.mjs`](server/utils/opentable-import.mjs) — OpenTable CSV upload and importer (route `/reservations`; see "OpenTable reservation importer")
+- [`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts) — year-end scenarios (budget / recent pace / pace with night-by-night revenue) shown on Cash Flow (see "Year-end outlook on the Cash Flow tab")
 - [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection and dated special nights (see "Night-by-night revenue projection")
 - [`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts) — Next 7 Nights booking pace on the Dashboard (see "Booking pace: next 7 nights")
 - [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)

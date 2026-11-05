@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import { YEAR, useBudgetYear, useActualsYear, hybridYearTotalsPastActual, monthCategoryBudget, netIncome, currentAsOfMonth } from '~/composables/useBudgetData'
+import { yearOutlook } from '~/utils/yearOutlook'
+import { projectMonthRevenue, type NightlyProjectionSummary } from '~/utils/revenueProjection'
 
 useHead({ title: `${site.restaurantName} — Cash Flow` })
 
@@ -71,15 +73,64 @@ onMounted(load)
 // this is a "what will actually happen" projection, not a pacing target.
 const { monthlyData: budgetMonthlyData } = useBudgetYear()
 const { monthlyActuals } = useActualsYear()
-const projectedNetIncomeForYear = computed<number | null>(() => {
+const baselineYearTotals = computed(() => {
   if (!budgetMonthlyData.value.length) return null
-  const totals = hybridYearTotalsPastActual(
+  return hybridYearTotalsPastActual(
     (m, cat) => monthCategoryBudget(budgetMonthlyData.value[m - 1], cat),
     monthlyActuals.value,
     currentAsOfMonth()
   )
-  return netIncome(totals)
 })
+const projectedNetIncomeForYear = computed<number | null>(() => baselineYearTotals.value ? netIncome(baselineYearTotals.value) : null)
+
+// ---- Year-end outlook (2026-11-05) -----------------------------------------
+// Three scenarios for full-year Net Income (budget / recent pace / recent pace with this
+// month's night-by-night revenue). The math is in app/utils/yearOutlook.ts. The current
+// month's revenue comes from the same projection the Revenue tab uses.
+const outlookNightly = ref<NightlyProjectionSummary | null>(null)
+const outlookMonthActuals = ref<Record<number, number>>({})
+async function loadOutlookInputs() {
+  try {
+    const month = currentAsOfMonth()
+    const [nightly, actuals] = await Promise.all([
+      $fetch<NightlyProjectionSummary>('/api/revenue-projection', { query: { year: YEAR, month } }),
+      $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month } })
+    ])
+    const map: Record<number, number> = {}
+    for (const a of actuals.accounts) map[a.accountId] = a.amount
+    outlookNightly.value = nightly
+    outlookMonthActuals.value = map
+  } catch {
+    outlookNightly.value = null
+    outlookMonthActuals.value = {}
+  }
+}
+onMounted(loadOutlookInputs)
+const outlook = computed(() => {
+  const baseline = baselineYearTotals.value
+  if (!baseline) return null
+  const asOfMonth = currentAsOfMonth()
+  const currentMonthRevenueProjection = projectMonthRevenue(
+    budgetMonthlyData.value[asOfMonth - 1]?.accounts ?? [],
+    id => outlookMonthActuals.value[id] ?? 0,
+    outlookNightly.value
+  )
+  return yearOutlook({
+    asOfMonth,
+    monthBudget: (m, cat) => monthCategoryBudget(budgetMonthlyData.value[m - 1], cat),
+    monthlyActuals: monthlyActuals.value,
+    baselineTotals: baseline,
+    currentMonthRevenueProjection
+  })
+})
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const outlookMonthsLabel = computed(() => {
+  const used = outlook.value?.monthsUsed ?? []
+  return used.length ? used.map(m => MONTH_ABBR[m - 1]).join(', ') : ''
+})
+function pctOfBudget(ratio: number) {
+  return `${Math.round(ratio * 100)}%`
+}
 const projectedFreeCashFlowForYear = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
   return projectedNetIncomeForYear.value - data.value.yearProjection.breakevenNetIncome
@@ -334,6 +385,47 @@ async function submitPlan() {
             — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash<template v-if="data.yearProjection.giftCardCushion > 0"> ({{ fmt(data.yearProjection.giftCardCushion) }} held back as a {{ YEAR + 1 }} cushion)</template>
           </template>
         </div>
+        <div v-if="outlook" class="outlook">
+          <div class="outlook-head">
+            <span class="chip accent">Year-end outlook</span>
+            <span class="quiet-note">Where the year could land if the rest of it runs like the last few months did against budget. The budget scenario above is the plan; these two show how much it moves.</span>
+          </div>
+          <div class="pl-table-card">
+            <table class="pl-table outlook-table">
+              <caption>Year-end revenue and Net Income by scenario</caption>
+              <thead>
+                <tr>
+                  <th scope="col" class="text-cell">Scenario</th>
+                  <th scope="col">Revenue</th>
+                  <th scope="col">Net Income</th>
+                  <th scope="col">vs. profit needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="sc in outlook.scenarios" :key="sc.key">
+                  <th scope="row" class="text-cell">{{ sc.label }}</th>
+                  <td class="amount">{{ fmt(sc.totals.revenue) }}</td>
+                  <td class="amount">{{ fmt(sc.netIncome) }}</td>
+                  <td class="amount">
+                    <template v-if="breakevenNetIncomeAfterGiftCards !== null">
+                      <span :class="['chip', sc.netIncome >= breakevenNetIncomeAfterGiftCards ? 'good' : 'critical']">
+                        {{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? '✓ ' : '▲ short ' }}{{ fmt(Math.abs(sc.netIncome - breakevenNetIncomeAfterGiftCards)) }}{{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? ' above' : '' }}
+                      </span>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="quiet-note small">
+            Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out). Against budget those months ran
+            revenue {{ pctOfBudget(outlook.ratios.revenue) }}, COGS {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}.
+            Those ratios are applied to the current month and December. Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
+            <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night row needs the current month's revenue projection, which isn't available yet.</template>
+            Three months is a thin sample, so treat the pace row as a rough guide, not a forecast.
+          </div>
+        </div>
+
         <form class="transfer-form plan-form" @submit.prevent="submitGiftCard">
           <div class="transfer-form-row">
             <label>Gift card cash still expected before Dec 31<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
@@ -614,6 +706,9 @@ async function submitPlan() {
 </template>
 
 <style scoped>
+.outlook { margin: 14px 0 4px; }
+.outlook-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.outlook-table .text-cell, .outlook-table th.text-cell { text-align: left; white-space: normal; }
 .hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 1rem; }
 .hero-row.two-up { grid-template-columns: 1fr 1fr; }
 .hero-row.three-up { grid-template-columns: 1fr 1fr 1fr; }
