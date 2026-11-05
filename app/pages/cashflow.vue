@@ -123,11 +123,17 @@ const outlook = computed(() => {
     currentMonthRevenueProjection
   })
 })
-const OUTLOOK_TITLE: Record<string, string> = { budget: 'Budget', pace: 'Recent pace', paceSpecials: 'Pace + night-by-night' }
+const OUTLOOK_TITLE: Record<string, string> = { budget: 'Budget', pace: 'Recent pace', paceSpecials: 'Night-by-night' }
+// A one-line "how it's built" under each title, so the cards read as simple vs. detailed at a glance.
+const OUTLOOK_KIND: Record<string, string> = {
+  budget: 'The plan: projected profit if the rest of the year hits budget',
+  pace: 'Simple estimate: how revenue ran vs. budget in recent months',
+  paceSpecials: "Detailed forecast: this month built night by night from recent weekday averages, your Special Nights (buyouts, events) and OpenTable bookings"
+}
 const OUTLOOK_NOTE: Record<string, string> = {
-  budget: 'The plan: real actuals so far, budget for the rest of the year.',
-  pace: 'Revenue, COGS, labor and operating expenses for the rest of the year at the ratios below.',
-  paceSpecials: "Same pace, with this month's revenue built night by night (special nights, bookings)."
+  budget: "Real actuals for months already closed; this month's and every later month's budget.",
+  pace: 'Revenue for the rest of the year at that pace (COGS follows it); labor and operating expenses at budget.',
+  paceSpecials: "Same as Recent pace for the rest of the year, but this month's revenue comes from the detailed forecast. OpenTable bookings adjust only the next few nights."
 }
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const outlookMonthsLabel = computed(() => {
@@ -359,7 +365,7 @@ async function submitPlan() {
           <div class="section-label">Year-End Projection</div>
           <div class="section-note">{{ YEAR }} full year</div>
         </div>
-        <div class="hero-row three-up">
+        <div class="hero-row two-up">
           <div class="hero-card">
             <div class="hero-top">
               <span class="period">Cash still needed for the loans</span>
@@ -374,22 +380,6 @@ async function submitPlan() {
             <div class="figure">{{ fmt(breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) }}</div>
             <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue<template v-if="data.yearProjection.giftCardCushion > 0">, after holding back {{ data.yearProjection.giftCardCushionPct }}% as a cushion</template>)</template>.</div>
           </div>
-          <div class="hero-card">
-            <div class="hero-top">
-              <span class="period">Profit projected this year</span>
-              <span v-if="projectedNetIncomeForYear !== null" :class="['chip', projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'good' : 'critical']">
-                {{ projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'On pace to cover it' : 'Short of covering it' }}
-              </span>
-            </div>
-            <div class="figure">{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</div>
-            <div class="caption">Real actuals for already-elapsed, already-synced months; this month's and every future month's budget.</div>
-          </div>
-        </div>
-        <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
-          Projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
-          <template v-if="data.yearProjection.giftCardCash > 0 && projectedFreeCashFlowWithGiftCards !== null">
-            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash<template v-if="data.yearProjection.giftCardCushion > 0"> ({{ fmt(data.yearProjection.giftCardCushion) }} held back as a {{ YEAR + 1 }} cushion)</template>
-          </template>
         </div>
         <div v-if="outlook" class="outlook">
           <div class="section-head">
@@ -404,6 +394,7 @@ async function submitPlan() {
                   {{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? `✓ ${fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards)} above needed` : `▲ ${fmt(breakevenNetIncomeAfterGiftCards - sc.netIncome)} short` }}
                 </span>
               </div>
+              <div class="outlook-kind">{{ OUTLOOK_KIND[sc.key] }}</div>
               <div class="figure">{{ fmt(sc.netIncome) }}</div>
               <div class="caption">Net Income · {{ fmt(sc.totals.revenue) }} revenue<template v-if="sc.key !== 'budget'">
                 · {{ fmt(sc.netIncome - outlook.scenarios[0]!.netIncome) }} vs. budget</template></div>
@@ -411,14 +402,35 @@ async function submitPlan() {
             </div>
           </div>
           <div class="quiet-note small">
-            Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out). Against budget those months ran
-            revenue {{ pctOfBudget(outlook.ratios.revenue) }}, COGS {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}.
-            Those ratios are applied to the current month and December. Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
-            <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night row needs the current month's revenue projection, which isn't available yet.</template>
-            Three months is a thin sample, so treat the pace row as a rough guide, not a forecast.
+            Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out): revenue ran
+            {{ pctOfBudget(outlook.ratios.revenue) }} of budget. That ratio is applied to revenue for the current month and December, and COGS moves with it.
+            Labor and operating expenses stay at budget on purpose: November and December's budgets were already recalibrated from recent actuals, so applying the closed months' overruns
+            (against their older budgets: COGS {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}) would count them twice.
+            Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
+            <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night card needs the current month's revenue projection, which isn't available yet.</template>
+            Three months is a thin sample, so treat the pace cards as a rough guide, not a forecast. Seasonality is in the budget (December's monthly budget already reflects the Capacity tab's seasonal covers); the pace ratio doesn't add any December-specific lift.
           </div>
         </div>
 
+        <!-- Fallback when the outlook can't be built (no closed month since August has actuals yet): the plain budget projection. -->
+        <div v-else-if="projectedNetIncomeForYear !== null" class="hero-row two-up">
+          <div class="hero-card anchor">
+            <div class="hero-top">
+              <span class="period">Profit projected this year</span>
+              <span :class="['chip', projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'good' : 'critical']">
+                {{ projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'On pace to cover it' : 'Short of covering it' }}
+              </span>
+            </div>
+            <div class="figure">{{ fmt(projectedNetIncomeForYear) }}</div>
+            <div class="caption">Real actuals for already-elapsed, already-synced months; this month's and every future month's budget.</div>
+          </div>
+        </div>
+        <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
+          At budget, projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
+          <template v-if="data.yearProjection.giftCardCash > 0 && projectedFreeCashFlowWithGiftCards !== null">
+            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash<template v-if="data.yearProjection.giftCardCushion > 0"> ({{ fmt(data.yearProjection.giftCardCushion) }} held back as a {{ YEAR + 1 }} cushion)</template>
+          </template>
+        </div>
         <form class="transfer-form plan-form" @submit.prevent="submitGiftCard">
           <div class="transfer-form-row">
             <label>Gift card cash still expected before Dec 31<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
@@ -700,7 +712,9 @@ async function submitPlan() {
 
 <style scoped>
 .outlook { margin: 18px 0 4px; }
+.outlook .section-head { margin-bottom: 14px; }
 .outlook .hero-card .figure { font-size: 30px; }
+.outlook .outlook-kind { font-size: 12px; font-weight: 600; color: var(--ink-2); line-height: 1.35; }
 .hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 1rem; }
 .hero-row.two-up { grid-template-columns: 1fr 1fr; }
 .hero-row.three-up { grid-template-columns: 1fr 1fr 1fr; }

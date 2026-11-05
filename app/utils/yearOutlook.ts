@@ -6,11 +6,15 @@
 // future month (hybridYearTotalsPastActual).
 //
 //   budget       — that base, unchanged.
-//   pace         — for the remaining months (current month through December), each of revenue,
-//                  COGS, labor and opex = its monthly budget × how that category actually ran
-//                  against budget over the last few closed months (sum of actuals ÷ sum of
-//                  budgets). Other income/expense stay at budget: they're one-time items, not
-//                  something a run-rate describes.
+//   pace         — REVENUE for the remaining months (current month through December) = its monthly
+//                  budget × how revenue actually ran against budget over the last few closed months
+//                  (sum of actuals ÷ sum of budgets). COGS scales with that same revenue ratio (its
+//                  budget is a percentage of food sales, so it should move with revenue). Labor and
+//                  operating expenses stay at budget, and so do other income/expense (one-time items).
+//                  Costs are deliberately NOT run-rated from the closed months: Nov/Dec's budgets were
+//                  recalibrated from Aug–Oct actuals (2026-10-24), so applying the closed months'
+//                  overrun ratios to them would count the same overrun twice (found 2026-11-05: it
+//                  made "pace" look $38K worse than budget on costs alone, vs. ~$15K on revenue).
 //   paceSpecials — the same, but the current month's revenue is replaced by the Revenue tab's
 //                  night-by-night projection (special nights, bookings), with the current
 //                  month's COGS scaled by the same revenue difference so cost doesn't stay
@@ -34,6 +38,8 @@ export const PACE_WINDOW_MONTHS = 3
 export type Scenario = { key: 'budget' | 'pace' | 'paceSpecials', label: string, totals: Record<Category, number>, netIncome: number }
 export type YearOutlook = {
   monthsUsed: number[]
+  // How each category ran against budget over monthsUsed. Only `revenue` drives the scenarios;
+  // the cost ratios are returned so the page can show them for reference.
   ratios: Record<PaceCategory, number>
   scenarios: Scenario[]
 }
@@ -65,12 +71,14 @@ export function yearOutlook(args: {
   const remaining = Array.from({ length: 12 - asOfMonth + 1 }, (_, i) => asOfMonth + i)
   const remainingBudget = (cat: PaceCategory) => remaining.reduce((s, m) => s + (monthBudget(m, cat) ?? 0), 0)
 
+  // Revenue follows its own pace ratio; COGS follows the same revenue ratio. Labor/opex stay at budget.
   const paceTotals = { ...baselineTotals }
-  for (const cat of PACE_CATEGORIES) paceTotals[cat] = baselineTotals[cat] + remainingBudget(cat) * (ratios[cat] - 1)
+  paceTotals.revenue = baselineTotals.revenue + remainingBudget('revenue') * (ratios.revenue - 1)
+  paceTotals.cogs = baselineTotals.cogs + remainingBudget('cogs') * (ratios.revenue - 1)
 
   const scenarios: Scenario[] = [
     { key: 'budget', label: 'Budget for the rest of the year', totals: baselineTotals, netIncome: netIncome(baselineTotals) },
-    { key: 'pace', label: "At recent pace", totals: paceTotals, netIncome: netIncome(paceTotals) }
+    { key: 'pace', label: "Revenue at recent pace", totals: paceTotals, netIncome: netIncome(paceTotals) }
   ]
 
   const cmRevBudget = monthBudget(asOfMonth, 'revenue') ?? 0
@@ -78,7 +86,7 @@ export function yearOutlook(args: {
   if (currentMonthRevenueProjection !== null && cmRevPace > 0) {
     const specialsTotals = { ...paceTotals }
     specialsTotals.revenue = paceTotals.revenue + (currentMonthRevenueProjection - cmRevPace)
-    const cmCogsPace = (monthBudget(asOfMonth, 'cogs') ?? 0) * ratios.cogs
+    const cmCogsPace = (monthBudget(asOfMonth, 'cogs') ?? 0) * ratios.revenue
     specialsTotals.cogs = paceTotals.cogs + cmCogsPace * (currentMonthRevenueProjection / cmRevPace - 1)
     scenarios.push({ key: 'paceSpecials', label: "At recent pace, with this month's night-by-night revenue", totals: specialsTotals, netIncome: netIncome(specialsTotals) })
   }

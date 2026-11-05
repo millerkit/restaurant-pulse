@@ -4992,24 +4992,40 @@ actuals for closed ones). Honest sizing: better dine-in projection is worth roug
 Nov–Dec; the year is decided more by one-time items (other income, the Mass Ave sale), costs, and December's
 holiday/buyout business.
 
-- **Where**: [`app/pages/cashflow.vue`](app/pages/cashflow.vue), inside Year-End Projection, right under the
-  existing "Profit needed" / "Profit projected" cards. The Budget page's Total tab is unchanged.
+- **Where**: [`app/pages/cashflow.vue`](app/pages/cashflow.vue), inside Year-End Projection. Layout (reorganized
+  2026-11-05 after the Budget outlook card duplicated the old "Profit projected this year" card): top row =
+  "Cash still needed for the loans" and "Profit needed to cover the loans"; below it the three outlook cards
+  (Budget, Recent pace, Night-by-night), where the **Budget card is the projected profit at budget** with the same
+  above/short-of-needed status; then the "At budget, projected year-end Free Cash Flow" line and the gift card
+  form. When the outlook can't be built (no closed month since August has actuals), a single "Profit projected this
+  year" card is shown instead, so the page never loses the figure. The Budget page's Total tab is unchanged.
 - **Three scenarios** ([`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts), pure functions, tested against
-  a hand calculation): (1) budget for the rest of the year, the existing projection; (2) **recent pace**:
-  for the current month through December, revenue, COGS, labor and opex = monthly budget × how that
-  category ran against budget over the last up-to-3 closed months from August on (opening months excluded,
-  like the COGS recompute); (3) pace with the current month's revenue replaced by the Revenue tab's
-  night-by-night projection (special nights, bookings), with that month's COGS scaled by the same revenue
-  difference. Other income/expense stay at budget in every scenario (one-time items). Each row shows
-  year-end revenue, Net Income, and the gap to the profit needed to cover the loans. The ratios used are
-  printed under the table.
+  a hand calculation): (1) budget for the rest of the year, the existing projection; (2) **revenue at recent
+  pace**: for the current month through December, revenue = monthly budget × how revenue ran against budget
+  over the last up-to-3 closed months from August on (opening months excluded, like the COGS recompute), and
+  COGS moves with that same ratio (it's budgeted as a % of food sales); (3) pace with the current month's
+  revenue replaced by the Revenue tab's night-by-night projection (special nights, bookings), with that
+  month's COGS scaled by the same revenue difference. **Labor and operating expenses stay at budget in every
+  scenario, and so does other income/expense.** Each card shows year-end revenue, Net Income, and the gap to
+  the profit needed to cover the loans; the ratios are printed under the cards.
+- **Why costs are NOT run-rated (changed same day, 2026-11-05)**: the first version applied each category's
+  Aug–Oct actual/budget ratio (revenue 96%, COGS 105%, labor 111%, opex 112%) to Nov/Dec, which made "pace"
+  $53K worse than budget, only ~$15K of it revenue. But Nov/Dec's cost budgets were already recalibrated from
+  Aug–Oct actuals (Oct 24: labor to the payroll run-rate, Food COGS ~27%, missing opex lines), and part of the
+  Aug–Oct overrun was one-offs (catering profit share, an owner salary change, bonuses), so applying those
+  ratios double counted. The cost ratios are still shown on the page, labelled as not applied. Revisit if
+  Nov/Dec cost budgets are ever left stale relative to actuals.
+- **Seasonality**: not added by the pace ratio. December's budget already carries the Capacity tab's seasonal
+  covers, so "96% of budget" is relative to a seasonal budget. Prior-year Toast covers per open night show no
+  consistent December jump at Mass Ave (Dec 2025 ~41 vs. Oct ~36; Dec 2024 ~31 vs. Oct ~39), so holiday
+  upside is more likely spend per cover, parties/buyouts and gift cards than extra covers; the Historical
+  tab's Revenue Seasonality chart shows the 2025 revenue pattern.
 - **Current-month revenue** for scenario 3 comes from `projectMonthRevenue()` in
   [`app/utils/revenueProjection.ts`](app/utils/revenueProjection.ts) (the same rules as the Revenue tab and
   Edit Budget); the row is omitted when the night-by-night projection isn't usable. The whole section is
   hidden when no closed month since August has actuals.
-- **Caveats**: three months is a thin sample; the ratios are against budgets as currently saved (a closed
-  month's budget edited after the fact changes them); labor and opex are held to their pace ratios rather than
-  modeled; no December-specific effects (holiday parties, buyouts) beyond the budget unless entered as
+- **Caveats**: three months is a thin sample; the revenue ratio is against budgets as currently saved (a
+  closed month's budget edited after the fact changes it); labor and opex are not modeled; no December-specific effects (holiday parties, buyouts) beyond the budget unless entered as
   special nights, which only affect the current month.
 - No server change, no schema change, no migration. Verified: the scenario math against a hand calculation
   (including the no-usable-months case), and real local API data through the same functions (an independent
