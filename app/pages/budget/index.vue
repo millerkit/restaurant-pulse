@@ -251,16 +251,9 @@ const costCategoryRows = computed(() => COST_CATEGORIES.map(cat => {
   const expectedPct = (expectedAmount / budget) * 100
   const actualPct = (actual / budget) * 100
   const overPct = actualPct - expectedPct
-  // Labor's budget denominator includes owner compensation (real cash
-  // cost, but not what a hired-staff benchmark assumes) — surface that
-  // so "Labor is over pace" isn't read as "the team is overstaffed" when
-  // some of it is owner salary.
-  const ownerCompNote = cat === 'labor' && laborExOwnerComp.value
-    ? `Includes $${Math.round(laborExOwnerComp.value.ownerComp).toLocaleString()} owner compensation (${ownerCompAccountNames.value.join(', ')})`
-    : null
   return {
     category: cat, label: CATEGORY_LABEL[cat], noBudget: false as const,
-    overPace: overPct > 0, overPct, overAmount: actual - expectedAmount, actual, budget, ownerCompNote
+    overPace: overPct > 0, overPct, overAmount: actual - expectedAmount, actual, budget
   }
 }))
 // Just for the callout's "led by X" — the visual row order above stays
@@ -286,11 +279,13 @@ const overCategories = computed(() => costCategoryRows.value
 const { data: detailData, refresh: refreshDetail } = await useFetch('/api/budget/overspending-detail')
 
 type Direction = 'up' | 'down' | 'flat'
-type DeltaRow = { label: string, amount: number, direction: Direction, deltaText: string }
+type AccountDelta = { account: string, amount: number, expected: number, over: number }
+type DeltaRow = { label: string, amount: number, direction: Direction, deltaText: string, accounts: AccountDelta[] }
 function fmtSignedDollars(n: number): string {
   return `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString()}`
 }
-function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, pctChange: number | null }): DeltaRow {
+function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, pctChange: number | null, accounts?: AccountDelta[] }): DeltaRow {
+  const accounts = r.accounts ?? []
   const deltaAmount = Math.round(r.amount - r.comparisonAmount)
   if (r.pctChange === null) {
     // No meaningful percentage to show either way (dividing by a
@@ -312,17 +307,17 @@ function buildDeltaRow(r: { label: string, amount: number, comparisonAmount: num
     const direction: Direction = deltaAmount > 0 ? 'up' : deltaAmount < 0 ? 'down' : 'flat'
     const arrow = direction === 'up' ? '▲' : direction === 'down' ? '▼' : '●'
     const reason = r.hasBudget ? `vs. $${Math.round(r.comparisonAmount).toLocaleString()} budgeted` : 'not budgeted'
-    return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${reason} (${fmtSignedDollars(deltaAmount)})` }
+    return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${reason} (${fmtSignedDollars(deltaAmount)})`, accounts }
   }
   const roundedPct = Math.round(Math.abs(r.pctChange))
   if (roundedPct === 0) {
     const deltaText = deltaAmount === 0 ? 'No change' : `${fmtSignedDollars(deltaAmount)} (<1% change)`
-    return { label: r.label, amount: r.amount, direction: 'flat', deltaText: `● ${deltaText}` }
+    return { label: r.label, amount: r.amount, direction: 'flat', deltaText: `● ${deltaText}`, accounts }
   }
   const direction: Direction = r.pctChange > 0 ? 'up' : 'down'
   const arrow = direction === 'up' ? '▲' : '▼'
   const pctSign = r.pctChange > 0 ? '+' : '−'
-  return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${pctSign}${roundedPct}% (${fmtSignedDollars(deltaAmount)})` }
+  return { label: r.label, amount: r.amount, direction, deltaText: `${arrow} ${pctSign}${roundedPct}% (${fmtSignedDollars(deltaAmount)})`, accounts }
 }
 function sortByDirection(rows: DeltaRow[]): DeltaRow[] {
   const rank: Record<Direction, number> = { up: 0, flat: 1, down: 2 }
@@ -336,8 +331,43 @@ const opexFixedDetailRows = computed(() => [...(detailData.value?.detail?.[selec
 const opexFixedDetailTotal = computed(() => opexFixedDetailRows.value.reduce((sum, r) => sum + r.amount, 0))
 const opexFixedDetailPct = computed(() => periodActuals.value.revenue ? (opexFixedDetailTotal.value / periodActuals.value.revenue) * 100 : 0)
 
+// Accounts furthest over expected amount for a whole category — the fallback
+// when no single subcategory tile is flagged.
+// Context line for a fixed-opex tile (Month only): "not posted yet" when a
+// budgeted lump hasn't hit, otherwise how it compares with last month.
+function fixedNote(fr: { amount: number, lastMonth?: number | null, budgeted?: number | null }): string | null {
+  if (selectedPeriod.value !== 'month') return null
+  const budgeted = fr.budgeted ?? 0
+  if (Math.abs(fr.amount) < 1 && budgeted >= 50) return `Not posted yet — $${Math.round(budgeted).toLocaleString()} budgeted`
+  if (fr.lastMonth == null) return null
+  const d = Math.round(fr.amount - fr.lastMonth)
+  if (Math.abs(d) < 25) return 'Same as last month'
+  return `${fmtSignedDollars(d)} vs. last month ($${Math.round(fr.lastMonth).toLocaleString()})`
+}
+
+// Callout lead: the worst category plus the accounts behind it.
+const calloutDriverText = computed(() => {
+  const lead = overCategories.value[0] as any
+  if (!lead || !['cogs', 'labor', 'opex'].includes(lead.category)) return ''
+  const top = topAccountsFor(lead.category).slice(0, 2)
+  if (!top.length) return ''
+  return top.map(a => `${a.account} (+$${Math.round(a.over).toLocaleString()})`).join(' and ')
+})
+
+function topAccountsFor(cat: 'cogs' | 'labor' | 'opex'): AccountDelta[] {
+  return (detailData.value?.detail?.[selectedPeriod.value] as any)?.topAccounts?.[cat] ?? []
+}
+
 const expandedCategory = ref<Category | null>(null)
+// Open the worst over-pace category by default so the answer is on screen
+// without a click; the user's own toggling wins afterward.
+const userToggledDetail = ref(false)
+watch(overCategories, (cats) => {
+  if (userToggledDetail.value) return
+  expandedCategory.value = cats.length ? (cats[0] as any).category : null
+}, { immediate: true })
 function toggleDetail(cat: Category) {
+  userToggledDetail.value = true
   expandedCategory.value = expandedCategory.value === cat ? null : cat
 }
 function hasDetail(cat: Category) {
@@ -462,9 +492,11 @@ async function submitThresholds() {
       <section>
         <div class="section-head">
           <div class="section-label">Overspending</div>
-          <div class="section-note">Category-level, with an expandable subcategory breakdown for COGS/Labor/Opex — per-account detail isn't built yet (see "Not yet done" in CLAUDE.md)</div>
+          <div class="section-note">Category pace, with the subcategories and accounts driving any overage</div>
         </div>
 
+        <details class="threshold-details">
+          <summary>Detail settings</summary>
         <form class="threshold-form" @submit.prevent="submitThresholds">
           <div class="threshold-form-row">
             <span class="threshold-form-label">
@@ -478,12 +510,15 @@ async function submitThresholds() {
             <span v-else-if="thresholdSaved" class="chip good">Saved</span>
           </div>
         </form>
+        </details>
 
         <div class="drill-card">
           <div class="callout">
             <template v-if="overCategories.length">
-              {{ overCategories.length }} of 3 cost categories ({{ costCategoryLabelList }}) {{ overCategories.length === 1 ? 'is' : 'are' }} running ahead of budget pace this {{ selectedPeriod }},
-              led by <strong>{{ overCategories[0].label }}</strong> (${{ Math.round(overCategories[0].overAmount).toLocaleString() }} over expected pace).
+              <strong>{{ overCategories[0].label }}</strong> is ${{ Math.round(overCategories[0].overAmount).toLocaleString() }} over expected pace this {{ selectedPeriod }}<template v-if="calloutDriverText">, mostly {{ calloutDriverText }}</template>.
+              <template v-if="overCategories.length > 1">
+                Also ahead of pace: {{ overCategories.slice(1).map(c => `${c.label} (+$${Math.round(c.overAmount).toLocaleString()})`).join(', ') }}.
+              </template>
             </template>
             <template v-else>
               All 3 cost categories ({{ costCategoryLabelList }}) are on pace or under budget this {{ selectedPeriod }}.
@@ -499,41 +534,54 @@ async function submitThresholds() {
                 <div class="rank-row">
                   <div class="label">
                     {{ row.label }}<span :class="['flag', row.overPace ? 'serious' : 'good']">{{ row.overPace ? `▲ ${row.overPct.toFixed(1)}pts ahead of pace` : `✓ ${Math.abs(row.overPct).toFixed(1)}pts under pace` }}</span>
-                    <span v-if="row.ownerCompNote" class="flag neutral">{{ row.ownerCompNote }}</span>
                   </div>
                   <div class="rank-track"><div :class="['rank-fill', row.overPace ? 'serious' : 'good']" :style="{ width: Math.min(100, (row.actual / row.budget) * 100) + '%' }"></div></div>
                   <div class="rank-value">${{ Math.round(Math.abs(row.overAmount)).toLocaleString() }}<span class="sub">{{ row.overPace ? 'over' : 'under' }} expected pace</span></div>
                 </div>
 
-                <button v-if="hasDetail(row.category)" type="button" class="detail-toggle" @click="toggleDetail(row.category)">
+                <button v-if="row.overPace && hasDetail(row.category)" type="button" class="detail-toggle" @click="toggleDetail(row.category)">
                   {{ expandedCategory === row.category ? '▾ Hide breakdown' : '▸ What’s driving it?' }}
                 </button>
 
-                <div v-if="expandedCategory === row.category && row.category === 'cogs'" class="detail-panel">
+                <div v-if="row.overPace && expandedCategory === row.category && row.category === 'cogs'" class="detail-panel">
                   <div class="anomaly-grid" v-if="cogsDetailRows.length">
                     <div v-for="dr in cogsDetailRows" :key="dr.label" :class="['anomaly-tile', dr.direction]">
                       <div class="label">{{ dr.label }}</div>
                       <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                      <ul v-if="dr.accounts.length" class="acct-list">
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                      </ul>
                     </div>
                   </div>
-                  <div v-else class="quiet-note">No single COGS subcategory stands out as the driver — costs are elevated broadly.</div>
+                  <div v-else class="quiet-note">
+                    No single subcategory stands out. Accounts furthest over budget:
+                    <ul v-if="topAccountsFor('cogs').length" class="acct-list"><li v-for="ac in topAccountsFor('cogs')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <span v-else>None individually over by $25+ — the overage is spread thin.</span>
+                  </div>
                 </div>
 
-                <div v-if="expandedCategory === row.category && row.category === 'labor'" class="detail-panel">
+                <div v-if="row.overPace && expandedCategory === row.category && row.category === 'labor'" class="detail-panel">
                   <div class="anomaly-grid" v-if="laborDetailRows.length">
                     <div v-for="dr in laborDetailRows" :key="dr.label" :class="['anomaly-tile', dr.direction]">
                       <div class="label">{{ dr.label }}</div>
                       <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                      <ul v-if="dr.accounts.length" class="acct-list">
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                      </ul>
                     </div>
                   </div>
-                  <div v-else class="quiet-note">No single labor subcategory stands out as the driver — costs are elevated broadly.</div>
+                  <div v-else class="quiet-note">
+                    No single subcategory stands out. Accounts furthest over budget:
+                    <ul v-if="topAccountsFor('labor').length" class="acct-list"><li v-for="ac in topAccountsFor('labor')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <span v-else>None individually over by $25+ — the overage is spread thin.</span>
+                  </div>
                 </div>
 
-                <div v-if="expandedCategory === row.category && row.category === 'opex'" class="detail-panel">
+                <div v-if="row.overPace && expandedCategory === row.category && row.category === 'opex'" class="detail-panel">
                   <div v-if="opexFixedDetailRows.length" class="rank-group-head">
                     <span class="rank-group-label">Fixed<span class="rank-group-note">not controllable month to month — shown as totals only, never vs. pace</span></span>
                     <span class="rank-group-total">${{ Math.round(opexFixedDetailTotal).toLocaleString() }} &middot; {{ opexFixedDetailPct.toFixed(1) }}% of rev.</span>
@@ -543,6 +591,7 @@ async function submitThresholds() {
                       <div class="label">{{ fr.label }}</div>
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(fr.amount).toLocaleString() }}</div>
+                      <div v-if="fixedNote(fr)" class="fixed-note">{{ fixedNote(fr) }}</div>
                     </div>
                   </div>
 
@@ -555,10 +604,17 @@ async function submitThresholds() {
                       <span :class="['delta-chip', dr.direction]">{{ dr.deltaText }}</span>
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
+                      <ul v-if="dr.accounts.length" class="acct-list">
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                      </ul>
                     </div>
                   </div>
                   <div v-if="!opexFixedDetailRows.length && !opexVariableDetailRows.length" class="quiet-note">No opex data synced for this {{ selectedPeriod }} yet.</div>
-                  <div v-else-if="!opexVariableDetailRows.length" class="quiet-note">No single variable/discretionary subcategory stands out as the driver — costs are elevated broadly.</div>
+                  <div v-else-if="!opexVariableDetailRows.length" class="quiet-note">
+                    No single variable subcategory stands out. Accounts furthest over budget:
+                    <ul v-if="topAccountsFor('opex').length" class="acct-list"><li v-for="ac in topAccountsFor('opex')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <span v-else>None individually over by $25+ — the overage is spread thin.</span>
+                  </div>
                 </div>
               </template>
             </div>
@@ -665,6 +721,13 @@ async function submitThresholds() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.threshold-details { margin-bottom: 10px; }
+.threshold-details > summary { cursor: pointer; font-size: 12px; color: var(--ink-2); }
+.fixed-note { margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+.acct-list { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line, rgba(128,128,128,.25)); display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
+.acct-list li { display: flex; justify-content: space-between; gap: 10px; }
+.acct-list strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.quiet-note .acct-list { max-width: 420px; }
 .drill-card .callout { font-size: 12.5px; color: var(--ink-2); background: var(--surface-alt); border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
 .rank-list { display: flex; flex-direction: column; gap: 12px; }
 .rank-row { display: grid; grid-template-columns: 150px 1fr 130px; align-items: center; gap: 12px; }

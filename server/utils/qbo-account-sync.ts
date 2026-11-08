@@ -250,6 +250,35 @@ export async function syncQboAccounts(): Promise<{ inserted: number, updated: nu
   })
   runPass2()
 
+  // Pass 2b: a labor account moved to a different parent in QBO (e.g. created under 6050
+  // Management Salaries, then moved under 6030 FOH Wages) keeps the pay_type/subcategory it
+  // was classified with at insert time, which can leave it in no Labor-tab table at all
+  // (found 2026-11-07 with 6034 Guest Experience Coordinator). Re-derive them, but only for
+  // accounts auto-managed as hourly/salary and only when the new parent is itself an
+  // hourly/salary group — never touch overtime/flat/tax rows or a hand-set pay type under
+  // any other parent. Role class and slot values are left alone.
+  const laborRows = db.prepare(`
+    SELECT a.id, a.qbo_account_id, a.subcategory, lps.pay_type
+    FROM accounts a JOIN labor_position_settings lps ON lps.account_id = a.id
+    WHERE a.category = 'labor' AND a.is_active = 1 AND lps.pay_type IN ('hourly', 'salary')
+  `).all() as { id: number, qbo_account_id: string | null, subcategory: string | null, pay_type: 'hourly' | 'salary' }[]
+  const reclassify = db.prepare('UPDATE accounts SET subcategory = ? WHERE id = ?')
+  const reclassifyPay = db.prepare('UPDATE labor_position_settings SET pay_type = ?, updated_at = ? WHERE account_id = ?')
+  const runLaborReclass = db.transaction(() => {
+    for (const row of laborRows) {
+      const qboAccount = row.qbo_account_id ? byQboId.get(row.qbo_account_id) : undefined
+      const parent = qboAccount?.ParentRef ? byQboId.get(qboAccount.ParentRef.value) : undefined
+      const parentNumber = parent?.AcctNum?.trim()
+      const kind = parentNumber ? LABOR_GROUP_PARENT_PAY_TYPE[parentNumber] : undefined
+      if (!parent || (kind !== 'hourly' && kind !== 'salary')) continue
+      let changed = false
+      if (row.pay_type !== kind) { reclassifyPay.run(kind, now, row.id); changed = true }
+      if (row.subcategory !== parent.Name) { reclassify.run(parent.Name, row.id); changed = true }
+      if (changed) updated++
+    }
+  })
+  runLaborReclass()
+
   // Deactivation/reactivation pass: every local row that already has a
   // qbo_account_id gets its is_active reconciled against what QBO just
   // returned. Never deleted, matching CLAUDE.md's chart-of-accounts-change

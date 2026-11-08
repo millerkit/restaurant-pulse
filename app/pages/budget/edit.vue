@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
-import { coreRevenueShares, projectRevenueLeaf, type NightlyProjectionSummary } from '~/utils/revenueProjection'
+import { budgetFloor, coreRevenueShares, projectRevenueLeaf, type NightlyProjectionSummary } from '~/utils/revenueProjection'
 
 useHead({ title: `${site.restaurantName} — Edit Budget` })
 
@@ -467,7 +467,7 @@ function computedAccountProjected(acc: BudgetAccount): number {
       straightLine: a => projectFromActual(a, acc.category)
     })
   }
-  if (projectionRule(acc) === 'lump') return Math.max(actual, computedAccountAmount(acc))
+  if (projectionRule(acc) === 'lump') return budgetFloor(actual, computedAccountAmount(acc))
   return projectFromActual(actual, acc.category)
 }
 const selectedMonthRevenueShares = computed(() => {
@@ -644,7 +644,7 @@ function currentMonthLeafProjection(acc: BudgetAccount): number {
       }
     })
   }
-  if (projectionRule(acc) === 'lump') return Math.max(actual, budget)
+  if (projectionRule(acc) === 'lump') return budgetFloor(actual, budget)
   const fraction = acc.category === 'labor' && currentMonthLaborFraction.value !== null
     ? currentMonthLaborFraction.value
     : operatingFractionForMonth(asOfMonth, currentMonthLatestSynced.value, currentMonthWeekdayWeights.value)

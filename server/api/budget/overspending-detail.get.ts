@@ -135,6 +135,64 @@ export default defineEventHandler((event) => {
     for (const r of rows) map.set(r.label, (map.get(r.label) ?? 0) + r.total)
   }
 
+  // Account-level actuals/budget, keyed by "<subcategory label>|<account name>",
+  // so a flagged subcategory tile (or an over-pace category with no flagged
+  // tile) can say WHICH accounts are behind the overrun. Added 2026-11-07
+  // after the user pointed out "Other Operating Expenses +1374%" didn't say
+  // what inside it was costly. Same proration rules as the subcategory totals.
+  type AcctRow = { label: string, account: string, total: number }
+  function accountTotalsForRange(category: 'cogs' | 'labor' | 'opex', start: string, end: string, costBehavior?: 'fixed' | 'variable'): AcctRow[] {
+    return db.prepare(`
+      SELECT ${LABEL_CASE} AS label, a.name AS account, SUM(dli.amount) AS total
+      FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+      WHERE a.category = ? AND dli.date BETWEEN ? AND ?
+        ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
+      GROUP BY a.id
+    `).all(...(costBehavior ? [category, start, end, costBehavior] : [category, start, end])) as AcctRow[]
+  }
+  function accountBudgetForMonth(category: 'cogs' | 'labor' | 'opex', year: number, month: number, costBehavior?: 'fixed' | 'variable'): AcctRow[] {
+    return db.prepare(`
+      SELECT ${LABEL_CASE} AS label, a.name AS account, SUM(bt.amount) AS total
+      FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+      WHERE a.category = ? AND bt.year = ? AND bt.month = ?
+        ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
+      GROUP BY a.id
+    `).all(...(costBehavior ? [category, year, month, costBehavior] : [category, year, month])) as AcctRow[]
+  }
+  function accountExpectedForPeriod(category: 'cogs' | 'labor' | 'opex', year: number, fromMonth: number, throughMonth: number, costBehavior?: 'fixed' | 'variable') {
+    const map = new Map<string, number>()
+    const add = (rows: AcctRow[], factor = 1) => { for (const r of rows) { const k = `${r.label}|${r.account}`; map.set(k, (map.get(k) ?? 0) + r.total * factor) } }
+    for (let m = fromMonth; m <= throughMonth; m++) {
+      const isCurrentMonth = m === throughMonth
+      if (isUnbudgetedMonth(year, m)) {
+        const dim = daysInMonthUTC(year, m - 1)
+        const start = `${year}-${String(m).padStart(2, '0')}-01`
+        const end = isCurrentMonth ? asOfDate : `${year}-${String(m).padStart(2, '0')}-${String(dim).padStart(2, '0')}`
+        add(accountTotalsForRange(category, start, end, costBehavior))
+      } else {
+        add(accountBudgetForMonth(category, year, m, costBehavior), isCurrentMonth ? monthOperatingDayFraction(year, m, asOfDay) : 1)
+      }
+    }
+    return map
+  }
+  // Accounts running over their expected amount, biggest $ overage first.
+  // Tiny overages (< $25) are noise, so they're dropped.
+  type AccountDelta = { account: string, amount: number, expected: number, over: number }
+  function overAccounts(actual: AcctRow[], expected: Map<string, number>, onlyLabel?: string): AccountDelta[] {
+    const keys = new Set<string>([...expected.keys(), ...actual.map(a => `${a.label}|${a.account}`)])
+    const actualByKey = new Map(actual.map(a => [`${a.label}|${a.account}`, a.total]))
+    const out: AccountDelta[] = []
+    for (const k of keys) {
+      const [label, ...rest] = k.split('|')
+      if (onlyLabel !== undefined && label !== onlyLabel) continue
+      const amount = actualByKey.get(k) ?? 0
+      const exp = expected.get(k) ?? 0
+      const over = amount - exp
+      if (over >= 25) out.push({ account: rest.join('|'), amount, expected: exp, over })
+    }
+    return out.sort((a, b) => b.over - a.over)
+  }
+
   // For Month: just asOfMonth's own budget, prorated to today. For Year:
   // every elapsed month Jan-through-asOfMonth summed — every month here
   // contributes its whole budgeted amount unprorated *except* the current,
@@ -185,26 +243,28 @@ export default defineEventHandler((event) => {
   // meaningful (dividing by a non-positive number produces a swing that can
   // flip sign in a confusing way), so pctChange stays null for both — only
   // the client-facing label text differs, driven by this flag.
-  function flagRows(rows: { label: string, total: number }[], expected: Map<string, number>, threshold: number) {
+  function flagRows(rows: { label: string, total: number }[], expected: Map<string, number>, threshold: number, accountsFor?: (label: string) => AccountDelta[]) {
     return rows.map(r => {
+      const accounts = accountsFor ? accountsFor(r.label).slice(0, 4) : []
       const hasBudget = expected.has(r.label)
       const expectedAmount = expected.get(r.label) ?? 0
       const delta = r.total - expectedAmount
       if (expectedAmount <= 0) {
-        return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, hasBudget, flagged: Math.abs(r.total) >= threshold, pctChange: null }
+        return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, hasBudget, flagged: Math.abs(r.total) >= threshold, pctChange: null, accounts }
       }
       const pctChange = (delta / expectedAmount) * 100
       const flagged = Math.abs(r.total) >= threshold && Math.abs(delta) >= threshold && Math.abs(delta) >= expectedAmount * 0.5
-      return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, hasBudget, flagged, pctChange }
+      return { label: r.label, amount: r.total, comparisonAmount: expectedAmount, hasBudget, flagged, pctChange, accounts }
     })
   }
 
   const PERIODS: Period[] = ['month', 'year']
   const detail: Record<Period, {
-    cogs: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null }[]
-    labor: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null }[]
-    opexFixed: { label: string, amount: number }[]
-    opexVariable: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null }[]
+    cogs: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null, accounts: AccountDelta[] }[]
+    labor: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null, accounts: AccountDelta[] }[]
+    opexFixed: { label: string, amount: number, lastMonth: number | null, budgeted: number | null }[]
+    opexVariable: { label: string, amount: number, comparisonAmount: number, hasBudget: boolean, flagged: boolean, pctChange: number | null, accounts: AccountDelta[] }[]
+    topAccounts: { cogs: AccountDelta[], labor: AccountDelta[], opex: AccountDelta[] }
   }> = {} as any
 
   for (const p of PERIODS) {
@@ -231,11 +291,43 @@ export default defineEventHandler((event) => {
     // header comment for why a pace comparison is never shown for it.
     const opexFixedRows = subcategoryTotalsForRange('opex', start, end, 'fixed')
 
+    // Account-level view (added 2026-11-07). Variable opex only for opex —
+    // fixed opex isn't judged against pace.
+    const cogsAcct = accountTotalsForRange('cogs', start, end)
+    const cogsAcctExp = accountExpectedForPeriod('cogs', asOfYear, fromMonth, asOfMonth)
+    const laborAcct = accountTotalsForRange('labor', start, end)
+    const laborAcctExp = accountExpectedForPeriod('labor', asOfYear, fromMonth, asOfMonth)
+    const opexAcct = accountTotalsForRange('opex', start, end, 'variable')
+    const opexAcctExp = accountExpectedForPeriod('opex', asOfYear, fromMonth, asOfMonth, 'variable')
+
+    // Fixed opex context (Month only): last full month's total and this
+    // month's whole budget, so a fixed tile can say "same as last month" or
+    // "not posted yet" instead of implying a pace judgment.
+    const fixedContext = new Map<string, { lastMonth: number | null, budgeted: number | null }>()
+    if (p === 'month') {
+      const py = asOfMonth === 1 ? asOfYear - 1 : asOfYear
+      const pm = asOfMonth === 1 ? 12 : asOfMonth - 1
+      const pStart = `${py}-${String(pm).padStart(2, '0')}-01`
+      const pEnd = `${py}-${String(pm).padStart(2, '0')}-${String(daysInMonthUTC(py, pm - 1)).padStart(2, '0')}`
+      const last = new Map(subcategoryTotalsForRange('opex', pStart, pEnd, 'fixed').map(r => [r.label, r.total]))
+      const bud = isUnbudgetedMonth(asOfYear, asOfMonth)
+        ? new Map<string, number>()
+        : new Map(budgetSubcategoryTotalsForMonth('opex', asOfYear, asOfMonth, 'fixed').map(r => [r.label, r.total]))
+      for (const l of new Set([...last.keys(), ...bud.keys(), ...opexFixedRows.map(r => r.label)])) {
+        fixedContext.set(l, { lastMonth: last.get(l) ?? null, budgeted: bud.get(l) ?? null })
+      }
+    }
+
     detail[p] = {
-      cogs: flagRows(cogsRows, cogsExpected, threshold),
-      labor: flagRows(laborRows, laborExpected, threshold),
-      opexFixed: opexFixedRows.map(r => ({ label: r.label, amount: r.total })),
-      opexVariable: flagRows(opexVariableRows, opexVariableExpected, threshold)
+      cogs: flagRows(cogsRows, cogsExpected, threshold, l => overAccounts(cogsAcct, cogsAcctExp, l)),
+      labor: flagRows(laborRows, laborExpected, threshold, l => overAccounts(laborAcct, laborAcctExp, l)),
+      opexFixed: opexFixedRows.map(r => ({ label: r.label, amount: r.total, lastMonth: fixedContext.get(r.label)?.lastMonth ?? null, budgeted: fixedContext.get(r.label)?.budgeted ?? null })),
+      opexVariable: flagRows(opexVariableRows, opexVariableExpected, threshold, l => overAccounts(opexAcct, opexAcctExp, l)),
+      topAccounts: {
+        cogs: overAccounts(cogsAcct, cogsAcctExp).slice(0, 5),
+        labor: overAccounts(laborAcct, laborAcctExp).slice(0, 5),
+        opex: overAccounts(opexAcct, opexAcctExp).slice(0, 5)
+      }
     }
   }
 
