@@ -1,3 +1,4 @@
+import { loadReplacedNights } from '../utils/special-nights'
 // Backs the Capacity Pace page (app/pages/capacity/index.vue): for a set of
 // short periods (last week, this week, last month, this month) and for each
 // calendar month, are we actually filling the room at the rate we've
@@ -49,7 +50,6 @@ function closureOn(area: AreaRow, iso: string, dow: number): { closedToday: bool
     uplift: open > 0 ? (SERVICE_NIGHTS_PER_WEEK - closed.size * (1 - r)) / open : 1
   }
 }
-type HolidayRow = { month: number, holiday_closures: number }
 type AreaMonthRow = { area_id: number, month: number, expected_covers: number }
 
 function isMayThroughOct(month: number): boolean {
@@ -87,8 +87,6 @@ export default defineEventHandler((event) => {
   // quick-look periods and everything else stay on the as-of year.
   const requestedYear = Number(getQuery(event).year)
   const areas = db.prepare('SELECT * FROM capacity_areas ORDER BY id').all() as AreaRow[]
-  const holidayRows = db.prepare('SELECT * FROM capacity_seasonality ORDER BY month').all() as HolidayRow[]
-  const holidaysByMonth = new Map(holidayRows.map(r => [r.month, r.holiday_closures]))
   const areaMonthRows = db.prepare('SELECT * FROM capacity_area_seasonality').all() as AreaMonthRow[]
   const areaMonth = new Map(areaMonthRows.map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
 
@@ -97,6 +95,13 @@ export default defineEventHandler((event) => {
     return { asOfDate: null, asOfYear: null, asOfMonth: null, asOfDay: null, areas, periods: null, months: [], trailing28: null }
   }
   const [asOfYear, asOfMonth] = asOfDate.split('-').map(Number)
+  const monthsYear = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100 ? requestedYear : asOfYear
+  // Holidays and special nights that replace normal dinner service (2026-11-08):
+  // such a night has no regular covers and is worth its own expected dine-in
+  // revenue ($0 for a holiday, closure or off-site night). Buyouts stay normal
+  // nights here; the Sales Plan's buyout panel adds the price above a normal
+  // night. Replaces the old flat per-month holiday count.
+  const replaced = loadReplacedNights(db, `${Math.min(asOfYear, monthsYear) - 1}-01-01`, `${Math.max(asOfYear, monthsYear) + 1}-12-31`)
 
   function areaCapacity(area: AreaRow, month: number): number {
     const cap = isMayThroughOct(month) ? area.capacity_may_oct : area.capacity_nov_apr
@@ -138,34 +143,25 @@ export default defineEventHandler((event) => {
   }
   // Average nightly figures across a full calendar month's service nights —
   // what a flat "holiday closure" night is worth, now that nights differ by weekday.
-  function avgNightlyForMonth(year: number, month: number) {
-    const acc = { covers: 0, revenue: 0, revenueFood: 0, revenueBeverage: 0, maxCovers: 0 }
-    let n = 0
-    for (let day = 1; day <= daysInMonth(year, month); day++) {
-      if (!isOperatingDow(year, month, day)) continue
-      const night = nightlyExpectedOn(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
-      acc.covers += night.covers; acc.revenue += night.revenue; acc.revenueFood += night.revenueFood
-      acc.revenueBeverage += night.revenueBeverage; acc.maxCovers += night.maxCovers
-      n++
-    }
-    if (n === 0) return acc
-    return { covers: acc.covers / n, revenue: acc.revenue / n, revenueFood: acc.revenueFood / n, revenueBeverage: acc.revenueBeverage / n, maxCovers: acc.maxCovers / n }
-  }
-
-  // Day-by-day sum over [startIso, endIso] — handles a range spanning a
-  // month boundary (different area assumptions on each side) correctly,
-  // since each day's own month determines its rate. Does NOT account for
-  // holiday_closures (a flat monthly count, not tied to a specific date —
-  // see schema.sql) — see holidayAdjustment below for the one case (an
-  // exact full calendar month) where that count can be applied precisely.
   function dayByDaySum(startIso: string, endIso: string) {
-    let expectedCovers = 0, expectedRevenue = 0, expectedRevenueFood = 0, expectedRevenueBeverage = 0, maxCovers = 0, operatingDays = 0
+    let expectedCovers = 0, expectedRevenue = 0, expectedRevenueFood = 0, expectedRevenueBeverage = 0, maxCovers = 0, operatingDays = 0, replacedNights = 0
     let d = new Date(`${startIso}T00:00:00Z`)
     const end = new Date(`${endIso}T00:00:00Z`)
     while (d <= end) {
       const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate()
-      if (isOperatingDow(y, m, day)) {
-        const nightly = nightlyExpectedOn(`${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+      const iso = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      const planned = isOperatingDow(y, m, day) ? replaced.get(iso) : undefined
+      if (planned) {
+        // Replaced night: its expected dine-in revenue, split food/beverage
+        // like a normal night that date.
+        const normal = nightlyExpectedOn(iso)
+        const foodShare = normal.revenue > 0 ? normal.revenueFood / normal.revenue : 0.5
+        expectedRevenue += planned.expectedRevenue
+        expectedRevenueFood += planned.expectedRevenue * foodShare
+        expectedRevenueBeverage += planned.expectedRevenue * (1 - foodShare)
+        replacedNights++
+      } else if (isOperatingDow(y, m, day)) {
+        const nightly = nightlyExpectedOn(iso)
         expectedCovers += nightly.covers
         expectedRevenue += nightly.revenue
         expectedRevenueFood += nightly.revenueFood
@@ -175,46 +171,20 @@ export default defineEventHandler((event) => {
       }
       d.setUTCDate(d.getUTCDate() + 1)
     }
-    return { expectedCovers, expectedRevenue, expectedRevenueFood, expectedRevenueBeverage, maxCovers, operatingDays }
+    return { expectedCovers, expectedRevenue, expectedRevenueFood, expectedRevenueBeverage, maxCovers, operatingDays, replacedNights }
   }
 
   // Only applies when [startIso, endIso] is exactly one full calendar
   // month — the one case where a flat monthly holiday_closures count can
   // be applied precisely, by subtracting that many nights' worth of that
   // month's own rate from the day-by-day sum above.
-  function holidayAdjustment(startIso: string, endIso: string) {
-    const [y1, m1, d1] = startIso.split('-').map(Number)
-    const [y2, m2, d2] = endIso.split('-').map(Number)
-    if (y1 !== y2 || m1 !== m2 || d1 !== 1 || d2 !== daysInMonth(y1, m1)) return null
-    const holidayClosures = holidaysByMonth.get(m1) ?? 0
-    if (holidayClosures === 0) return null
-    const nightly = avgNightlyForMonth(y1, m1)
-    return {
-      covers: nightly.covers * holidayClosures,
-      revenue: nightly.revenue * holidayClosures,
-      revenueFood: nightly.revenueFood * holidayClosures,
-      revenueBeverage: nightly.revenueBeverage * holidayClosures,
-      maxCovers: nightly.maxCovers * holidayClosures,
-      days: holidayClosures
-    }
-  }
-
-  // The assumed/target side for a date range: expected covers/revenue, raw
-  // max capacity (the "every seat every turn" denominator), and the two
-  // rate assumptions themselves (assumedFillPct, assumedAvgCheck) — a
-  // weighted blend across the range's own days, so this stays correct even
-  // for a range spanning a month boundary.
   function assumedForRange(startIso: string, endIso: string) {
     const sum = dayByDaySum(startIso, endIso)
-    const adj = holidayAdjustment(startIso, endIso)
-    const expectedCovers = sum.expectedCovers - (adj?.covers ?? 0)
-    const expectedRevenue = sum.expectedRevenue - (adj?.revenue ?? 0)
-    const expectedRevenueFood = sum.expectedRevenueFood - (adj?.revenueFood ?? 0)
-    const expectedRevenueBeverage = sum.expectedRevenueBeverage - (adj?.revenueBeverage ?? 0)
-    const maxCapacityCovers = sum.maxCovers - (adj?.maxCovers ?? 0)
-    const operatingDays = sum.operatingDays - (adj?.days ?? 0)
+    const { expectedCovers, expectedRevenue, expectedRevenueFood, expectedRevenueBeverage, operatingDays, replacedNights } = sum
+    const maxCapacityCovers = sum.maxCovers
     return {
       operatingDays,
+      replacedNights,
       expectedCovers,
       expectedRevenue,
       // Food/Beverage split of expectedRevenue — see nightlyExpectedOn
@@ -375,13 +345,14 @@ export default defineEventHandler((event) => {
   }
 
   // ---- Full year, month by month (for the month-tab detail view) ------
-  const monthsYear = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100 ? requestedYear : asOfYear
   const months = Array.from({ length: 12 }, (_, i) => {
     const month = i + 1
     const { start, end } = monthRange(monthsYear, month)
     return {
       month,
-      holidayClosures: holidaysByMonth.get(month) ?? 0,
+      // Holidays + special nights other than buyouts (named in replacedNightList)
+      holidayClosures: [...replaced.values()].filter(n => n.date.startsWith(`${monthsYear}-${String(month).padStart(2, '0')}`)).length,
+      replacedNightList: [...replaced.values()].filter(n => n.date.startsWith(`${monthsYear}-${String(month).padStart(2, '0')}`)).map(n => ({ date: n.date, kind: n.kind, expectedRevenue: n.expectedRevenue, name: n.holiday ?? n.note })),
       ...periodFor(start, end),
       areaBreakdown: areaBreakdownForMonth(month, start, end)
     }

@@ -386,7 +386,21 @@ CREATE TABLE capacity_areas (
 -- the bar's.
 CREATE TABLE capacity_seasonality (
   month             INTEGER PRIMARY KEY CHECK (month BETWEEN 1 AND 12),
-  holiday_closures  INTEGER NOT NULL DEFAULT 0  -- additional closed nights this month, beyond Mondays
+  -- NO LONGER READ (2026-11-08): replaced by holiday_closures below. Kept so
+  -- Settings can show old nonzero counts until they're replaced with dates.
+  holiday_closures  INTEGER NOT NULL DEFAULT 0
+);
+
+-- Named, dated whole-restaurant holiday closures (2026-11-08), edited in
+-- Settings › Restaurant Setup. Replaces the monthly counts above, which had also
+-- been used for buyouts, events and an off-site catering night before those had
+-- their own budget treatment. One-off nights (buyouts, events, off-site, other
+-- closures) belong in special_nights instead. A holiday is read as a 'closed'
+-- night with $0 expected (server/utils/special-nights.ts loadPlannedNights).
+CREATE TABLE holiday_closures (
+  date        TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
 );
 
 -- Per-area, per-month expected nightly covers — the real editable

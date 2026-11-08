@@ -1133,7 +1133,7 @@ function formatNightDate(iso: string) {
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Special Nights</span>
-            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. The current month's Projected figure uses these instead of a normal night, and This Week's Next 7 Nights panel shows them. Expected revenue is core dine-in only: a buyout's amount, $0 for a closure or off-site night.</span>
+            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. Each replaces a normal night: in the current month's Projected figure, in This Week's Next 7 Nights, and in the budget, where closures, off-site and event nights are taken out of the Capacity projection (click Recompute Revenue from Capacity above to update the budget) and buyouts are added through the Buyout panel. Expected revenue is dine-in sales only: a buyout's price, $0 for a closure or off-site night, and for an event only dine-in sales on top of tickets (tickets belong in Event Sales). No holiday closure is needed for any of these; holidays are set in <NuxtLink to="/settings">Settings</NuxtLink>.</span>
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>

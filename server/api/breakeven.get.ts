@@ -33,8 +33,8 @@ function addDaysIso(iso: string, n: number): string {
   d.setUTCDate(d.getUTCDate() + n)
   return d.toISOString().slice(0, 10)
 }
-// Operating nights in a month: every non-Monday (the standing closure), minus that month's flat
-// holiday-closure count (capacity_seasonality) — same convention as capacity.get.ts.
+// Operating nights in a month: every non-Monday (the standing closure), minus that month's
+// holidays and non-buyout special nights (replacedNightsByMonth) — same as capacity.get.ts.
 function operatingNights(year: number, month: number, holidayClosures: number): number {
   const days = new Date(Date.UTC(year, month, 0)).getUTCDate()
   let n = 0
@@ -128,7 +128,8 @@ export default defineEventHandler((event) => {
   const bench = new Map((db.prepare('SELECT category, target_pct AS pct FROM category_benchmarks').all() as { category: string, pct: number }[]).map(r => [r.category, r.pct]))
   const cogsPct = bench.get('cogs') ?? null
   const varOpexPct = bench.get('opex_variable') ?? null
-  const holiday = (db.prepare('SELECT holiday_closures AS n FROM capacity_seasonality WHERE month = ?').get(month) as { n: number } | undefined)?.n ?? 0
+  // Holidays and special nights other than buyouts aren't normal service nights.
+  const holiday = replacedNightsByMonth(db, year).get(month) ?? 0
   const nights = operatingNights(year, month, holiday)
 
   const contribRate = cogsPct != null && varOpexPct != null ? 1 - cogsPct - varOpexPct : null

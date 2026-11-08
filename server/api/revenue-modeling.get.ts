@@ -208,11 +208,10 @@ export default defineEventHandler(() => {
   }
 
   // ---- annual operating nights (for annualizing the per-night revenue delta) ----
-  const holidayRows = db.prepare('SELECT month, holiday_closures AS holidayClosures FROM capacity_seasonality').all() as { month: number, holidayClosures: number }[]
-  const holidaysByMonth = new Map(holidayRows.map(r => [r.month, r.holidayClosures]))
   const { date: asOfLineItemDate } = db.prepare('SELECT MAX(date) AS date FROM daily_line_items').get() as { date: string | null }
   const modelYear = asOfLineItemDate ? Number(asOfLineItemDate.slice(0, 4)) : (asOfAreaDate ? Number(asOfAreaDate.slice(0, 4)) : new Date().getFullYear())
-  const operatingNightsPerYear = annualOperatingNights(modelYear, holidaysByMonth)
+  // Holidays and non-buyout special nights for the model year aren't normal service nights.
+  const operatingNightsPerYear = annualOperatingNights(modelYear, replacedNightsByMonth(db, modelYear))
 
   // ---- since-the-move fixed/variable cost shares (real daily_line_items) ----
   let laborVariableShare: number | null = null

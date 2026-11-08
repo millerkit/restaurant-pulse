@@ -5187,6 +5187,44 @@ or was judged to stay put.
   covers rows). One harmless side effect seen: saving closures writes zero weights for open nights (e.g. Sun: 0),
   which means the same as omitting them.
 
+## Named holiday closures; special nights reach the budget — 2026-11-08
+
+The user had been entering full buyouts, special events and a large September off-site catering night as
+"holiday closures" (a flat count per month in `capacity_seasonality.holiday_closures`), from before those had
+budget treatment of their own. Traced in the code, not assumed: the revenue budget (Sales Plan "Recompute Revenue
+from Capacity", and Build next year's budget) came from the Capacity projection minus an average night per count,
+and **only buyouts** reached the budget otherwise (as price − normal weekday night, via the Buyout panel).
+Closed/off-site/event special nights only affected the current-month projection and Next 7 Nights. So a buyout
+also entered as a closure was budgeted one normal night short, and a buyout or event entered only as a closure
+lost its whole revenue. (Production's counts couldn't be read from here: the auto-mode safety check blocks
+production reads.)
+
+- **`holiday_closures`** (date PK, name; migration `0011`, applied automatically on deploy) replaces the counts.
+  Edited in Settings › Restaurant Setup ([`HolidayClosuresSettings.vue`](app/components/HolidayClosuresSettings.vue),
+  routes `/api/settings/holidays` GET/POST/DELETE) for this year or next, with quick-add chips for common holidays
+  (New Year's Day, Easter, July 4, Thanksgiving, Christmas Eve/Day, New Year's Eve; Mondays left out). The old
+  counts column stays but is **no longer read**; Settings lists any nonzero ones with a "Clear old counts" button.
+- **One rule for every dated night** ([`server/utils/special-nights.ts`](server/utils/special-nights.ts)):
+  `loadPlannedNights` merges holidays (as `closed`, $0, `holiday` = name) with special nights (a special night wins
+  on the same date); `loadReplacedNights` = those minus buyouts and Mondays. In the capacity model
+  (`capacity.get.ts` `dayByDaySum`) a replaced night has no regular covers or seats and adds its own expected
+  dine-in revenue (split food/beverage like a normal night that date). Buyouts stay normal nights there; the Buyout
+  panel adds their extra, unchanged. Consumers updated: capacity months/periods (`holidayClosures` now counts
+  replaced nights; `replacedNightList` names them), the Capacity grid (`/api/capacity/settings?year=` returns
+  `replacedNights`; "Closures" column renamed "Closed nights", hover lists them), breakeven and What-If service
+  nights (`replacedNightsByMonth`), and the current-month projection and Next 7 Nights (now also see holidays).
+  An event night's expected revenue is dine-in only on top of tickets (tickets are budgeted in Event Sales).
+- **What this does and doesn't change on deploy**: the Capacity projection, breakeven and What-If change at once
+  (old counts stop subtracting nights). **`budget_targets` don't change** until "Recompute Revenue from Capacity"
+  is clicked per month on the Sales Plan. Cleanup for the user: enter real holidays in Settings, enter each buyout/
+  event/off-site night as a Special Night (with its expected dine-in revenue), recompute the current and future
+  months, check the Buyout panel's Apply, then clear the old counts.
+- Verified on local dev with temporary entries (all removed after, December back to $266,941.44): two December
+  holidays −$20,556 (2 × a $10,278 night, operating days 27→25); an off-site night −$10,278; an event with $2,000
+  expected −$8,278; a dated buyout $0 change; food + beverage still sum to the total; the Capacity grid's December
+  projection matched the server ($227,829). Settings editor: quick-add, 2027 dates (Easter Mar 28, Thanksgiving
+  Nov 25), remove. No new type errors.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -5443,7 +5481,7 @@ was deployed:
 - [`app/pages/budget/labor.vue`](app/pages/budget/labor.vue) — Labor tab: rates/hours/salaries modeling (route `/budget/labor`)
 - [`app/pages/reservations.vue`](app/pages/reservations.vue) / [`server/utils/opentable-import.mjs`](server/utils/opentable-import.mjs) — OpenTable CSV upload and importer (route `/reservations`; see "OpenTable reservation importer")
 - [`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts) — year-end scenarios (budget / recent pace / pace with night-by-night revenue) shown on Cash Flow (see "Year-end outlook on the Cash Flow tab")
-- [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection and dated special nights (see "Night-by-night revenue projection")
+- [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection; dated special nights and holiday closures, and the one rule for how they replace a normal night (see "Named holiday closures")
 - [`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts) — Next 7 Nights booking pace on the Dashboard (see "Booking pace: next 7 nights")
 - [`app/components/BohHoursReport.vue`](app/components/BohHoursReport.vue) / [`server/utils/boh-hours-report.ts`](server/utils/boh-hours-report.ts) — BOH hours-by-week report on the Kitchen Labor tab, plus its downloadable HTML (see "BOH hours report on the Kitchen Labor tab")
 - [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)

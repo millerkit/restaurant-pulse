@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Settings › Restaurant setup (moved from Planning › Capacity, 2026-11-08):
 // the room's physical setup — seats and turns per area (nightly capacity is
-// derived), weekly area closures, and holiday closures per month. The
+// derived) and weekly area closures; holiday closures are their own list
+// (HolidayClosuresSettings, shown below the save button). The
 // forecast (expected covers, spend per guest) stays on Planning › Capacity,
 // which reads these. Saves only these fields (see capacity/settings.post.ts).
-import { MONTH_NAMES } from '~/composables/useBudgetData'
 
 type AreaRow = {
   id: number, name: string, seats: number, max_turns_per_night: number,
@@ -12,15 +12,13 @@ type AreaRow = {
   closed_dows: string | null, closed_from: string | null, closure_recapture_pct: number,
   closure_recapture_weights: string | null
 }
-type SeasonalityRow = { month: number, holiday_closures: number }
-const { data, pending, error, refresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[] }>('/api/capacity/settings')
+const { data, pending, error, refresh } = await useFetch<{ areas: AreaRow[] }>('/api/capacity/settings')
 
 type AreaDraft = {
   id: number, name: string, seats: string, turns: string,
   closedDows: number[], closedFrom: string, recapturePct: string, recaptureWeights: Record<number, string>
 }
 const areas = ref<AreaDraft[]>([])
-const holidays = ref<{ month: number, closures: string }[]>([])
 
 function draftsFrom(d: typeof data.value) {
   return {
@@ -33,14 +31,12 @@ function draftsFrom(d: typeof data.value) {
       closedFrom: a.closed_from ?? '',
       recapturePct: String(a.closure_recapture_pct ?? 0),
       recaptureWeights: parseRecaptureWeights(a.closure_recapture_weights)
-    })),
-    holidays: (d?.seasonality ?? []).map(s => ({ month: s.month, closures: String(s.holiday_closures) }))
+    }))
   }
 }
 function load() {
   const d = draftsFrom(data.value)
   areas.value = d.areas
-  holidays.value = d.holidays
 }
 watch(data, load, { immediate: true })
 
@@ -54,7 +50,7 @@ const capacityMismatch = computed(() => areas.value.some((a) => {
   const row = data.value?.areas.find(r => r.id === a.id)
   return !!row && (capacity(a, 'novApr') !== row.capacity_nov_apr || capacity(a, 'mayOct') !== row.capacity_may_oct)
 }))
-const dirty = computed(() => JSON.stringify({ areas: areas.value, holidays: holidays.value }) !== JSON.stringify(draftsFrom(data.value)) || capacityMismatch.value)
+const dirty = computed(() => JSON.stringify({ areas: areas.value }) !== JSON.stringify(draftsFrom(data.value)) || capacityMismatch.value)
 
 function toggleDow(a: AreaDraft, dow: number) {
   a.closedDows = a.closedDows.includes(dow) ? a.closedDows.filter(d => d !== dow) : [...a.closedDows, dow].sort((x, y) => x - y)
@@ -98,12 +94,7 @@ async function save() {
         closureRecaptureWeights: closed ? weightsPayload(a) : null
       }
     })
-    const seasonality = holidays.value.map((h) => {
-      const n = Math.round(num(h.closures))
-      if (!Number.isFinite(n) || n < 0) throw new Error(`Check holiday closures for ${MONTH_NAMES[h.month - 1]}`)
-      return { month: h.month, holidayClosures: n }
-    })
-    await $fetch('/api/capacity/settings', { method: 'POST', body: { areas: areaPayload, seasonality } })
+    await $fetch('/api/capacity/settings', { method: 'POST', body: { areas: areaPayload } })
     await refresh()
     load()
     status.value = 'saved'
@@ -180,22 +171,15 @@ async function save() {
         </div>
       </div>
 
-      <div class="rs-block">
-        <h3 class="rs-h">Holiday closures</h3>
-        <p class="rs-note">Nights the whole restaurant is closed each month, beyond the regular Monday closure.</p>
-        <div class="rs-months">
-          <label v-for="h in holidays" :key="h.month" class="rs-month">
-            <span>{{ MONTH_NAMES[h.month - 1] }}</span>
-            <input v-model="h.closures" class="rs-input" inputmode="numeric" :aria-label="`${MONTH_NAMES[h.month - 1]} holiday closures`" />
-          </label>
-        </div>
-      </div>
-
       <div class="rs-actions">
         <button class="rs-save" :disabled="status === 'saving' || !dirty" @click="save">{{ status === 'saving' ? 'Saving…' : 'Save room setup' }}</button>
         <span v-if="status === 'saved' && !dirty" class="chip good">✓ Saved</span>
         <span v-else-if="status === 'error'" class="chip critical">{{ message }}</span>
         <span v-else-if="dirty" class="rs-note inline">Unsaved changes<template v-if="capacityMismatch"> (stored capacity is out of date)</template></span>
+      </div>
+
+      <div class="rs-block holidays">
+        <HolidayClosuresSettings />
       </div>
     </template>
   </div>
@@ -203,6 +187,7 @@ async function save() {
 
 <style scoped>
 .rs-block { margin-bottom: 18px; }
+.rs-block.holidays { margin-top: 26px; }
 .rs-h { font-size: 15px; font-weight: 800; color: var(--ink); margin: 0 0 4px; }
 .rs-note { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; margin: 0 0 8px; max-width: 760px; }
 .rs-note.inline { margin: 0; }
@@ -230,9 +215,6 @@ async function save() {
 .rs-weights { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--ink-3); }
 .rs-weights label { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: var(--ink-2); }
 .rs-mini { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--hair); background: var(--surface); color: var(--accent-text); cursor: pointer; }
-.rs-months { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; max-width: 760px; }
-.rs-month { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
-.rs-month .rs-input { width: 44px; }
 .rs-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .rs-actions .chip { margin: 0; }
 .rs-save { font-size: 13px; font-weight: 700; padding: 8px 18px; border-radius: 10px; border: none; background: var(--accent); color: white; cursor: pointer; }

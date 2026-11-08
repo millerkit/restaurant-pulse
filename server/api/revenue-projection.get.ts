@@ -14,7 +14,7 @@
 import { CORE_REVENUE_ACCOUNT_NUMBERS, MIN_COVERS_FOR_OPEN_DAY, excludeSpendOutliers } from '../utils/core-revenue'
 import { NEW_LOCATION_START } from '../utils/weekly-targets'
 import { computeBookingPace } from '../utils/booking-pace'
-import { loadSpecialNights } from '../utils/special-nights'
+import { loadPlannedNights } from '../utils/special-nights'
 
 const SAME_WEEKDAY_HISTORY = 6
 const MIN_HISTORY = 3
@@ -59,7 +59,7 @@ export default defineEventHandler((event) => {
   // History: ordinary open nights before the first night being projected. Special nights
   // (buyouts, closures, events) and spend outliers are left out so they can't skew a
   // weekday's normal night.
-  const specialInHistory = loadSpecialNights(db, NEW_LOCATION_START, monthEnd)
+  const specialInHistory = loadPlannedNights(db, NEW_LOCATION_START, monthEnd)
   const coversRows = db.prepare('SELECT date, covers FROM daily_toast_metrics WHERE date >= ? AND date < ?')
     .all(NEW_LOCATION_START, firstRemaining) as { date: string, covers: number }[]
   const candidates = coversRows

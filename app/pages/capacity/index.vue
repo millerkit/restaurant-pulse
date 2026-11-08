@@ -122,7 +122,18 @@ type AreaRow = {
 type SeasonalityRow = { month: number, holiday_closures: number }
 type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number }
 
-const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[] }>('/api/capacity/settings')
+type ReplacedNight = { date: string, kind: string, expectedRevenue: number, name: string | null }
+const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[], replacedNights: ReplacedNight[] }>('/api/capacity/settings', { query: { year: YEAR } })
+// Holidays + special nights other than buyouts in YEAR, by date (2026-11-08):
+// those nights have no regular covers and are worth their own expected revenue.
+const replacedByDate = computed(() => new Map((editData.value?.replacedNights ?? []).map(n => [n.date, n])))
+function replacedInMonth(month: number): ReplacedNight[] {
+  const prefix = `${YEAR}-${String(month).padStart(2, '0')}`
+  return (editData.value?.replacedNights ?? []).filter(n => n.date.startsWith(prefix))
+}
+function replacedTitle(month: number): string {
+  return replacedInMonth(month).map(n => `${n.date.slice(5)} ${n.name ?? n.kind}`).join(', ') || 'None'
+}
 
 type MonthlyIndexRow = { month: number, indexPct: number | null, years: number[] }
 type AreaFillIndexRow = { areaId: number, indexValue: number | null }
@@ -312,7 +323,7 @@ function loadDrafts() {
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   monthlyDrafts.value = (editData.value?.seasonality ?? []).map(s => ({
     month: s.month,
-    holidayClosuresInput: String(s.holiday_closures),
+    holidayClosuresInput: String(replacedInMonth(s.month).length),
     areaCoversInput: Object.fromEntries(areaDrafts.value.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`) ?? 0))]))
   }))
 }
@@ -335,7 +346,7 @@ const cleanDraftSnapshot = computed(() => {
   const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
   const monthly = (editData.value?.seasonality ?? []).map(s => ({
     month: s.month,
-    holidayClosuresInput: String(s.holiday_closures),
+    holidayClosuresInput: String(replacedInMonth(s.month).length),
     areaCoversInput: Object.fromEntries(areas.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`) ?? 0))]))
   }))
   return JSON.stringify({ areaDrafts: areas, monthlyDrafts: monthly })
@@ -417,14 +428,16 @@ function closureOnDate(a: AreaDraft, iso: string, dow: number): { closed: boolea
 }
 // Revenue for a full calendar month of YEAR, night by night, so a closure that
 // starts partway through the year (or the month) is applied only from its date.
-// Holiday-closure nights are worth the month's average night, same as the server.
+// Holidays and non-buyout special nights are worth their own expected revenue, same as the server.
 function projectedRevenueForMonth(s: MonthlyDraft): number {
   const dim = new Date(Date.UTC(YEAR, s.month, 0)).getUTCDate()
-  let total = 0, nights = 0
+  let total = 0
   for (let day = 1; day <= dim; day++) {
     const dow = new Date(Date.UTC(YEAR, s.month - 1, day)).getUTCDay()
     if (dow === 1) continue
     const iso = `${YEAR}-${String(s.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    const planned = replacedByDate.value.get(iso)
+    if (planned) { total += planned.expectedRevenue; continue }
     let night = 0
     for (const a of areaDrafts.value) {
       const cl = closureOnDate(a, iso, dow)
@@ -435,10 +448,8 @@ function projectedRevenueForMonth(s: MonthlyDraft): number {
       night += covers * perCoverTotal(a)
     }
     total += night
-    nights++
   }
-  const closures = intNum(s.holidayClosuresInput)
-  return total - (nights > 0 ? (total / nights) * (Number.isFinite(closures) ? closures : 0) : 0)
+  return total
 }
 const DOW_SHORT: Record<number, string> = { 0: 'Sun', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' }
 function closureSummary(a: AreaDraft): string {
@@ -880,7 +891,7 @@ async function save() {
             <div v-if="selectedMonthData" class="assumption-card month-detail">
               <div class="card-head">
                 <span class="period-name">{{ MONTH_NAMES[selectedMonthData.month - 1] }} {{ paceData.asOfYear }}{{ selectedMonthData.isCurrent ? ' (to date)' : '' }}</span>
-                <span class="period-range">{{ selectedMonthData.assumed.operatingDays }} operating days<template v-if="selectedMonthData.holidayClosures > 0"> (−{{ selectedMonthData.holidayClosures }} holiday{{ selectedMonthData.holidayClosures === 1 ? '' : 's' }})</template></span>
+                <span class="period-range">{{ selectedMonthData.assumed.operatingDays }} operating days<template v-if="selectedMonthData.holidayClosures > 0"> (plus {{ selectedMonthData.holidayClosures }} holiday or special night{{ selectedMonthData.holidayClosures === 1 ? '' : 's' }})</template></span>
               </div>
               <template v-if="selectedMonthData.actual">
                 <div class="metric-grid">
@@ -1067,7 +1078,7 @@ async function save() {
               <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
               <li>For the current month, "Set by Actuals" instead overwrites each area's covers with its real average covers/night so far this month (Toast) — use this to tighten the assumption as real data comes in.</li>
               <li>Total, Fill %, and Per-Cover $ are derived from these baselines; Projected Revenue also applies any weekly area closure from its start date.</li>
-              <li>Closures are whole-restaurant holiday closures beyond Mondays, set in <NuxtLink to="/settings">Settings</NuxtLink>.</li>
+              <li>Closed nights counts holidays (set in <NuxtLink to="/settings">Settings</NuxtLink>) plus closures, off-site and event nights on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>; hover for the dates. Each is worth its own expected revenue instead of a normal night. Buyouts stay normal nights here; the Sales Plan adds their extra.</li>
             </ul>
           </div>
           <div class="pl-table-card covers-table-card">
@@ -1082,7 +1093,7 @@ async function save() {
                   <th scope="col">Total</th>
                   <th scope="col">Fill %</th>
                   <th scope="col">Per-Cover $</th>
-                  <th scope="col">Closures</th>
+                  <th scope="col">Closed nights</th>
                   <th scope="col">Projected Revenue</th>
                 </tr>
               </thead>
@@ -1123,7 +1134,7 @@ async function save() {
                   <td class="derived">{{ monthDerived(s).totalCovers }}</td>
                   <td class="derived">{{ fmtPctWhole(monthDerived(s).fillPct) }}</td>
                   <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
-                  <td class="derived">{{ s.holidayClosuresInput }}</td>
+                  <td class="derived" :title="replacedTitle(s.month)">{{ s.holidayClosuresInput }}</td>
                   <td class="derived">{{ fmtMoneyFull(monthDerived(s).projectedMonthlyRevenue) }}</td>
                 </tr>
               </tbody>
