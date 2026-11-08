@@ -374,40 +374,7 @@ function hasDetail(cat: Category) {
   return cat === 'cogs' || cat === 'labor' || cat === 'opex'
 }
 
-// ---- Materiality threshold form -------------------------------------------
-// Editable via drilldown_thresholds (server/api/budget/drilldown-thresholds.post.ts)
-// — Month and Year are edited together in one small form, since both are
-// always in play (flipping the Month/Year toggle above shouldn't require a
-// second trip here to see/edit the other one's value).
-const monthThresholdInput = ref<number | null>(null)
-const yearThresholdInput = ref<number | null>(null)
-watch(() => detailData.value?.thresholds, (t) => {
-  if (!t) return
-  if (monthThresholdInput.value === null) monthThresholdInput.value = t.month
-  if (yearThresholdInput.value === null) yearThresholdInput.value = t.year
-}, { immediate: true })
-
-const thresholdSubmitting = ref(false)
-const thresholdError = ref('')
-const thresholdSaved = ref(false)
-async function submitThresholds() {
-  if (monthThresholdInput.value == null || yearThresholdInput.value == null) return
-  thresholdSubmitting.value = true
-  thresholdError.value = ''
-  thresholdSaved.value = false
-  try {
-    await $fetch('/api/budget/drilldown-thresholds', {
-      method: 'POST',
-      body: { monthThreshold: monthThresholdInput.value, yearThreshold: yearThresholdInput.value }
-    })
-    thresholdSaved.value = true
-    await refreshDetail()
-  } catch (err: any) {
-    thresholdError.value = err?.data?.statusMessage || err?.message || 'Failed to save thresholds'
-  } finally {
-    thresholdSubmitting.value = false
-  }
-}
+// The alert levels (materiality thresholds) are edited in Settings › Targets & Alert Levels (moved 2026-11-08).
 </script>
 
 <template>
@@ -492,25 +459,9 @@ async function submitThresholds() {
       <section>
         <div class="section-head">
           <div class="section-label">Overspending</div>
-          <div class="section-note">Category pace, with the subcategories and accounts driving any overage</div>
+          <div class="section-note">Category pace, with the subcategories and accounts driving any overage. <NuxtLink to="/settings">Alert levels</NuxtLink> are in Settings.</div>
         </div>
 
-        <details class="threshold-details">
-          <summary>Detail settings</summary>
-        <form class="threshold-form" @submit.prevent="submitThresholds">
-          <div class="threshold-form-row">
-            <span class="threshold-form-label">
-              Materiality Threshold
-              <span class="threshold-form-hint">Hides subcategory detail below this $ variance from expected pace</span>
-            </span>
-            <label>Month<input type="number" step="1" min="0" v-model.number="monthThresholdInput" required /></label>
-            <label>Year<input type="number" step="1" min="0" v-model.number="yearThresholdInput" required /></label>
-            <button type="submit" :disabled="thresholdSubmitting">{{ thresholdSubmitting ? 'Saving…' : 'Save' }}</button>
-            <span v-if="thresholdError" class="chip critical">{{ thresholdError }}</span>
-            <span v-else-if="thresholdSaved" class="chip good">Saved</span>
-          </div>
-        </form>
-        </details>
 
         <div class="drill-card">
           <div class="callout">
@@ -721,8 +672,6 @@ async function submitThresholds() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
-.threshold-details { margin-bottom: 10px; }
-.threshold-details > summary { cursor: pointer; font-size: 12px; color: var(--ink-2); }
 .fixed-note { margin-top: 6px; font-size: 12px; color: var(--ink-2); }
 .acct-list { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line, rgba(128,128,128,.25)); display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
 .acct-list li { display: flex; justify-content: space-between; gap: 10px; }
@@ -743,36 +692,6 @@ async function submitThresholds() {
 .rank-value { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .rank-value .sub { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); }
 
-/* ---------- materiality threshold form (moved from the old Drill-Downs page) ---------- */
-.threshold-form {
-  background: var(--surface-alt);
-  border: 1px solid var(--ink-3);
-  border-radius: 14px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
-}
-.threshold-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-.threshold-form-label {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--ink);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.threshold-form-hint { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); margin-top: 2px; }
-.threshold-form label {
-  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
-}
-.threshold-form input[type="number"] {
-  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
-  background: var(--surface); color: var(--ink); width: 110px;
-}
-.threshold-form button {
-  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
-  background: var(--accent); color: white; cursor: pointer;
-}
-.threshold-form button:disabled { opacity: 0.6; cursor: default; }
 
 /* ---------- expandable "why" detail under a flagged Overspending row (moved from the old Drill-Downs page) ---------- */
 .rank-item { display: flex; flex-direction: column; gap: 8px; }

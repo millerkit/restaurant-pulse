@@ -260,9 +260,6 @@ function followThroughLabel(areaId: number): string | null {
 function isMayThroughOct(month: number): boolean {
   return month >= 5 && month <= 10
 }
-function isOutdoor(name: string): boolean {
-  return name.trim().toLowerCase() === 'outdoor'
-}
 // Every input on this tab is integer-only except Max Turns/Night and
 // Per-Cover Revenue (added 2026-08-07, at the user's request, to save
 // horizontal space and simplify data entry) — capacity * fill % (the seed
@@ -287,15 +284,6 @@ type AreaDraft = {
   closedDows: number[], closedFrom: string, recapturePct: string,
   // Relative share of the recaptured covers landing on each open weekday (keyed by weekday number)
   recaptureWeights: Record<number, string>
-}
-function parseRecaptureWeights(s: string | null): Record<number, string> {
-  try {
-    const o = s ? JSON.parse(s) as Record<string, number> : {}
-    return Object.fromEntries(Object.entries(o).map(([k, v]) => [Number(k), String(v)]))
-  } catch { return {} }
-}
-function parseClosedDows(s: string | null): number[] {
-  return (s ?? '').split(',').filter(x => x !== '').map(Number).filter(n => Number.isInteger(n) && n !== 1)
 }
 // One row per month: closures (unchanged) plus each area's own
 // expected nightly covers, keyed by area id — the real editable projection
@@ -352,22 +340,7 @@ const cleanDraftSnapshot = computed(() => {
   }))
   return JSON.stringify({ areaDrafts: areas, monthlyDrafts: monthly })
 })
-// Capacity Nov-Apr/May-Oct are calculated, not edited — but they're still
-// stored columns other pages/scripts read directly, so a mismatch between
-// what's currently in the DB and what Seats × Max Turns/Night computes
-// right now (e.g. a row whose capacity was hand-edited before this change,
-// or last saved before an intervening Seats/Turns edit was applied
-// elsewhere) needs to count as an unsaved change too — otherwise the Save
-// button stays disabled and the stale stored value never gets corrected
-// until the user happens to also touch Seats or Max Turns/Night.
-const capacityMismatch = computed(() => {
-  return areaDrafts.value.some(a => {
-    const row = editData.value?.areas.find(r => r.id === a.id)
-    if (!row) return false
-    return computedCapacity(a, 'novApr') !== row.capacity_nov_apr || computedCapacity(a, 'mayOct') !== row.capacity_may_oct
-  })
-})
-const hasUnsavedChanges = computed(() => draftSnapshot.value !== cleanDraftSnapshot.value || capacityMismatch.value)
+const hasUnsavedChanges = computed(() => draftSnapshot.value !== cleanDraftSnapshot.value)
 
 // Capacity Nov-Apr/May-Oct is calculated from Seats × Max Turns/Night
 // (added 2026-08-08, at the user's request, replacing free-typed capacity
@@ -378,8 +351,7 @@ const hasUnsavedChanges = computed(() => draftSnapshot.value !== cleanDraftSnaps
 // unparseable Seats/Turns draft surfaces as NaN instead, same as any other
 // numeric field on this tab, so save-time validation still catches it).
 function computedCapacity(a: AreaDraft, season: 'novApr' | 'mayOct'): number | null {
-  if (season === 'novApr' && isOutdoor(a.name)) return null
-  return Math.round(num(a.seats) * num(a.maxTurnsPerNight))
+  return seasonalCapacity(a.name, num(a.seats), num(a.maxTurnsPerNight), season)
 }
 function fmtCapacity(n: number | null): string {
   return n == null ? 'closed' : (Number.isFinite(n) ? String(n) : '—')
@@ -436,13 +408,8 @@ function monthDerived(s: MonthlyDraft) {
 // The covers grid holds each area's PRE-closure per-Tue-Sun-night baseline. From
 // an area's closure start date, it is dark on its closed weekdays and its other
 // nights carry the recaptured share of the closed nights' covers.
-const SERVICE_NIGHTS_PER_WEEK = 6
 function closureUplift(a: AreaDraft): number {
-  const closed = a.closedDows.length
-  const open = SERVICE_NIGHTS_PER_WEEK - closed
-  if (closed === 0 || open <= 0) return 1
-  const r = Math.min(1, Math.max(0, (Number(a.recapturePct) || 0) / 100))
-  return (SERVICE_NIGHTS_PER_WEEK - closed * (1 - r)) / open
+  return closureUpliftFor(a.closedDows.length, Number(a.recapturePct) || 0)
 }
 function closureOnDate(a: AreaDraft, iso: string, dow: number): { closed: boolean, uplift: number } {
   if (!a.closedFrom || iso < a.closedFrom || a.closedDows.length === 0) return { closed: false, uplift: 1 }
@@ -473,26 +440,7 @@ function projectedRevenueForMonth(s: MonthlyDraft): number {
   const closures = intNum(s.holidayClosuresInput)
   return total - (nights > 0 ? (total / nights) * (Number.isFinite(closures) ? closures : 0) : 0)
 }
-const CLOSABLE_DOWS = [
-  { dow: 2, short: 'Tue' }, { dow: 3, short: 'Wed' }, { dow: 4, short: 'Thu' },
-  { dow: 5, short: 'Fri' }, { dow: 6, short: 'Sat' }, { dow: 0, short: 'Sun' }
-]
-function toggleClosedDow(a: AreaDraft, dow: number) {
-  a.closedDows = a.closedDows.includes(dow) ? a.closedDows.filter(d => d !== dow) : [...a.closedDows, dow].sort((x, y) => x - y)
-  if (a.closedDows.length > 0 && !a.closedFrom) a.closedFrom = ''
-}
-// Weights only for the area's open weekdays, blanks as 0; null (equal split) if none were entered.
-const RECAPTURE_DEFAULTS: Record<number, number> = { 3: 35, 4: 35, 5: 15, 6: 15 }
-function openDowsOf(a: AreaDraft) {
-  return CLOSABLE_DOWS.filter(d => !a.closedDows.includes(d.dow))
-}
-function recaptureWeightsPayload(a: AreaDraft): Record<string, number> | null {
-  const entries = openDowsOf(a).map(d => [String(d.dow), Number(a.recaptureWeights[d.dow]) || 0] as const)
-  return entries.some(([, v]) => v > 0) ? Object.fromEntries(entries) : null
-}
-function fillDefaultRecaptureWeights(a: AreaDraft) {
-  a.recaptureWeights = Object.fromEntries(openDowsOf(a).map(d => [d.dow, String(RECAPTURE_DEFAULTS[d.dow] ?? 0)]))
-}
+const DOW_SHORT: Record<number, string> = { 0: 'Sun', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' }
 function closureSummary(a: AreaDraft): string {
   if (a.closedDows.length === 0) return 'Open all service nights'
   const u = closureUplift(a)
@@ -757,9 +705,7 @@ function isChefsCounter(name: string): boolean {
   return /chef/i.test(name)
 }
 
-// What the leave prompts warn about: only real edits to the drafts, not the
-// capacityMismatch auto-correction (which still enables Save, but isn't
-// something the user typed). The message names what differs so a false alarm
+// What the leave prompts warn about: real edits to the drafts. The message names what differs so a false alarm
 // is diagnosable instead of a bare "unsaved edits".
 const unsavedEditSummary = computed(() => {
   const clean = JSON.parse(cleanDraftSnapshot.value) as { areaDrafts: AreaDraft[], monthlyDrafts: MonthlyDraft[] }
@@ -809,23 +755,13 @@ async function save() {
   saveStatus.value = 'saving'
   saveMessage.value = ''
   try {
+    // Forecast fields only: seats, turns, capacity, weekly and holiday
+    // closures are saved from Settings › Restaurant Setup (2026-11-08).
     const areas = areaDrafts.value.map(a => ({
       id: a.id,
-      seats: intNum(a.seats),
-      maxTurnsPerNight: num(a.maxTurnsPerNight),
-      capacityNovApr: computedCapacity(a, 'novApr'),
-      capacityMayOct: computedCapacity(a, 'mayOct') ?? NaN,
       perCoverRevenueFood: num(a.perCoverRevenueFood),
       perCoverRevenueBeverage: num(a.perCoverRevenueBeverage),
-      followActuals: a.followActuals,
-      closedDows: a.closedDows,
-      closedFrom: a.closedDows.length > 0 ? a.closedFrom : null,
-      closureRecapturePct: a.closedDows.length > 0 ? num(a.recapturePct) : 0,
-      closureRecaptureWeights: a.closedDows.length > 0 ? recaptureWeightsPayload(a) : null
-    }))
-    const seasonality = monthlyDrafts.value.map(s => ({
-      month: s.month,
-      holidayClosures: intNum(s.holidayClosuresInput)
+      followActuals: a.followActuals
     }))
     const areaSeasonality = monthlyDrafts.value.flatMap(s =>
       areaDrafts.value.map(a => ({
@@ -835,20 +771,8 @@ async function save() {
       }))
     )
     for (const a of areas) {
-      if ([a.seats, a.maxTurnsPerNight, a.capacityMayOct, a.perCoverRevenueFood, a.perCoverRevenueBeverage].some(Number.isNaN) || (a.capacityNovApr !== null && Number.isNaN(a.capacityNovApr))) {
+      if ([a.perCoverRevenueFood, a.perCoverRevenueBeverage].some(Number.isNaN)) {
         throw new Error(`Invalid number in the ${areaDrafts.value.find(d => d.id === a.id)?.name} row`)
-      }
-    }
-    for (const a of areas) {
-      const name = areaDrafts.value.find(d => d.id === a.id)?.name
-      if (a.closedDows.length > 0) {
-        if (!a.closedFrom || !/^\d{4}-\d{2}-\d{2}$/.test(a.closedFrom)) throw new Error(`Pick a closure start date for ${name}`)
-        if (!Number.isFinite(a.closureRecapturePct) || a.closureRecapturePct < 0 || a.closureRecapturePct > 100) throw new Error(`Recapture % for ${name} must be between 0 and 100`)
-      }
-    }
-    for (const s of seasonality) {
-      if (Number.isNaN(s.holidayClosures)) {
-        throw new Error(`Invalid closures number in the ${MONTH_NAMES[s.month - 1]} row`)
       }
     }
     for (const s of areaSeasonality) {
@@ -857,7 +781,7 @@ async function save() {
         throw new Error(`Invalid covers number for ${areaName} in ${MONTH_NAMES[s.month - 1]}`)
       }
     }
-    await $fetch('/api/capacity/settings', { method: 'POST', body: { areas, seasonality, areaSeasonality } })
+    await $fetch('/api/capacity/settings', { method: 'POST', body: { areas, areaSeasonality } })
     await editRefresh()
     // Don't rely only on the editData watcher to re-baseline the drafts.
     loadDrafts()
@@ -1045,14 +969,13 @@ async function save() {
 
       <!-- ================= Edit Capacity tab ================= -->
       <template v-else>
-        <div class="edit-sub">Capacity, turns/night, and per-cover revenue assumptions, plus the monthly fill % and holiday-closure counts these get tested against. See <button type="button" class="link-btn" @click="setTab('pace')">Covers &amp; Spend</button> to see how real fill % and per-cover spend compare.</div>
+        <div class="edit-sub">The forecast: expected covers by area and month, and spend per guest. The room itself (seats, turns, closures) is set in <NuxtLink to="/settings">Settings</NuxtLink>. See <button type="button" class="link-btn" @click="setTab('pace')">Covers &amp; Spend</button> to see how real fill % and per-cover spend compare.</div>
 
         <section>
           <div class="section-head">
             <div class="section-label">Per-Area Capacity &amp; Revenue</div>
             <ul class="section-note note-list">
-              <li>Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly.</li>
-              <li>Outdoor has no Nov–Apr season — it stays closed through winter.</li>
+              <li>Seats, turns per night and closures are set in <NuxtLink to="/settings">Settings › Restaurant Setup</NuxtLink>; capacity is seats × turns, and Outdoor is closed Nov–Apr.</li>
               <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Covers &amp; Spend page for the blended (non-area) version.</li>
               <li>"Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</li>
               <li>"Auto-update monthly" does the same thing for you: on the first nightly sync after a month closes, Food/Beverage are replaced with that area's real per-cover over the two most recently closed months. Off by default — leave it off for areas where you want a deliberate target to compare actuals against. Turning it on takes effect at the next sync.</li>
@@ -1079,8 +1002,8 @@ async function save() {
               <tbody>
                 <tr v-for="a in areaDrafts" :key="a.id">
                   <th scope="row" style="text-transform: capitalize;">{{ a.name }}</th>
-                  <td><input v-model="a.seats" class="cell-input" inputmode="numeric" /></td>
-                  <td><input v-model="a.maxTurnsPerNight" class="cell-input decimal" inputmode="decimal" /></td>
+                  <td class="derived">{{ a.seats }}</td>
+                  <td class="derived">{{ a.maxTurnsPerNight }}</td>
                   <td class="derived">{{ fmtCapacity(computedCapacity(a, 'novApr')) }}</td>
                   <td class="derived">{{ fmtCapacity(computedCapacity(a, 'mayOct')) }}</td>
                   <td class="setpct-cell">
@@ -1124,56 +1047,16 @@ async function save() {
           </div>
         </section>
 
-        <section>
+        <section v-if="areaDrafts.some(a => a.closedDows.length > 0)">
           <div class="section-head">
             <div class="section-label">Weekly Area Closures</div>
-            <ul class="section-note note-list">
-              <li>Close an area on fixed weekdays from a start date (Monday is already the restaurant's closure). Before the start date nothing changes, so past months are still judged on the old schedule.</li>
-              <li>From the start date the area has no capacity and no covers on those nights. The covers in the grid below stay the area's <em>pre-closure</em> per-night baseline.</li>
-              <li>Recapture is the share of the closed nights' covers assumed to move to the area's open nights. Open-night covers are multiplied by (6 − closed × (1 − recapture)) ÷ open nights, capped at the area's nightly capacity.</li>
-              <li>The weekday weights say where the recaptured covers land (relative; blanks count as 0, all blank splits evenly). They only shape the weekday revenue targets on This Week and Daily Results; monthly totals use the recapture % alone. Landing is capped at each night's remaining seats.</li>
-            </ul>
+            <div class="section-note">Set in <NuxtLink to="/settings">Settings › Restaurant Setup</NuxtLink>. The covers below stay each area's pre-closure baseline; Projected Revenue applies the closure from its start date.</div>
           </div>
-          <div class="pl-table-card">
-            <table class="pl-table edit-table">
-              <caption>Weekly closure per area: closed weekdays, start date, recapture percentage, and the resulting open-night schedule</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Area</th>
-                  <th scope="col">Closed on</th>
-                  <th scope="col">Starting</th>
-                  <th scope="col">Recapture %</th>
-                  <th scope="col">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="a in areaDrafts" :key="a.id">
-                  <th scope="row" style="text-transform: capitalize;">{{ a.name }}</th>
-                  <td>
-                    <span class="dow-toggles">
-                      <label v-for="d in CLOSABLE_DOWS" :key="d.dow" :class="['dow-toggle', { on: a.closedDows.includes(d.dow) }]">
-                        <input type="checkbox" :checked="a.closedDows.includes(d.dow)" @change="toggleClosedDow(a, d.dow)" />
-                        {{ d.short }}
-                      </label>
-                    </span>
-                  </td>
-                  <td><input v-model="a.closedFrom" type="date" class="cell-input date" :disabled="a.closedDows.length === 0" :aria-label="`${a.name} closure start date`" /></td>
-                  <td><span class="pct-cell"><input v-model="a.recapturePct" class="cell-input" inputmode="numeric" :disabled="a.closedDows.length === 0" :aria-label="`${a.name} recapture percent`" />%</span></td>
-                  <td class="derived">
-                    {{ closureSummary(a) }}
-                    <div v-if="a.closedDows.length > 0" class="recapture-weights">
-                      <span class="quiet-note">Recaptured covers land on:</span>
-                      <label v-for="d in openDowsOf(a)" :key="d.dow" class="recapture-weight">
-                        {{ d.short }}
-                        <input v-model="a.recaptureWeights[d.dow]" class="cell-input narrow" inputmode="numeric" placeholder="0" :aria-label="`${a.name} recapture weight ${d.short}`" />
-                      </label>
-                      <button type="button" class="apply-pct-btn" @click="fillDefaultRecaptureWeights(a)">Wed/Thu heavy</button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <ul class="closure-list">
+            <li v-for="a in areaDrafts.filter(x => x.closedDows.length > 0)" :key="a.id">
+              <strong style="text-transform: capitalize;">{{ a.name }}</strong>: closed {{ a.closedDows.map(d => DOW_SHORT[d]).join(', ') }} from {{ a.closedFrom }}, {{ a.recapturePct }}% recaptured. {{ closureSummary(a) }}.
+            </li>
+          </ul>
         </section>
 
         <section>
@@ -1184,7 +1067,7 @@ async function save() {
               <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
               <li>For the current month, "Set by Actuals" instead overwrites each area's covers with its real average covers/night so far this month (Toast) — use this to tighten the assumption as real data comes in.</li>
               <li>Total, Fill %, and Per-Cover $ are derived from these baselines; Projected Revenue also applies any weekly area closure from its start date.</li>
-              <li>Closures are additional nights closed beyond the standing Monday closure.</li>
+              <li>Closures are whole-restaurant holiday closures beyond Mondays, set in <NuxtLink to="/settings">Settings</NuxtLink>.</li>
             </ul>
           </div>
           <div class="pl-table-card covers-table-card">
@@ -1240,7 +1123,7 @@ async function save() {
                   <td class="derived">{{ monthDerived(s).totalCovers }}</td>
                   <td class="derived">{{ fmtPctWhole(monthDerived(s).fillPct) }}</td>
                   <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
-                  <td><input v-model="s.holidayClosuresInput" class="cell-input" inputmode="numeric" /></td>
+                  <td class="derived">{{ s.holidayClosuresInput }}</td>
                   <td class="derived">{{ fmtMoneyFull(monthDerived(s).projectedMonthlyRevenue) }}</td>
                 </tr>
               </tbody>
@@ -1473,6 +1356,7 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 
 .setpct-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
 .pct-cell { display: inline-flex; align-items: center; gap: 3px; }
+.closure-list { margin: 0 0 14px; padding-left: 18px; font-size: 13px; color: var(--ink-2); line-height: 1.6; }
 .recapture-weights { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; justify-content: center; }
 .recapture-weight { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
 .dow-toggles { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: center; }

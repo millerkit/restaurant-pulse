@@ -197,32 +197,7 @@ const weekToDateStatus = computed(() => {
   return paceStatus((wt.thisWeek.toDate.actualRevenue / wt.thisWeek.toDate.targetRevenue) * 100, 100, 'higher-is-better')
 })
 
-// ---- Weekly goal edit form (weekly_revenue_benchmark) — same
-// watch-once-then-let-the-user-type pattern as Cash Flow's "Planned weekly
-// amount" form for reserve_plan (app/pages/cashflow.vue).
-const benchmarkAmount = ref<number | null>(null)
-watch(() => weeklyTargets.value?.benchmarkAmount ?? null, (v) => { if (benchmarkAmount.value === null) benchmarkAmount.value = v }, { immediate: true })
-const benchmarkSubmitting = ref(false)
-const benchmarkError = ref<string | null>(null)
-const benchmarkSaved = ref(false)
-async function submitBenchmark() {
-  benchmarkError.value = null
-  benchmarkSaved.value = false
-  if (benchmarkAmount.value === null || !Number.isFinite(benchmarkAmount.value) || benchmarkAmount.value <= 0) {
-    benchmarkError.value = 'Enter a positive weekly amount'
-    return
-  }
-  benchmarkSubmitting.value = true
-  try {
-    await $fetch('/api/dashboard/weekly-benchmark', { method: 'POST', body: { weeklyAmount: benchmarkAmount.value } })
-    benchmarkSaved.value = true
-    await refresh()
-  } catch (err: any) {
-    benchmarkError.value = err?.data?.statusMessage || err?.message || 'Failed to save goal'
-  } finally {
-    benchmarkSubmitting.value = false
-  }
-}
+// The weekly goal itself is edited in Settings › Targets & Alert Levels (moved 2026-11-08).
 
 // ---- cost pace meters (COGS / labor / prime cost, month-to-date) --------
 const benchmarkByCategory = computed(() => Object.fromEntries((data.value?.benchmarks ?? []).map((b: any) => [b.category, b])))
@@ -333,15 +308,13 @@ function meterStatusLabel(status: string | null) {
         </div>
 
         <div class="quiet-note" v-if="weeklyTargets.closureNote">{{ weeklyTargets.closureNote }} The weekly goal is unchanged; only how it's split across the days.</div>
-        <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount">Set a weekly revenue goal below to see day-specific dollar/covers targets.</div>
+        <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount">Set a weekly sales goal in <NuxtLink to="/settings">Settings</NuxtLink> to see a goal for each night.</div>
         <div class="quiet-note" v-else-if="weeklyTargets.sampleOpenDays < 6">Based on only {{ weeklyTargets.sampleOpenDays }} real open day{{ weeklyTargets.sampleOpenDays === 1 ? '' : 's' }} since the location move ({{ formatWeekdayDate(weeklyTargets.sinceDate) }}) — the weekday pattern will sharpen as more data accumulates.</div>
 
-        <form class="benchmark-form" @submit.prevent="submitBenchmark">
-          <div class="benchmark-form-row">
-            <label>Weekly revenue goal<input type="number" step="1" min="1" v-model.number="benchmarkAmount" placeholder="50000" required /></label>
-            <button type="submit" :disabled="benchmarkSubmitting">{{ benchmarkSubmitting ? 'Saving…' : 'Update goal' }}</button>
-            <span v-if="benchmarkError" class="chip critical">{{ benchmarkError }}</span>
-            <span v-else-if="benchmarkSaved" class="chip good">Goal updated</span>
+        <div class="benchmark-form">
+          <div class="section-note" v-if="weeklyTargets.benchmarkAmount">
+            Weekly goal: <strong>${{ Math.round(weeklyTargets.benchmarkAmount).toLocaleString() }}</strong> of core dining sales.
+            <NuxtLink to="/settings">Change it in Settings</NuxtLink>, where you'll also find what the week needs to cover costs and loan payments.
           </div>
           <div class="section-note" v-if="weeklyTargets.avgSpendPerCover">
             Covers targets use a real avg spend/cover of ${{ weeklyTargets.avgSpendPerCover.toFixed(2) }}, computed the same way, since {{ formatWeekdayDate(weeklyTargets.sinceDate) }}.
@@ -350,10 +323,7 @@ function meterStatusLabel(status: string | null) {
               <span v-for="(n, i) in weeklyTargets.excludedNights" :key="n.date">{{ formatWeekdayDate(n.date) }} (${{ Math.round(n.spend) }}/cover){{ i < weeklyTargets.excludedNights.length - 1 ? ', ' : '.' }}</span>
             </template>
           </div>
-          <div class="section-note" v-if="weeklyTargets.suggestedWeeklyGoal.amount">
-            Data-driven suggestion: to cover this month's Labor (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.laborMonthEstimate).toLocaleString() }}) + Opex (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.opexMonthEstimate).toLocaleString() }}) + loan principal due (${{ Math.round(weeklyTargets.suggestedWeeklyGoal.principalDueThisMonth).toLocaleString() }}) at a {{ (weeklyTargets.suggestedWeeklyGoal.cogsPct * 100).toFixed(0) }}% COGS ratio ({{ weeklyTargets.suggestedWeeklyGoal.cogsPctSource === 'benchmark' ? 'from your COGS benchmark' : 'trailing actual' }}), you'd need at least <strong>${{ Math.round(weeklyTargets.suggestedWeeklyGoal.amount).toLocaleString() }}/week</strong> this month.
-          </div>
-        </form>
+        </div>
       </section>
 
       <section v-if="bookingPace?.available">
@@ -380,7 +350,7 @@ function meterStatusLabel(status: string | null) {
           Bookings as of the last OpenTable upload ({{ formatSnapshot(bookingPace.snapshotDate, bookingPace.snapshotTime) }}), walk-ins excluded.
           "Usually" is the last 6 same-weekday nights at the same number of days out. Total-covers estimates (Toast, including walk-ins) are shown only
           {{ bookingPace.estimateMaxDaysOut }} days out or less — further out, the book hasn't predicted final covers better than the weekday average.
-          Buyouts and closures come from Special Nights on the <NuxtLink to="/budget/revenue">Revenue</NuxtLink> tab.
+          Buyouts and closures come from Special Nights on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>.
         </div>
         <div v-if="bookingPace.staleDays >= bookingPace.staleAfterDays" class="drill-card">
           <span class="chip warning">⚠ Bookings {{ bookingPace.staleDays }} days old</span>
@@ -630,19 +600,6 @@ function meterStatusLabel(status: string | null) {
   margin-top: 14px;
   padding-top: 12px;
 }
-.benchmark-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-.benchmark-form label {
-  display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ink-3);
-}
-.benchmark-form input[type="number"] {
-  font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hair);
-  background: var(--surface); color: var(--ink); width: 150px;
-}
-.benchmark-form button {
-  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 100px; border: none;
-  background: var(--accent); color: white; cursor: pointer;
-}
-.benchmark-form button:disabled { opacity: 0.6; cursor: default; }
 .benchmark-form .section-note { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 
 /* ---------- pace meters (COGS / labor / prime cost) ---------- */

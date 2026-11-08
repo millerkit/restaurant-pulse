@@ -5156,6 +5156,37 @@ npm scripts.
   enrollment row kept), a forced failure (rolled back, exit 1, earlier migration kept), backup pruning to 3;
   plus the Settings card in both states. The Docker `CMD` itself wasn't run locally (no Docker build here).
 
+## Settings page: targets and room setup moved in — 2026-11-08
+
+Same day as phase 1. Rule of thumb agreed with the user: values set once in a while that shape several pages
+live in Settings (owner-only once roles exist); inputs you change while looking at the numbers they change stay
+on their page. The "Where other settings live" list on Settings was removed, since everything on it either moved
+or was judged to stay put.
+
+- **Targets & Alert Levels** ([`TargetsSettings.vue`](app/components/TargetsSettings.vue), read by
+  `/api/settings/targets`): the weekly sales goal (moved from This Week, which now shows the goal read-only with a
+  Settings link) with the data-driven "what the week needs" suggestion beside it (still computed in
+  `dashboard.get.ts`); the cost targets (`category_benchmarks`), which had no screen before — saved by the new
+  `POST /api/settings/benchmarks` (target ≤ watch ≤ serious; above serious is critical; `critical_pct` is kept ≥
+  serious but isn't used for status); and the overspending alert levels (moved from Budget Check, same
+  `drilldown_thresholds` route).
+- **Restaurant Setup** ([`RestaurantSetupSettings.vue`](app/components/RestaurantSetupSettings.vue)): seats and
+  turns per area (capacity derived and saved with them), weekly area closures, and holiday closures per month,
+  moved from Planning › Capacity. The rules both pages share (Outdoor closed Nov–Apr, capacity = seats × turns,
+  closure uplift, parsing) are in [`app/utils/capacityRules.ts`](app/utils/capacityRules.ts).
+  `POST /api/capacity/settings` now takes partial area updates (omitted fields keep their value), so each page
+  saves only its own fields. Planning › Capacity shows the setup read-only (closures as a short list, only when
+  any exist) and saves only spend per guest, auto-update and the covers grid; the stored-capacity mismatch
+  auto-fix moved to Settings with the seats/turns inputs.
+- **Stayed put, on purpose**: Staffing Plan rates/taxes/role classes (a model that recomputes and saves the labor
+  budget as a whole; tax rates in Settings could drift from the saved budget) and Cash & Loans' reserve plan and
+  gift card cash (working inputs used beside the projection).
+- Verified in Chrome on local dev: each save round-tripped (room setup changed only Bar's seats/capacity; the
+  Capacity save changed only per-cover; benchmark save and an invalid-order rejection), then everything was put
+  back via the APIs and confirmed identical to the morning's pre-migrate backup (`capacity_areas` and all 60
+  covers rows). One harmless side effect seen: saving closures writes zero weights for open nights (e.g. Sun: 0),
+  which means the same as omitting them.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

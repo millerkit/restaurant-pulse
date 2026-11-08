@@ -6,10 +6,15 @@
 // Updates capacity_areas rows by id (existing rows only — this route
 // doesn't add/remove areas), upserts capacity_seasonality by month (its
 // primary key), and upserts capacity_area_seasonality by (area_id, month).
+// Every field but id is optional (2026-11-08): Settings saves the room setup
+// (seats, turns, capacity, weekly closures) and Planning › Capacity saves the
+// forecast (per-cover revenue, auto-update), each sending only its own fields.
+// Omitted fields keep their stored value. capacityNovApr: undefined = keep,
+// null = closed that season.
 type AreaInput = {
-  id: number, seats: number, maxTurnsPerNight: number,
-  capacityNovApr: number | null, capacityMayOct: number,
-  perCoverRevenueFood: number, perCoverRevenueBeverage: number,
+  id: number, seats?: number, maxTurnsPerNight?: number,
+  capacityNovApr?: number | null, capacityMayOct?: number,
+  perCoverRevenueFood?: number, perCoverRevenueBeverage?: number,
   followActuals?: boolean,
   // Weekly closure (see capacity_areas in schema.sql). Omit all three to leave
   // the area's closure untouched; closedDows [] clears it.
@@ -35,12 +40,11 @@ export default defineEventHandler(async (event) => {
     if (!db.prepare('SELECT 1 FROM capacity_areas WHERE id = ?').get(a.id)) {
       throw createError({ statusCode: 400, statusMessage: `No capacity_areas row with id ${a.id}` })
     }
-    if (!Number.isFinite(a.seats) || a.seats < 0) throw createError({ statusCode: 400, statusMessage: `Invalid seats for area ${a.id}` })
-    if (!Number.isFinite(a.maxTurnsPerNight) || a.maxTurnsPerNight < 0) throw createError({ statusCode: 400, statusMessage: `Invalid maxTurnsPerNight for area ${a.id}` })
-    if (a.capacityNovApr != null && (!Number.isFinite(a.capacityNovApr) || a.capacityNovApr < 0)) throw createError({ statusCode: 400, statusMessage: `Invalid capacityNovApr for area ${a.id}` })
-    if (!Number.isFinite(a.capacityMayOct) || a.capacityMayOct < 0) throw createError({ statusCode: 400, statusMessage: `Invalid capacityMayOct for area ${a.id}` })
-    if (!Number.isFinite(a.perCoverRevenueFood) || a.perCoverRevenueFood < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueFood for area ${a.id}` })
-    if (!Number.isFinite(a.perCoverRevenueBeverage) || a.perCoverRevenueBeverage < 0) throw createError({ statusCode: 400, statusMessage: `Invalid perCoverRevenueBeverage for area ${a.id}` })
+    const bad = (v: unknown) => v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+    for (const f of ['seats', 'maxTurnsPerNight', 'capacityMayOct', 'perCoverRevenueFood', 'perCoverRevenueBeverage'] as const) {
+      if (bad(a[f])) throw createError({ statusCode: 400, statusMessage: `Invalid ${f} for area ${a.id}` })
+    }
+    if (a.capacityNovApr !== null && bad(a.capacityNovApr)) throw createError({ statusCode: 400, statusMessage: `Invalid capacityNovApr for area ${a.id}` })
     if (a.closedDows != null) {
       if (!Array.isArray(a.closedDows) || a.closedDows.some(d => !Number.isInteger(d) || d < 0 || d > 6 || d === 1)) {
         throw createError({ statusCode: 400, statusMessage: `Invalid closedDows for area ${a.id} (weekday numbers 0-6, not Monday)` })
@@ -71,9 +75,11 @@ export default defineEventHandler(async (event) => {
 
   const updateArea = db.prepare(`
     UPDATE capacity_areas
-    SET seats = @seats, max_turns_per_night = @maxTurnsPerNight,
-        capacity_nov_apr = @capacityNovApr, capacity_may_oct = @capacityMayOct,
-        per_cover_revenue_food = @perCoverRevenueFood, per_cover_revenue_beverage = @perCoverRevenueBeverage,
+    SET seats = COALESCE(@seats, seats), max_turns_per_night = COALESCE(@maxTurnsPerNight, max_turns_per_night),
+        capacity_nov_apr = CASE WHEN @setNovApr = 1 THEN @capacityNovApr ELSE capacity_nov_apr END,
+        capacity_may_oct = COALESCE(@capacityMayOct, capacity_may_oct),
+        per_cover_revenue_food = COALESCE(@perCoverRevenueFood, per_cover_revenue_food),
+        per_cover_revenue_beverage = COALESCE(@perCoverRevenueBeverage, per_cover_revenue_beverage),
         follow_actuals = COALESCE(@followActuals, follow_actuals),
         -- turning it off clears the marker so a later re-enable catches up on
         -- the latest closed month at the next sync
@@ -99,7 +105,14 @@ export default defineEventHandler(async (event) => {
       const setClosure = a.closedDows != null
       const dows = setClosure ? [...new Set(a.closedDows)].sort((x, y) => x - y) : []
       updateArea.run({
-        ...a,
+        id: a.id,
+        seats: a.seats ?? null,
+        maxTurnsPerNight: a.maxTurnsPerNight ?? null,
+        setNovApr: a.capacityNovApr === undefined ? 0 : 1,
+        capacityNovApr: a.capacityNovApr ?? null,
+        capacityMayOct: a.capacityMayOct ?? null,
+        perCoverRevenueFood: a.perCoverRevenueFood ?? null,
+        perCoverRevenueBeverage: a.perCoverRevenueBeverage ?? null,
         followActuals: a.followActuals == null ? null : (a.followActuals ? 1 : 0),
         setClosure: setClosure ? 1 : 0,
         closedDows: dows.length > 0 ? dows.join(',') : null,

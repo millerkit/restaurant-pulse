@@ -5,9 +5,9 @@ useHead({ title: `${site.restaurantName} — Settings` })
 
 // Settings hub (2026-11 UI cleanup, phase 1). Holds the technical pieces
 // that don't belong in anyone's day-to-day nav: data connections and the
-// reservation upload. The "Where other settings live" list is a directory of
-// settings still on their original pages; they move here one at a time in
-// later phases (People & Access arrives with roles in phase 2).
+// reservation upload, database update status, then targets/alert levels and
+// the restaurant's room setup (moved here 2026-11-08). People & Access
+// arrives with roles in phase 2.
 
 type QboStatus =
   | { connected: true, environment: string, realmId: string, companyName?: string }
@@ -22,20 +22,13 @@ const { data: migrations } = await useFetch<MigrationStatus>('/api/settings/migr
 const migrationsPending = computed(() => (migrations.value?.available ? migrations.value.pending : []))
 const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
-const elsewhere = [
-  { title: 'Weekly sales goal', where: 'This Week', to: '/', note: 'The "good week" target the daily goals are built from.' },
-  { title: 'Overspending alert levels', where: 'Budget Check', to: '/budget', note: 'How large a change must be before a cost line is flagged.' },
-  { title: 'Labor role classes, tax rates, taxable tips', where: 'Staffing Plan', to: '/budget/labor', note: 'Payroll-tax rates and how each role is classified.' },
-  { title: 'Dining areas, seats, closures', where: 'Capacity', to: '/capacity?tab=edit', note: 'Seats, turns, holiday closures and weekly area closures.' },
-  { title: 'Loan reserve plan and gift card cash', where: 'Cash & Loans', to: '/cashflow', note: 'Weekly reserve amount and expected gift card sales.' }
-]
 </script>
 
 <template>
   <div>
     <PageHeader
       page-name="Settings"
-      description="Connections, data uploads, and the technical settings behind the rest of the app."
+      description="Connections, targets, and the restaurant setup behind the rest of the app."
     />
 
     <section class="settings-section">
@@ -95,19 +88,13 @@ const elsewhere = [
     </section>
 
     <section class="settings-section">
-      <h2 class="settings-h">Where other settings live</h2>
-      <p class="settings-intro">These will move here over time. For now, they're on the pages below.</p>
-      <ul class="settings-list">
-        <li v-for="item in elsewhere" :key="item.title">
-          <NuxtLink :to="item.to" class="settings-row">
-            <span>
-              <span class="settings-row-title">{{ item.title }}</span>
-              <span class="settings-row-note">{{ item.note }}</span>
-            </span>
-            <span class="settings-row-where">{{ item.where }} →</span>
-          </NuxtLink>
-        </li>
-      </ul>
+      <h2 class="settings-h">Targets &amp; Alert Levels</h2>
+      <TargetsSettings />
+    </section>
+
+    <section class="settings-section">
+      <h2 class="settings-h">Restaurant Setup</h2>
+      <RestaurantSetupSettings />
     </section>
   </div>
 </template>
@@ -122,7 +109,6 @@ const elsewhere = [
   color: var(--ink-3);
   margin: 0 0 10px;
 }
-.settings-intro { margin: -4px 0 10px; font-size: 13px; color: var(--ink-3); }
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -155,27 +141,4 @@ const elsewhere = [
   text-decoration: none;
 }
 .settings-btn:hover { background: var(--accent-wash); }
-.settings-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--hair);
-  border-radius: 12px;
-  background: var(--surface);
-  overflow: hidden;
-}
-.settings-list li + li { border-top: 1px solid var(--hair); }
-.settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  text-decoration: none;
-  color: inherit;
-}
-.settings-row:hover { background: var(--surface-alt); }
-.settings-row-title { display: block; font-size: 14px; font-weight: 700; color: var(--ink); }
-.settings-row-note { display: block; font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
-.settings-row-where { font-size: 12.5px; font-weight: 700; color: var(--accent-text); white-space: nowrap; }
 </style>
