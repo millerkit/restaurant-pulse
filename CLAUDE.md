@@ -2382,11 +2382,14 @@ assumptions.
     Year's). A closed day with one $150 gift-card order isn't a real slow
     night. This wasn't just an accuracy nit — on the **spend** index it was
     actively corrupting the data: 2026-07-04 (a holiday) showed
-    `covers=1, revenue=$10,582.24` — a private event whose true guest count
-    was never captured, producing a nonsensical $10,582/cover reading that
+    `covers=1, revenue=$10,582.24` — a nonsensical $10,582/cover reading that
     swamped July's whole-month average before this was caught (July's spend
     index briefly read 10% in one intermediate build, an obviously-wrong
-    number that's what surfaced this in the first place). Fixed with
+    number that's what surfaced this in the first place). **Corrected
+    2026-11-08: this was not a private event.** Toast shows 1 cover and 0.0
+    labor hours that day, so the restaurant was closed; the $10.6K of core
+    revenue QBO carries on that date is probably a posting-date artifact
+    (Jul 2 through Jul 5 all show $9.6K to $10.6K). Fixed with
     `MIN_COVERS_FOR_OPEN_DAY = 15` in `history.get.ts`, same "check the
     real distribution, find the clean gap" methodology as
     `MAX_PLAUSIBLE_GUESTS_PER_ORDER` above and the original
@@ -4908,8 +4911,8 @@ in `weekly-targets.ts`). This is step 1 of 3 (Capacity); the rest is below.
   Prompted by a report of the prompt after a successful save that could not be reproduced locally (round trip
   and UI flow both clean), so the exact cause is unconfirmed.
 - **Revenue Modeling scenario (step 3)**: built (a "Close an Area One Night a Week" what-if) but judged overkill
-  and kept OFF main, on branch `close-area-scenario` (one commit touching `revenue-modeling.vue` and
-  `revenue-modeling.get.ts`). Revenue Modeling still multiplies every area by one `operatingNightsPerYear`.
+  and never merged; the branch (`close-area-scenario`, commit bcd6032) was deleted 2026-11-08, since the
+  real Tuesday closure made it moot. Revenue Modeling still multiplies every area by one `operatingNightsPerYear`.
   The Labor tab's Tuesday Chef's hours must be cut by hand (variable labor scales with covers, not schedules).
 
 ## OpenTable reservation importer — 2026-11-04
@@ -5224,6 +5227,23 @@ production reads.)
   expected −$8,278; a dated buyout $0 change; food + beverage still sum to the total; the Capacity grid's December
   projection matched the server ($227,829). Settings editor: quick-add, 2027 dates (Easter Mar 28, Thanksgiving
   Nov 25), remove. No new type errors.
+
+**Cleanup session, 2026-11-08 (done by the user in the UI):**
+- Holiday closures entered for 2026 and 2027: Jan 1, Jan 2 (staff break), Jul 4, Thanksgiving, Dec 24, Dec 25.
+  Jul 4 is a plain closure, not an event (see the correction in the Historical tab section: Toast shows 1 cover and
+  0 labor hours, and QBO's $10.6K that date is likely a posting-date artifact).
+- Special Nights for November: Nov 12 Founders Collective buyout ($11,000 minimum, drinks extra) and Nov 17 Wild
+  Things ticketed event ($2,000 dine-in expected; $6,500 of tickets budgeted in Event Sales, 4145 $2,000 and 4150
+  $4,500). Historical nights (Sep 26 off-site, Oct 20/21 Mushroom Dinners) were deliberately not entered: the panel
+  only works from the current month on, and the usual-night averages already exclude them (covers < 15 or no
+  positive core revenue).
+- **Undated-count remainder:** the Buyout planner's Thursday count was 1.4645. Counts are in standard-buyout units, so
+  a fraction like this is what "replace an undated count with a dated buyout" leaves behind when the prices differ
+  (how this particular value arose is not recorded here). With Nov 12 now dated, the user set the count to 0 rather
+  than let it double count the same night.
+- **Sales Plan before/after:** Nov $207,801 → $212,633 (Recompute from Capacity +$2,040, buyout Apply +$2,792, saved).
+  Dec $221,501 → $219,581 after Recompute (two closure nights removed). Remaining steps given to the user: Save Dec if
+  the button is active, then Settings › Holiday closures › "Clear old counts".
 
 ## Not yet done
 
