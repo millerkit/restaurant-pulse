@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 
-useHead({ title: `${site.restaurantName} — Kitchen Labor` })
+useHead({ title: `${site.restaurantName} — Kitchen Hours` })
 
 type Revenue = { restaurant: number, events: number, catering: number, retail: number, total: number }
 type Week = {
@@ -137,7 +137,7 @@ function fmtDelta(v: number) {
 
     <template v-else-if="data">
       <PageHeader
-        page-name="Kitchen Labor"
+        page-name="Kitchen Hours & Cost"
         description="BOH chefs and cooks as a percent of food revenue, by week"
         :as-of-label="data.hasData ? formatDate(data.asOf) : undefined"
         @synced="refresh()"
@@ -276,7 +276,7 @@ function fmtDelta(v: number) {
           <ul>
             <li><strong>Labor:</strong> wages under BOH Wages (cooks, chefs, sous and pastry, service charge distribution{{ includeOvertime ? ', BOH overtime' : '' }}), excluding Porter{{ includeExecChef ? ', plus the Executive Chef' : '' }}. Payroll taxes, benefits and bonuses are not included.</li>
             <li><strong>Food revenue:</strong> restaurant food, event food (on-site and off-site), catering food and retail food. Beverage, service and equipment fees, and retail non-food are left out, and discounts &amp; comps can't be split between food and beverage, so revenue is before them.</li>
-            <li><strong>Est. OT hours:</strong> BOH overtime dollars divided by the Labor tab's blended OT rate (1.5 × $25.84/hr). QBO posts dollars, not hours, so this is an estimate; overtime actually paid has run nearer $42/hr, which would mean roughly 8% fewer hours.</li>
+            <li><strong>Est. OT hours:</strong> BOH overtime dollars divided by the Staffing Plan's blended OT rate (1.5 × $25.84/hr). QBO posts dollars, not hours, so this is an estimate; overtime actually paid has run nearer $42/hr, which would mean roughly 8% fewer hours.</li>
             <li v-if="data.offCycleLabor > 0.5"><strong>Off-cycle postings:</strong> {{ fmtMoney(data.offCycleLabor) }} of kitchen labor was posted on days other than a Friday; each is counted with the next Friday's payroll.</li>
           </ul>
         </section>

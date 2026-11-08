@@ -2,7 +2,7 @@
 import site from '~/config/site.json'
 import { benchmarkStatus, netIncome, type CategoryBenchmark } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — P&L` })
+useHead({ title: `${site.restaurantName} — Profit & Loss` })
 
 const { data, pending, error, refresh } = await useFetch('/api/pl')
 
@@ -76,7 +76,7 @@ const yearRow = computed(() => periodRow('year'))
 
     <template v-else>
       <PageHeader
-        :page-name="'P&L'"
+        page-name="Profit & Loss"
         :description="`Month and year to date · reporting through last night's close (${formatWeekdayDate(data.asOfDate)})`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
@@ -86,7 +86,7 @@ const yearRow = computed(() => periodRow('year'))
       <section>
         <div class="section-head">
           <div class="section-label">Profit &amp; Loss</div>
-          <div class="section-note">COGS%, labor%, and prime cost colored against configurable benchmarks — see legend below. For what's driving Labor/Opex costs, see <NuxtLink to="/budget">Budget Pace</NuxtLink>'s Overspending section; for the day-by-day revenue picture, see <NuxtLink to="/pl/revenue-calendar">Revenue Calendar</NuxtLink>.</div>
+          <div class="section-note">COGS%, labor%, and prime cost colored against configurable benchmarks — see legend below. For what's driving Labor/Opex costs, see <NuxtLink to="/budget">Budget Check</NuxtLink>'s Overspending section; for the day-by-day revenue picture, see <NuxtLink to="/pl/revenue-calendar">Daily Results</NuxtLink>.</div>
         </div>
 
         <div class="pl-table-card">
@@ -121,7 +121,7 @@ const yearRow = computed(() => periodRow('year'))
                 <td><span :class="['amount', yearRow.primeStatus]">${{ Math.round(yearRow.prime).toLocaleString() }}</span><span :class="['pct', yearRow.primeStatus]">{{ (yearRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
               <tr>
-                <th scope="row">Operating expenses <span class="hint">(see Budget Pace)</span></th>
+                <th scope="row">Operating expenses <span class="hint">(see Budget Check)</span></th>
                 <td class="amount">${{ Math.round(monthRow.opex).toLocaleString() }}</td>
                 <td class="amount">${{ Math.round(yearRow.opex).toLocaleString() }}</td>
               </tr>

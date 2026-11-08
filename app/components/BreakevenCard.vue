@@ -149,7 +149,7 @@ const sensitivity = computed(() => {
           For the selected layer: <strong>+$5 spend per cover</strong> lowers the target by about {{ sensitivity.spendSaves.toFixed(1) }} covers/night;
           <strong>each extra $10K/month of fixed cost</strong> raises it by about {{ sensitivity.fixedCosts.toFixed(1) }}.
         </div>
-        <div v-if="!data.laborBudgeted" class="be-basis warn">No labor budget is saved for {{ MONTH_NAMES[data.month - 1] }} yet — save the Labor tab, or the labor layers read $0.</div>
+        <div v-if="!data.laborBudgeted" class="be-basis warn">No labor budget is saved for {{ MONTH_NAMES[data.month - 1] }} yet — save the Staffing Plan, or the labor layers read $0.</div>
 
         <div class="be-weekday-head">By weekday <span class="be-sub inline">— covers each night needs to carry an equal share of the selected layer</span></div>
         <table class="be-table">

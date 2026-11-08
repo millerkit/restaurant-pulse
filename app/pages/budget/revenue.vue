@@ -7,7 +7,7 @@ import { CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, currentAsOfDay, curren
 // Budget so the two pages can't disagree. See computedAccountProjected below.
 import { budgetFloor, isCoreRevenueAccountNumber, nightlyProjectionUsable as nightlyUsable, coreRevenueShares } from '~/utils/revenueProjection'
 
-useHead({ title: `${site.restaurantName} — Revenue` })
+useHead({ title: `${site.restaurantName} — Sales Plan` })
 
 // Which year this tab is planning (2026 or 2027 — see BudgetYearToggle); app.vue remounts the
 // page on a change, so it is a constant for this component's lifetime.
@@ -582,7 +582,7 @@ async function recomputeRevenueFromCapacity() {
   revenueRecomputeStatus.value = 'running'
   try {
     const built = buildCapacityTargets(editMonth.value)
-    if (!built) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Edit Capacity page`)
+    if (!built) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Capacity planning page`)
     if (built.targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
 
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets: built.targets } })
@@ -614,7 +614,7 @@ async function recomputeYearRevenueFromCapacity() {
       if (!built || built.targets.length === 0) { skipped.push(MONTH_NAMES[month - 1]); continue }
       targets.push(...built.targets)
     }
-    if (targets.length === 0) throw new Error('No Capacity assumptions found for any month — check the Edit Capacity page')
+    if (targets.length === 0) throw new Error('No Capacity assumptions found for any month — check the Capacity planning page')
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
     await loadYear()
     const done = targetMonths.value.length - skipped.length
@@ -1013,7 +1013,7 @@ function formatNightDate(iso: string) {
 <template>
   <div>
     <PageHeader
-      page-name="Revenue"
+      page-name="Sales Plan"
       :description="`Project revenue by account for ${MONTH_NAMES[asOfMonth - 1]}–Dec, fed from Capacity's covers-by-area assumptions · ${YEAR}`"
       :as-of-label="asOfLabel"
       @synced="loadYear(); loadActualsYear()"
@@ -1052,10 +1052,10 @@ function formatNightDate(iso: string) {
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Fed from Capacity</span>
-            <span class="quiet-note">The Capacity tab's per-area expected-covers assumptions already project Food/Beverage revenue for this month — pull that projection in instead of typing a figure in twice.</span>
+            <span class="quiet-note">The Capacity planning page's per-area expected-covers assumptions already project Food/Beverage revenue for this month — pull that projection in instead of typing a figure in twice.</span>
           </div>
           <div v-if="revenueHasCapacityData" class="section-note">
-            From the <NuxtLink to="/capacity?tab=edit">Capacity tab's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
+            From the <NuxtLink to="/capacity?tab=edit">Capacity planning page's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
             Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>,
             Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
             <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
@@ -1077,7 +1077,7 @@ function formatNightDate(iso: string) {
             <span v-if="yearRecomputeStatus === 'done'" class="chip good">{{ yearRecomputeMessage }}</span>
             <span v-if="yearRecomputeStatus === 'error'" class="chip warning">{{ yearRecomputeMessage }}</span>
           </div>
-          <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Edit Capacity page</NuxtLink>.</div>
+          <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Capacity planning page</NuxtLink>.</div>
         </div>
 
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
@@ -1133,7 +1133,7 @@ function formatNightDate(iso: string) {
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Special Nights</span>
-            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. The current month's Projected figure uses these instead of a normal night, and the Dashboard's Next 7 Nights panel shows them. Expected revenue is core dine-in only: a buyout's amount, $0 for a closure or off-site night.</span>
+            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. The current month's Projected figure uses these instead of a normal night, and This Week's Next 7 Nights panel shows them. Expected revenue is core dine-in only: a buyout's amount, $0 for a closure or off-site night.</span>
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>
@@ -1483,7 +1483,7 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
    totals sat flush right — reported directly from a screenshot). Wrapping
    each cell's content in its own flex container that fills the td and
    justifies to the end fixes this regardless of the input-vs-span quirk —
-   same fix pattern as the Edit Capacity page's two adjacent money-cell
+   same fix pattern as the Capacity planning page's two adjacent money-cell
    columns (see CLAUDE.md), applied to a *span* wrapper rather than the
    `<td>` itself so multiple adjacent amount columns (Budget/Actual/
    Projected) never fold into one anonymous cell the way two adjacent

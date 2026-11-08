@@ -4,7 +4,7 @@ import { YEAR, useBudgetYear, useActualsYear, hybridYearTotalsPastActual, monthC
 import { yearOutlook } from '~/utils/yearOutlook'
 import { projectMonthRevenue, type NightlyProjectionSummary } from '~/utils/revenueProjection'
 
-useHead({ title: `${site.restaurantName} — Cash Flow` })
+useHead({ title: `${site.restaurantName} — Cash & Loans` })
 
 type Payment = { loanKey: string, lender: string, date: string, type: 'catch_up' | 'regular', interest: number, principal: number, total: number }
 type PeriodFigures = {
@@ -320,7 +320,7 @@ async function submitPlan() {
   <div>
     <header>
       <div>
-        <h1>Cash Flow</h1>
+        <h1>Cash &amp; Loans</h1>
         <div class="sub">Are we covering total debt service — principal included, not just interest?</div>
       </div>
     </header>
@@ -430,7 +430,7 @@ async function submitPlan() {
             (against their older budgets: COGS {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}) would count them twice.
             Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
             <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night card needs the current month's revenue projection, which isn't available yet.</template>
-            Three months is a thin sample, so treat the pace cards as a rough guide, not a forecast. Seasonality is in the budget (December's monthly budget already reflects the Capacity tab's seasonal covers); the pace ratio doesn't add any December-specific lift.
+            Three months is a thin sample, so treat the pace cards as a rough guide, not a forecast. Seasonality is in the budget (December's monthly budget already reflects the Capacity planning page's seasonal covers); the pace ratio doesn't add any December-specific lift.
           </div>
         </div>
 

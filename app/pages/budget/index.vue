@@ -2,7 +2,7 @@
 import site from '~/config/site.json'
 import { CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, YEAR, type Category, categoryTotals, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, monthCategoryBudget, monthExpectedOpex, netIncome, paceStatus, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Budget Pace` })
+useHead({ title: `${site.restaurantName} — Budget Check` })
 
 const { monthlyData, loadError, loadYear } = useBudgetYear()
 const { monthlyActuals, loadError: actualsLoadError, loadActualsYear } = useActualsYear()
@@ -413,7 +413,7 @@ async function submitThresholds() {
 <template>
   <div>
     <PageHeader
-      page-name="Budget Pace"
+      page-name="Budget Check"
       :description="`Are we going to earn enough to hit budget? · ${YEAR}`"
       :as-of-label="asOfLabel"
       @synced="loadYear(); loadActualsYear(); refreshDetail()"
@@ -428,7 +428,7 @@ async function submitThresholds() {
       <!-- Are we going to earn enough to hit budget? -->
       <section>
         <div class="section-head">
-          <div class="section-label">Budget Pace</div>
+          <div class="section-label">Pace vs. Budget</div>
           <div class="period-tabs">
             <span :class="['period-tab', selectedPeriod === 'month' && 'active']" @click="selectedPeriod = 'month'">Month</span>
             <span :class="['period-tab', selectedPeriod === 'year' && 'active']" @click="selectedPeriod = 'year'">Year</span>

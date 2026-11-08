@@ -2,7 +2,7 @@
 import site from '~/config/site.json'
 import { MONTH_NAMES } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Revenue/Margin Calendar` })
+useHead({ title: `${site.restaurantName} — Daily Results` })
 
 const { data, pending, error, refresh } = await useFetch('/api/pl')
 const { data: marginData, pending: marginPending, error: marginError, refresh: refreshMargin } = await useFetch('/api/nightly-margin')
@@ -51,12 +51,12 @@ const view = ref<View>('revenue')
 const period = ref<Period>('month')
 
 const pageTitle = computed(() => {
-  if (view.value === 'revenue') return period.value === 'month' ? 'This Month’s Revenue Calendar' : 'This Year’s Revenue Calendar'
-  return period.value === 'month' ? "This Month's Nightly Margin" : "This Year's Nightly Margin"
+  const when = period.value === 'month' ? 'This Month' : 'This Year'
+  return view.value === 'revenue' ? `Daily Sales · ${when}` : `Nightly Profit · ${when}`
 })
 const pageDescription = computed(() => view.value === 'revenue'
   ? "Each operating day vs. that weekday's own revenue goal"
-  : "Each operating night's estimated profit after covering variable (hourly) labor, COGS, and its share of fixed labor & benefits")
+  : "Each night's estimated profit after hourly pay, food & drink costs, and its share of salaries & benefits")
 
 // ============================== Revenue tab ==============================
 // Moved here 2026-08-20 from the old standalone P&L Drill-Downs page, which
@@ -312,8 +312,8 @@ function refreshBoth() {
       <div class="drilldown-toggle-bar">
         <div class="drilldown-toggle-label">View</div>
         <div class="period-tabs">
-          <span :class="['period-tab', view === 'revenue' && 'active']" @click="view = 'revenue'">Revenue</span>
-          <span :class="['period-tab', view === 'margin' && 'active']" @click="view = 'margin'">Margin</span>
+          <span :class="['period-tab', view === 'revenue' && 'active']" @click="view = 'revenue'">Sales</span>
+          <span :class="['period-tab', view === 'margin' && 'active']" @click="view = 'margin'">Profit</span>
         </div>
       </div>
 
@@ -328,7 +328,7 @@ function refreshBoth() {
       <!-- ============================== Revenue tab ============================== -->
       <section v-if="view === 'revenue'">
         <div class="section-head">
-          <div class="section-note">Percentage is the change vs. {{ revenueComparisonLabel }} (see the Dashboard's Weekly Performance section); the dollar figure below it is that day's actual revenue, not the size of the change. Days before the location move (Jun 20, 2026) have no goal to compare against and are left blank.</div>
+          <div class="section-note">Percentage is the change vs. {{ revenueComparisonLabel }} (set on the This Week page); the dollar figure below it is that day's actual revenue, not the size of the change. Days before the location move (Jun 20, 2026) have no goal to compare against and are left blank.</div>
         </div>
 
         <div v-if="revCalendarView" class="drill-card">

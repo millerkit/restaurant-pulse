@@ -5,7 +5,7 @@ import { MONTH_NAMES, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInM
 import { SEASONALITY_CAP_PCT, createLaborModel, seasonalityInfoFrom } from '~/utils/laborModel'
 import type { GroupKey, LaborAccount, LaborSlot as Slot, LaborTaxRates as TaxRates, MonthlyIndexEntry, PayType, RoleClass } from '~/utils/laborModel'
 
-useHead({ title: `${site.restaurantName} — Labor` })
+useHead({ title: `${site.restaurantName} — Staffing Plan` })
 
 // The year this tab is modeling (2026 or 2027 — see BudgetYearToggle). For a year that hasn't
 // started, asOfMonth is 1 and nothing is "closed", so all 12 months are modeled and saved.
@@ -572,7 +572,7 @@ async function save() {
 <template>
   <div>
     <PageHeader
-      page-name="Labor"
+      page-name="Staffing Plan"
       :description="`Edit rates, hours, and salaries — the monthly budget is computed from payroll frequency and real seasonal demand · ${YEAR}`"
     />
     <BudgetYearToggle :confirm-leave="confirmLeave" />

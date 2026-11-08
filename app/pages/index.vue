@@ -2,7 +2,7 @@
 import site from '~/config/site.json'
 import { CATEGORY_DIRECTION, benchmarkStatus, daysInMonth, daysInYear, dayOfYear, netIncome, paceStatus } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Weekly Performance` })
+useHead({ title: `${site.restaurantName} — This Week` })
 
 const { data, pending, error, refresh } = await useFetch('/api/dashboard')
 
@@ -287,7 +287,7 @@ function meterStatusLabel(status: string | null) {
 
     <template v-else>
       <PageHeader
-        page-name="Weekly Performance"
+        page-name="This Week"
         :description="`${formatLongDate(data.asOfDate)} · reporting through last night's close`"
         :as-of-label="formatWeekdayDate(data.asOfDate)"
         @synced="refresh()"
@@ -436,7 +436,7 @@ function meterStatusLabel(status: string | null) {
         </div>
         <div v-else class="drill-card quiet">
           <span class="chip warning">No budget set</span>
-          <span class="quiet-note">Enter a revenue target for this month on the Edit Budget tab to see runway here.</span>
+          <span class="quiet-note">Enter a revenue target for this month on the Budget page to see runway here.</span>
         </div>
 
         <div class="runway-card" v-if="yearView?.hasBudget">
@@ -454,7 +454,7 @@ function meterStatusLabel(status: string | null) {
             <span>${{ Math.round(yearView.revenue!.target).toLocaleString() }}</span>
           </div>
           <div class="quiet-note">
-            On track to land at ${{ Math.round(data.yearToDate.projectedRevenue).toLocaleString() }} if the rest of the year hits budget (closed months at actual, as on the Edit Budget Total tab).
+            On track to land at ${{ Math.round(data.yearToDate.projectedRevenue).toLocaleString() }} if the rest of the year hits budget (closed months at actual, as on the Budget page's Total tab).
           </div>
           <div class="quiet-note" v-if="data.yearToDate.unbudgetedPastMonthCount > 0">
             {{ data.yearToDate.unbudgetedPastMonthCount }} month{{ data.yearToDate.unbudgetedPastMonthCount === 1 ? '' : 's' }} this year {{ data.yearToDate.unbudgetedPastMonthCount === 1 ? 'has' : 'have' }} no revenue budget set — the annual target above uses actual revenue for those months instead.
@@ -462,7 +462,7 @@ function meterStatusLabel(status: string | null) {
         </div>
         <div v-else class="drill-card quiet">
           <span class="chip warning">No budget set</span>
-          <span class="quiet-note">Enter revenue targets for {{ data.asOfYear }} on the Edit Budget tab to see runway here.</span>
+          <span class="quiet-note">Enter revenue targets for {{ data.asOfYear }} on the Budget page to see runway here.</span>
         </div>
       </section>
 

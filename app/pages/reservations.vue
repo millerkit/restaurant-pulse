@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 
-useHead({ title: `${site.restaurantName} — Reservations` })
+useHead({ title: `${site.restaurantName} — Reservation Upload` })
 
 type Summary =
   | { hasData: false }
@@ -74,7 +74,7 @@ function formatStamp(s: string) {
 <template>
   <div>
     <PageHeader
-      page-name="Reservations"
+      page-name="Reservation Upload"
       description="Upload an OpenTable GuestCenter export. Only dates, party size, status, table/area, source, experience and prepayment status are kept — guest names, phones, emails and notes are never read or stored. An upload replaces every stored reservation inside its date range."
     />
 

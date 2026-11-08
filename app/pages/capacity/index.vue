@@ -2,7 +2,6 @@
 import site from '~/config/site.json'
 import { MONTH_NAMES, YEAR, paceStatus } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Capacity` })
 
 // Combines the old separate Capacity Pace (app/pages/capacity/index.vue)
 // and Edit Capacity (app/pages/capacity/edit.vue) pages into one page with
@@ -16,6 +15,10 @@ type Tab = 'pace' | 'edit'
 const route = useRoute()
 const router = useRouter()
 const tab = ref<Tab>(route.query.tab === 'edit' ? 'edit' : 'pace')
+// The section nav (layouts/default.vue) switches tabs by changing ?tab= on
+// the same route, which doesn't remount the page — follow it here.
+watch(() => route.query.tab, (t) => { tab.value = t === 'edit' ? 'edit' : 'pace' })
+useHead(() => ({ title: `${site.restaurantName} — ${tab.value === 'edit' ? 'Capacity' : 'Covers & Spend'}` }))
 function setTab(t: Tab) {
   tab.value = t
   router.replace({ query: { ...route.query, tab: t === 'edit' ? 'edit' : undefined } })
@@ -876,16 +879,12 @@ async function save() {
 
     <template v-else>
       <PageHeader
-        page-name="Capacity"
-        description="Are we filling the room at the rate we've assumed, and are guests spending what we've assumed per cover? Edit those assumptions on the Edit tab."
+        :page-name="tab === 'edit' ? 'Capacity' : 'Covers & Spend'"
+        :description="tab === 'edit' ? 'Seats, turns, expected covers and spend per guest for each area. These assumptions feed the Sales Plan.' : 'Are we filling seats at the rate we planned, and are guests spending what we planned per person?'"
         :as-of-label="paceData?.asOfDate ? fmtDate(paceData.asOfDate) : undefined"
         @synced="paceRefresh()"
       />
 
-      <div class="tab-nav">
-        <button type="button" :class="['tab-btn', tab === 'pace' && 'active']" @click="setTab('pace')">Capacity Pace</button>
-        <button type="button" :class="['tab-btn', tab === 'edit' && 'active']" @click="setTab('edit')">Edit Capacity</button>
-      </div>
 
       <!-- ================= Capacity Pace tab ================= -->
       <template v-if="tab === 'pace'">
@@ -1046,7 +1045,7 @@ async function save() {
 
       <!-- ================= Edit Capacity tab ================= -->
       <template v-else>
-        <div class="edit-sub">Capacity, turns/night, and per-cover revenue assumptions, plus the monthly fill % and holiday-closure counts these get tested against. See <button type="button" class="link-btn" @click="setTab('pace')">Capacity Pace</button> to see how real fill % and per-cover spend compare.</div>
+        <div class="edit-sub">Capacity, turns/night, and per-cover revenue assumptions, plus the monthly fill % and holiday-closure counts these get tested against. See <button type="button" class="link-btn" @click="setTab('pace')">Covers &amp; Spend</button> to see how real fill % and per-cover spend compare.</div>
 
         <section>
           <div class="section-head">
@@ -1054,7 +1053,7 @@ async function save() {
             <ul class="section-note note-list">
               <li>Capacity Nov–Apr and May–Oct are calculated as Seats × Max Turns/Night, not entered directly.</li>
               <li>Outdoor has no Nov–Apr season — it stays closed through winter.</li>
-              <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Capacity Pace tab for the blended (non-area) version.</li>
+              <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Covers &amp; Spend page for the blended (non-area) version.</li>
               <li>"Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</li>
               <li>"Auto-update monthly" does the same thing for you: on the first nightly sync after a month closes, Food/Beverage are replaced with that area's real per-cover over the two most recently closed months. Off by default — leave it off for areas where you want a deliberate target to compare actuals against. Turning it on takes effect at the next sync.</li>
             </ul>
@@ -1132,7 +1131,7 @@ async function save() {
               <li>Close an area on fixed weekdays from a start date (Monday is already the restaurant's closure). Before the start date nothing changes, so past months are still judged on the old schedule.</li>
               <li>From the start date the area has no capacity and no covers on those nights. The covers in the grid below stay the area's <em>pre-closure</em> per-night baseline.</li>
               <li>Recapture is the share of the closed nights' covers assumed to move to the area's open nights. Open-night covers are multiplied by (6 − closed × (1 − recapture)) ÷ open nights, capped at the area's nightly capacity.</li>
-              <li>The weekday weights say where the recaptured covers land (relative; blanks count as 0, all blank splits evenly). They only shape the weekday revenue targets on the Dashboard and Revenue Calendar; monthly totals use the recapture % alone. Landing is capped at each night's remaining seats.</li>
+              <li>The weekday weights say where the recaptured covers land (relative; blanks count as 0, all blank splits evenly). They only shape the weekday revenue targets on This Week and Daily Results; monthly totals use the recapture % alone. Landing is capped at each night's remaining seats.</li>
             </ul>
           </div>
           <div class="pl-table-card">

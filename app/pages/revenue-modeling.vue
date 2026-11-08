@@ -3,7 +3,7 @@ import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
 import { YEAR, hybridYearTotalsPastActual, monthCategoryBudget, currentAsOfMonth, netIncome, useActualsYear, useBudgetYear } from '~/composables/useBudgetData'
 
-useHead({ title: `${site.restaurantName} — Revenue Modeling` })
+useHead({ title: `${site.restaurantName} — What-If` })
 
 // A what-if tool: start from real trailing per-area covers/spend (the same
 // real daily_toast_area_metrics data the Edit Capacity page's "Actual"
@@ -531,7 +531,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
 
     <template v-else>
       <PageHeader
-        page-name="Revenue Modeling"
+        page-name="What-If"
         description="What would a covers or spend change do to this year's labor % of revenue and profit margin?"
         :as-of-label="data?.asOfAreaDate ? fmtDate(data.asOfAreaDate) : undefined"
         @synced="handleSynced()"
@@ -539,7 +539,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
 
       <div v-if="!hasAreaData" class="drill-card">
         <span class="chip warning">No real per-area data yet</span>
-        <span class="quiet-note">This page needs real Toast per-area covers/revenue (daily_toast_area_metrics) to build a trailing baseline — see the Capacity tab's Edit page for the same real data.</span>
+        <span class="quiet-note">This page needs real Toast per-area covers/revenue (daily_toast_area_metrics) to build a trailing baseline — see the Capacity planning page for the same real data.</span>
       </div>
 
       <template v-else>
@@ -846,7 +846,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
           </div>
 
           <div class="section-note">
-            Already booked for {{ data!.modelYear }} (from the <NuxtLink to="/budget/revenue">Revenue tab</NuxtLink>): <strong>{{ fmtMoneyFull(buyoutBookedRevenueTotal) }}</strong>
+            Already booked for {{ data!.modelYear }} (from the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>): <strong>{{ fmtMoneyFull(buyoutBookedRevenueTotal) }}</strong>
             <template v-if="buyoutHasAnyCount"> &middot; plus <strong>{{ fmtDeltaMoney(0, buyoutAnnualRevenueDelta) }}</strong> from this simulation</template>
           </div>
         </section>

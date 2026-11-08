@@ -84,7 +84,7 @@ async function buildPlan() {
     // 2. Revenue from Capacity ---------------------------------------------
     const capByMonth = new Map((capRes?.months ?? []).map(m => [m.month, m.assumed]))
     if (capByMonth.size === 0) {
-      warnings.push('No Capacity assumptions found — set expected covers by area on the Edit Capacity page. Revenue was not carried over.')
+      warnings.push('No Capacity assumptions found — set expected covers by area on the Capacity planning page. Revenue was not carried over.')
     } else {
       const mixById = new Map((mixRes?.hasData ? mixRes.accounts : []).map(m => [m.accountId, m.pct]))
       for (const group of ['Food', 'Beverage'] as const) {
@@ -121,7 +121,7 @@ async function buildPlan() {
     for (const a of laborAccounts) {
       rows.push({ accountId: a.accountId, accountNumber: a.accountNumber, name: a.name, kind: 'labor', values: months.map(m => round2(model.accountMonthlyDollars(a, m))) })
     }
-    if (laborAccounts.length === 0) warnings.push('The Labor tab has no accounts set up, so labor was not carried over.')
+    if (laborAccounts.length === 0) warnings.push('The Staffing Plan has no accounts set up, so labor was not carried over.')
 
     // Existing entries this will replace in the new year.
     let overwriteCount = 0
@@ -156,7 +156,7 @@ const summaryRows = computed(() => (['revenue', 'labor', 'fixed'] as Kind[]).map
   const values = monthTotals(kind)
   return {
     kind,
-    label: { revenue: 'Revenue (Capacity: Food + Beverage)', labor: 'Labor (Labor tab model)', fixed: 'Fixed operating expenses' }[kind],
+    label: { revenue: 'Revenue (Capacity: Food + Beverage)', labor: 'Labor (Staffing Plan model)', fixed: 'Fixed operating expenses' }[kind],
     values,
     total: values.reduce((s, v) => s + v, 0),
     count: plan.value?.rows.filter(r => r.kind === kind).length ?? 0
@@ -185,7 +185,7 @@ async function apply() {
   <div class="drill-card build-card">
     <div class="build-head">
       <span class="chip accent">Build {{ year }} budget</span>
-      <span class="quiet-note">Starts {{ year }} from existing numbers: fixed expenses from {{ MONTH_NAMES[11] }} {{ sourceYear }}'s budget, revenue from the Capacity tab, and labor from the Labor tab (with its Friday paychecks). COGS, variable expenses, events and retail are left for you.</span>
+      <span class="quiet-note">Starts {{ year }} from existing numbers: fixed expenses from {{ MONTH_NAMES[11] }} {{ sourceYear }}'s budget, revenue from the Capacity planning page, and labor from the Staffing Plan (with its Friday paychecks). COGS, variable expenses, events and retail are left for you.</span>
     </div>
 
     <div class="build-actions">
@@ -229,7 +229,7 @@ async function apply() {
 
       <div class="quiet-note small build-notes">
         <template v-if="plan.usedLoanSchedule">7020 Loan Interest is budgeted from the loan schedule, plus accrued interest on the deferred Miller note in the months it isn't paid. </template>
-        Labor uses the Labor tab as currently saved<template v-if="plan.sutaRatePct != null"> — including its SUTA rate of {{ plan.sutaRatePct.toFixed(2) }}%</template>. Payroll-tax rates and wage-base caps reset each January, so check the tax rates on the Labor tab before relying on early-year labor.
+        Labor uses the Staffing Plan as currently saved<template v-if="plan.sutaRatePct != null"> — including its SUTA rate of {{ plan.sutaRatePct.toFixed(2) }}%</template>. Payroll-tax rates and wage-base caps reset each January, so check the tax rates on the Staffing Plan before relying on early-year labor.
         Fixed utilities (gas, electricity) are carried at {{ MONTH_NAMES[11] }}'s level all year; adjust seasonally on the month tabs if you want. COGS and variable operating expenses aren't budgeted yet, so the year's Net Income will read far too high until they are (each month tab's COGS recompute can fill COGS from revenue).
       </div>
 

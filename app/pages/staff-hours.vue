@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 
-useHead({ title: `${site.restaurantName} — Staff Hours` })
+useHead({ title: `${site.restaurantName} — Benefits Eligibility` })
 
 type EmployeeRow = {
   guid: string
@@ -151,7 +151,7 @@ const partTimeNote = computed(() => {
 
     <template v-else-if="data">
       <PageHeader
-        page-name="Staff Hours"
+        page-name="Benefits Eligibility"
         :description="data.hasData
           ? `Average hours per week per employee, ${formatDate(data.windowStart)} – ${formatDate(data.windowEnd, true)} (${data.coverageDays} days)`
           : `Average hours per week per employee over the last ${data.windowDays} days`"

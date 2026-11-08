@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 
-useHead({ title: `${site.restaurantName} — Historical` })
+useHead({ title: `${site.restaurantName} — Seasonal Trends` })
 
 type MonthPoint = { year: number, month: number, indexPct: number, openDays: number }
 type LocationBaselines = { massAve: number | null, cambridgeSt: number | null }
@@ -36,7 +36,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
 
     <template v-else>
       <PageHeader
-        page-name="Historical"
+        page-name="Seasonal Trends"
         description="How does this year's seasonal pattern compare to last year's?"
         @synced="refresh()"
       />
@@ -63,7 +63,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
         <section v-if="historyData.coversSeries.length">
           <div class="section-head">
             <div class="section-label">Covers Seasonality</div>
-            <div class="section-note">Covers per open day (Toast, core dine-in — events/catering excluded, closures excluded), indexed to each year's own average. Answers "was this month busier or slower than a typical month here" without needing to compare against a fixed capacity — same figure that powers the Capacity tab's Edit Capacity <NuxtLink to="/capacity?tab=edit">Set by History</NuxtLink> button.</div>
+            <div class="section-note">Covers per open day (Toast, core dine-in — events/catering excluded, closures excluded), indexed to each year's own average. Answers "was this month busier or slower than a typical month here" without needing to compare against a fixed capacity — same figure that powers the Capacity planning page's <NuxtLink to="/capacity?tab=edit">Set by History</NuxtLink> button.</div>
           </div>
           <div class="pl-table-card chart-card">
             <SeasonalityChart

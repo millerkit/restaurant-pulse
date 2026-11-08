@@ -3,7 +3,7 @@ import site from '~/config/site.json'
 import { CATEGORIES, CATEGORY_DIRECTION, CATEGORY_LABEL, MONTH_NAMES, type BudgetAccount, type Category, type MonthData, countFridays, currentAsOfDay, currentAsOfMonth, daysInMonth, hybridYearExpectedToDate, hybridYearTotals, hybridYearTotalsPastActual, isMonthClosed, isMonthCurrent, monthCategoryBudget, monthsElapsedInYear, netIncome, paceStatus, tintRowClass, tintRowStyle, useActualsYear, useBudgetYear, useBudgetYearSelection, varianceTint } from '~/composables/useBudgetData'
 import { budgetFloor, coreRevenueShares, projectRevenueLeaf, type NightlyProjectionSummary } from '~/utils/revenueProjection'
 
-useHead({ title: `${site.restaurantName} — Edit Budget` })
+useHead({ title: `${site.restaurantName} — Budget` })
 
 // The year being edited (2026, or 2027 once planning ahead) — see BudgetYearToggle. app.vue
 // remounts this page when it changes, so it is a constant for this component's lifetime.
@@ -1512,7 +1512,7 @@ function exportForQuickBooks() {
 <template>
   <div>
     <PageHeader
-      page-name="Edit Budget"
+      page-name="Budget"
       :description="`Edit any month's budget, update from actuals, or export for QuickBooks · ${YEAR}`"
       :as-of-label="asOfLabel"
       @synced="loadYear(); loadActualsYear()"
@@ -1532,9 +1532,9 @@ function exportForQuickBooks() {
         <summary>Rebuild {{ YEAR }} from scratch…</summary>
         <div class="quiet-note rebuild-warning">
           {{ YEAR }} already has a budget, so you probably don't want this. Rebuilding replaces the starter's accounts with fresh numbers:
-          Food/Beverage revenue from the Capacity tab (which undoes any buyout amounts applied from the Revenue tab's planner, so they'd need re-applying),
-          fixed expenses carried from December (including seasonal gas and electricity, if you'd adjusted them), and labor from the Labor tab.
-          If you only changed labor, save it on the Labor tab instead; it already writes all twelve months of {{ YEAR }}.
+          Food/Beverage revenue from the Capacity planning page (which undoes any buyout amounts applied from the Sales Plan's planner, so they'd need re-applying),
+          fixed expenses carried from December (including seasonal gas and electricity, if you'd adjusted them), and labor from the Staffing Plan.
+          If you only changed labor, save it on the Staffing Plan instead; it already writes all twelve months of {{ YEAR }}.
           Keep this for starting a new year from an empty budget.
         </div>
         <BuildNextYearBudget :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
@@ -1778,8 +1778,8 @@ function exportForQuickBooks() {
                       />
                       <span v-else class="amount-input readonly">
                         ${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}
-                        <NuxtLink v-if="acc.laborManaged" to="/budget/labor" class="labor-managed-note">Edit on Labor tab</NuxtLink>
-                        <NuxtLink v-else-if="acc.category === 'revenue'" to="/budget/revenue" class="labor-managed-note">Edit on Revenue tab</NuxtLink>
+                        <NuxtLink v-if="acc.laborManaged" to="/budget/labor" class="labor-managed-note">Edit in Staffing Plan</NuxtLink>
+                        <NuxtLink v-else-if="acc.category === 'revenue'" to="/budget/revenue" class="labor-managed-note">Edit in Sales Plan</NuxtLink>
                       </span>
                     </td>
                     <td v-if="selectedMonthIsCurrent">
@@ -1802,7 +1802,7 @@ function exportForQuickBooks() {
                 <tr v-if="cat === 'revenue'" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
-                      Revenue is now projected on the <NuxtLink to="/budget/revenue">Revenue tab</NuxtLink> — including its "Recompute from Capacity" sync — and shown here read-only.
+                      Revenue is now projected on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink> — including its "Recompute from Capacity" sync — and shown here read-only.
                     </div>
                   </td>
                 </tr>
@@ -2011,7 +2011,7 @@ function exportForQuickBooks() {
    technically becomes its own scroll container too, per the CSS overflow
    spec, but since it never overflows vertically on its own, position:sticky
    has nothing to stick against and the header just scrolls away with the
-   page. Same fix already used on the Edit Capacity page's covers table
+   page. Same fix already used on the Capacity planning page's covers table
    (`.covers-table-card`) — see that page's own comment for the same
    confirmed-by-testing finding. */
 .edit-table-scroll { overflow: auto; max-height: 85vh; }
@@ -2047,7 +2047,7 @@ function exportForQuickBooks() {
 /* `border-collapse: separate` (not `collapse`, `.pl-table`'s own default) —
    `position: sticky` on a <th> is a no-op in every major browser when the
    table uses `border-collapse: collapse`, confirmed by testing (same
-   finding already documented on the Edit Capacity page's covers table).
+   finding already documented on the Capacity planning page's covers table).
    `separate` doesn't paint a border set on <tr> at all, so the row-divider
    line moves from tr to the cells themselves below. */
 table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }

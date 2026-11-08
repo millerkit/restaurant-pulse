@@ -1,34 +1,68 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
+
+// Sectioned navigation (2026-11 UI cleanup): a few sections in the top bar
+// (a bottom bar on phones), with the current section's pages as sub-tabs
+// underneath. Sections and pages come from app/utils/navigation.ts.
+const route = useRoute()
+const queryTab = computed(() => (typeof route.query.tab === 'string' ? route.query.tab : undefined))
+const active = computed(() => findActive(route.path, queryTab.value))
+const onSettings = computed(() => SETTINGS_PATHS.includes(route.path.replace(/\/+$/, '') || '/'))
+const subPages = computed(() => (active.value && active.value.section.pages.length > 1 ? active.value.section.pages : []))
 </script>
 
 <template>
   <div class="wrap">
-    <div class="app-header">
+    <div class="topbar">
       <NuxtLink to="/" class="brand">{{ site.restaurantName }}</NuxtLink>
-      <ThemeToggle class="theme-toggle" />
+      <nav class="section-nav" aria-label="Sections">
+        <NuxtLink
+          v-for="s in NAV_SECTIONS"
+          :key="s.key"
+          :to="s.pages[0]!.to"
+          :class="['section-link', active?.section.key === s.key && 'active']"
+          :aria-current="active?.section.key === s.key ? 'page' : undefined"
+        >
+          <NavIcon :name="s.icon" />
+          <span>{{ s.label }}</span>
+        </NuxtLink>
+      </nav>
+      <div class="topbar-tools">
+        <ThemeToggle />
+        <NuxtLink to="/settings" :class="['gear', onSettings && 'active']" title="Settings" aria-label="Settings">
+          <NavIcon name="settings" />
+        </NuxtLink>
+      </div>
     </div>
-    <nav class="tabnav">
-      <NuxtLink to="/" exact-active-class="active">Dashboard</NuxtLink>
-      <NuxtLink to="/pl" exact-active-class="active">P&amp;L</NuxtLink>
-      <NuxtLink to="/pl/revenue-calendar" exact-active-class="active">Revenue/Margin Calendar</NuxtLink>
-      <NuxtLink to="/budget" exact-active-class="active">Budget Pace</NuxtLink>
-      <NuxtLink to="/budget/edit" exact-active-class="active">Budget</NuxtLink>
-      <NuxtLink to="/budget/revenue" exact-active-class="active">Revenue</NuxtLink>
-      <NuxtLink to="/budget/labor" exact-active-class="active">Labor</NuxtLink>
-      <NuxtLink to="/kitchen-labor" exact-active-class="active">Kitchen Labor</NuxtLink>
-      <NuxtLink to="/staff-hours" exact-active-class="active">Staff Hours</NuxtLink>
-      <NuxtLink to="/reservations" exact-active-class="active">Reservations</NuxtLink>
-      <NuxtLink to="/cashflow" exact-active-class="active">Cash Flow</NuxtLink>
-      <NuxtLink to="/capacity" exact-active-class="active">Capacity</NuxtLink>
-      <NuxtLink to="/historical" exact-active-class="active">Historical</NuxtLink>
-      <NuxtLink to="/revenue-modeling" exact-active-class="active">Revenue Modeling</NuxtLink>
+
+    <nav v-if="subPages.length" class="subnav" :aria-label="`${active!.section.label} pages`">
+      <NuxtLink
+        v-for="p in subPages"
+        :key="p.to"
+        :to="p.to"
+        :class="['subnav-link', isPageActive(p, route.path, queryTab) && 'active']"
+      >{{ p.label }}</NuxtLink>
     </nav>
+
     <slot />
+
     <footer class="app-footer">
       <a href="mailto:kmillercc@gmail.com">Contact / Support</a>
       <NuxtLink to="/privacy">Privacy</NuxtLink>
       <NuxtLink to="/terms">Terms</NuxtLink>
     </footer>
+
+    <!-- Phone: sections move to a bottom bar, easier to reach mid-shift. -->
+    <nav class="bottom-nav" aria-label="Sections">
+      <NuxtLink
+        v-for="s in NAV_SECTIONS"
+        :key="s.key"
+        :to="s.pages[0]!.to"
+        :class="['bottom-link', active?.section.key === s.key && 'active']"
+      >
+        <NavIcon :name="s.icon" />
+        <span>{{ s.label }}</span>
+      </NuxtLink>
+    </nav>
   </div>
 </template>

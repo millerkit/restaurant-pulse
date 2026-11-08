@@ -5086,6 +5086,32 @@ holiday/buyout business.
   removed. Local dev has no real Aug–Oct actuals, so the section is hidden there; it was not clicked through
   in a browser. Check it on production after deploying.
 
+## Navigation and page names, phase 1 of the UI cleanup — 2026-11-08
+
+Preparing the app to share with the GM, the Sous Chef and the owner (and maybe other restaurants later).
+The flat 14-tab row was replaced by **5 sections with sub-tabs**, defined in one place,
+[`app/utils/navigation.ts`](app/utils/navigation.ts) and rendered by
+[`app/layouts/default.vue`](app/layouts/default.vue): Home (This Week), Sales (Daily Results, Covers & Spend,
+Seasonal Trends), Team (Kitchen Hours, Benefits Eligibility), Money (Profit & Loss, Budget Check, Cash & Loans),
+Planning (Budget, Sales Plan, Staffing Plan, Capacity, What-If). On phones (≤860px) the sections move to a fixed
+bottom bar. A gear opens the new [`app/pages/settings.vue`](app/pages/settings.vue) (QuickBooks connection status,
+Toast note, reservation upload, and a directory of settings still on other pages); `/reservations` is no longer a tab.
+
+- **Routes are unchanged**; only labels, page headings and browser titles changed (old → new: Weekly Performance →
+  This Week, P&L → Profit & Loss, Revenue/Margin Calendar → Daily Results (its toggle reads Sales/Profit), Budget
+  Pace → Budget Check, Edit Budget → Budget, Revenue → Sales Plan, Labor → Staffing Plan, Kitchen Labor → Kitchen
+  Hours & Cost, Staff Hours → Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends, Revenue
+  Modeling → What-If). Older sections of this file still use the old names.
+- **`/capacity` serves two nav entries**: Covers & Spend (no `?tab`) and Planning › Capacity (`?tab=edit`). Its own
+  Pace/Edit buttons were removed; the page watches `route.query.tab` since the nav changes it without remounting.
+- **Next phases** (agreed, not built): (2) roles — per-person access from the Cloudflare Access email, enforced on API
+  routes too, plus a People & Access section in Settings; (3) consolidation and plain-language wording inside pages
+  (COGS, Opex, DSCR…), moving scattered settings (weekly goal, alert thresholds, benchmarks, salaried/grandfathered
+  staff lists, owner-pay accounts) into Settings, and splitting Kitchen Hours (Sous Chef) from Kitchen Cost %.
+- Verified in Chrome against local dev: desktop nav/sub-tabs across sections, Capacity via both entries, Settings
+  (QuickBooks status resolves), and the phone layout + dark mode by applying the ≤860px rules at 390px width (Chrome
+  wouldn't resize the window). Typecheck shows no new errors.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -5353,7 +5379,8 @@ was deployed:
 - [`server/api/cashflow/reserve-plan.post.ts`](server/api/cashflow/reserve-plan.post.ts) — declares the current weekly reserve-transfer plan
 - [`scripts/import-debt-schedule.mjs`](scripts/import-debt-schedule.mjs) — one-time seed of `loan_schedule` from the debt amortization workbooks
 - [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
-- [`app/layouts/default.vue`](app/layouts/default.vue) — shared tab nav
+- [`app/layouts/default.vue`](app/layouts/default.vue) / [`app/utils/navigation.ts`](app/utils/navigation.ts) — section nav, sub-tabs and phone bottom bar
+- [`app/pages/settings.vue`](app/pages/settings.vue) — Settings: connections, reservation upload, where other settings live
 - [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
 - [`server/utils/db.ts`](server/utils/db.ts) — `useDb()` helper for server routes/API endpoints
 - [`server/utils/toast.ts`](server/utils/toast.ts) — Toast POS auth/fetch helper
