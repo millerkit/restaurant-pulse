@@ -4,13 +4,16 @@ import site from '~/config/site.json'
 // Sectioned navigation (2026-11 UI cleanup): a few sections in the top bar
 // (a bottom bar on phones), with the current section's pages as sub-tabs
 // underneath. Sections and pages come from app/utils/navigation.ts.
-const route = useRoute()
-const queryTab = computed(() => (typeof route.query.tab === 'string' ? route.query.tab : undefined))
-const active = computed(() => findActive(route.path, queryTab.value))
-const onSettings = computed(() => SETTINGS_PATHS.includes(route.path.replace(/\/+$/, '') || '/'))
+// Use the router's own current route, not useRoute(): inside a layout, useRoute()
+// can lag behind the real navigation (it only updates once the new page has
+// finished mounting), which left the nav highlighting the old section.
+const router = useRouter()
+const route = router.currentRoute
+const queryTab = computed(() => (typeof route.value.query.tab === 'string' ? route.value.query.tab : undefined))
+const active = computed(() => findActive(route.value.path, queryTab.value))
+const onSettings = computed(() => SETTINGS_PATHS.includes(route.value.path.replace(/\/+$/, '') || '/'))
 // Most pages block navigation on their first data fetch, so a click can look
 // dead for a second. Remember where we're headed and highlight it right away.
-const router = useRouter()
 const pendingTo = ref<string | null>(null)
 router.beforeEach((to) => { pendingTo.value = to.fullPath })
 router.afterEach(() => { pendingTo.value = null })
