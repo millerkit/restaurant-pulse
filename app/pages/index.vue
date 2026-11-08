@@ -4,7 +4,7 @@ import { CATEGORY_DIRECTION, benchmarkStatus, daysInMonth, daysInYear, dayOfYear
 
 useHead({ title: `${site.restaurantName} — This Week` })
 
-const { data, pending, error, refresh } = await useFetch('/api/dashboard')
+const { data, pending, error, refresh } = await useFetch('/api/dashboard', { lazy: true })
 
 // Next 7 nights booking pace (server/api/booking-pace.get.ts). Fetched apart from
 // the Dashboard data so a missing reservations table can't break the rest of the page.
@@ -28,7 +28,7 @@ type BookingPace =
   | { available: false, reason: string }
   | { available: true, snapshotDate: string, snapshotTime: string, uploadedThrough: string, staleDays: number,
       staleAfterDays: number, estimateMaxDaysOut: number, nights: PaceNight[] }
-const { data: bookingPace } = await useFetch<BookingPace>('/api/booking-pace')
+const { data: bookingPace } = await useFetch<BookingPace>('/api/booking-pace', { lazy: true })
 
 // Pace = booked now / typical booked at this distance out for the weekday.
 // Icon + label on every chip, never color alone.

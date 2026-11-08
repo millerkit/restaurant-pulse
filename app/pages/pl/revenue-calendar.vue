@@ -4,8 +4,8 @@ import { MONTH_NAMES } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Daily Results` })
 
-const { data, pending, error, refresh } = await useFetch('/api/pl')
-const { data: marginData, pending: marginPending, error: marginError, refresh: refreshMargin } = await useFetch('/api/nightly-margin')
+const { data, pending, error, refresh } = await useFetch('/api/pl', { lazy: true })
+const { data: marginData, pending: marginPending, error: marginError, refresh: refreshMargin } = await useFetch('/api/nightly-margin', { lazy: true })
 
 type Period = 'month' | 'year'
 const PERIOD_LABEL: Record<Period, string> = { month: 'month', year: 'year' }

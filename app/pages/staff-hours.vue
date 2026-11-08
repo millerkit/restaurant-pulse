@@ -41,7 +41,7 @@ type StaffHours =
     unmatchedSalaried: string[]
   }
 
-const { data, pending, error, refresh } = await useFetch<StaffHours>('/api/staff-hours')
+const { data, pending, error, refresh } = await useFetch<StaffHours>('/api/staff-hours', { lazy: true })
 
 // Dates are UTC-anchored ISO strings, parsed/formatted in UTC throughout —
 // same convention as the other pages.

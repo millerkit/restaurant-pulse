@@ -4,7 +4,7 @@ import { benchmarkStatus, netIncome, type CategoryBenchmark } from '~/composable
 
 useHead({ title: `${site.restaurantName} — Profit & Loss` })
 
-const { data, pending, error, refresh } = await useFetch('/api/pl')
+const { data, pending, error, refresh } = await useFetch('/api/pl', { lazy: true })
 
 type Period = 'month' | 'year'
 

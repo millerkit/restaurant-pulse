@@ -31,7 +31,7 @@ type KitchenLabor =
 // dollars are sent at all). Phase 2's roles will force this for the kitchen role.
 const route = useRoute()
 const kitchenQuery = computed(() => (route.query.view === 'kitchen' ? { view: 'kitchen' } : {}))
-const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kitchen-labor', { query: kitchenQuery })
+const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kitchen-labor', { query: kitchenQuery, lazy: true })
 const restricted = computed(() => !!(data.value && data.value.hasData && data.value.restricted))
 
 // The Executive Chef is salaried owner compensation; including them moves the

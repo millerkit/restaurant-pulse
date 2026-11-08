@@ -13,7 +13,7 @@ const { data: historyData, pending, error, refresh } = await useFetch<{
   spendSeries: MonthPoint[]
   revenueSeries: MonthPoint[]
   locationBaselines: { covers: LocationBaselines, spend: LocationBaselines, revenue: LocationBaselines }
-}>('/api/capacity/history')
+}>('/api/capacity/history', { lazy: true })
 
 function fmtCoversBaseline(n: number | null | undefined): string | null {
   return n == null ? null : `${Math.round(n)}/night`

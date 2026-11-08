@@ -8,6 +8,19 @@ const route = useRoute()
 const queryTab = computed(() => (typeof route.query.tab === 'string' ? route.query.tab : undefined))
 const active = computed(() => findActive(route.path, queryTab.value))
 const onSettings = computed(() => SETTINGS_PATHS.includes(route.path.replace(/\/+$/, '') || '/'))
+// Most pages block navigation on their first data fetch, so a click can look
+// dead for a second. Remember where we're headed and highlight it right away.
+const router = useRouter()
+const pendingTo = ref<string | null>(null)
+router.beforeEach((to) => { pendingTo.value = to.fullPath })
+router.afterEach(() => { pendingTo.value = null })
+router.onError(() => { pendingTo.value = null })
+const pendingActive = computed(() => {
+  if (!pendingTo.value) return null
+  const u = new URL(pendingTo.value, 'http://x')
+  return findActive(u.pathname, u.searchParams.get('tab') ?? undefined)
+})
+const shownSection = computed(() => (pendingActive.value ?? active.value)?.section.key)
 const subPages = computed(() => (active.value && active.value.section.pages.length > 1 ? active.value.section.pages : []))
 </script>
 
@@ -20,7 +33,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
           v-for="s in NAV_SECTIONS"
           :key="s.key"
           :to="s.pages[0]!.to"
-          :class="['section-link', active?.section.key === s.key && 'active']"
+          :class="['section-link', shownSection === s.key && 'active']"
           :aria-current="active?.section.key === s.key ? 'page' : undefined"
         >
           <NavIcon :name="s.icon" />
@@ -40,7 +53,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
         v-for="p in subPages"
         :key="p.to"
         :to="p.to"
-        :class="['subnav-link', isPageActive(p, route.path, queryTab) && 'active']"
+        :class="['subnav-link', (pendingActive ? pendingActive.page.to === p.to : isPageActive(p, route.path, queryTab)) && 'active']"
       >{{ p.label }}</NuxtLink>
     </nav>
 
@@ -58,7 +71,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
         v-for="s in NAV_SECTIONS"
         :key="s.key"
         :to="s.pages[0]!.to"
-        :class="['bottom-link', active?.section.key === s.key && 'active']"
+        :class="['bottom-link', shownSection === s.key && 'active']"
       >
         <NavIcon :name="s.icon" />
         <span>{{ s.label }}</span>

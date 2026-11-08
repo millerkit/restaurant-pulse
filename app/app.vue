@@ -9,6 +9,7 @@ const pageKey = computed(() => (route.path.startsWith('/budget') && route.path !
 <template>
   <div>
     <NuxtRouteAnnouncer />
+    <NuxtLoadingIndicator color="var(--accent)" :height="3" :throttle="0" />
     <NuxtLayout>
       <NuxtPage :page-key="pageKey" />
     </NuxtLayout>

@@ -39,7 +39,7 @@ type RevenueModelingData = {
   retailTrailingMonthly: number | null
 }
 
-const { data, pending, error, refresh } = await useFetch<RevenueModelingData>('/api/revenue-modeling')
+const { data, pending, error, refresh } = await useFetch<RevenueModelingData>('/api/revenue-modeling', { lazy: true })
 
 // Real current-year revenue/COGS/labor/opex — the same hybrid
 // (actual-where-elapsed, budget-otherwise) annual totals the Labor tab and
