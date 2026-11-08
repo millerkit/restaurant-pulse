@@ -5108,6 +5108,16 @@ Toast note, reservation upload, and a directory of settings still on other pages
   routes too, plus a People & Access section in Settings; (3) consolidation and plain-language wording inside pages
   (COGS, Opex, DSCR…), moving scattered settings (weekly goal, alert thresholds, benchmarks, salaried/grandfathered
   staff lists, owner-pay accounts) into Settings, and splitting Kitchen Hours (Sous Chef) from Kitchen Cost %.
+- **Sous Chef's view of Kitchen Hours & Cost (decided 2026-11-08, built ahead of roles)**: percentages and
+  hours only. `/api/kitchen-labor?view=kitchen` rescales every dollar figure so the window's total food revenue
+  is 1 (each week's %, and the weighted 4/13-week averages, stay exact; no dollar amount is sent), zeroes the
+  Executive Chef's pay (owner compensation; the user's call: her weekly salary was readable from the toggle)
+  and drops off-cycle labor dollars. The page (`/kitchen-labor?view=kitchen`) and `KitchenLaborChart`
+  (`hideDollars`) then hide the revenue/labor/overtime $ columns and tooltip rows, the stream breakdown, the
+  Executive Chef toggle and the blended-OT-rate footnote. It's a downgrade only, so a query param is safe;
+  **phase 2 must force it server-side for the kitchen role**, not rely on the link. Known, accepted leak:
+  estimated OT hours × the (unshown) blended OT rate gives OT dollars. Verified: ratios identical in both
+  views, no `$` amounts rendered in the kitchen view, owner view unchanged.
 - Verified in Chrome against local dev: desktop nav/sub-tabs across sections, Capacity via both entries, Settings
   (QuickBooks status resolves), and the phone layout + dark mode by applying the ≤860px rules at 390px width (Chrome
   wouldn't resize the window). Typecheck shows no new errors.

@@ -19,13 +19,20 @@ type KitchenLabor =
   | { hasData: false }
   | {
     hasData: true
+    restricted: boolean
     asOf: string
     streams: { key: string, label: string }[]
     offCycleLabor: number
     weeks: Week[]
   }
 
-const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kitchen-labor')
+// ?view=kitchen shows the Sous Chef's version: percentages and hours, no dollar
+// figures and no Executive Chef toggle (the server rescales the numbers so no
+// dollars are sent at all). Phase 2's roles will force this for the kitchen role.
+const route = useRoute()
+const kitchenQuery = computed(() => (route.query.view === 'kitchen' ? { view: 'kitchen' } : {}))
+const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kitchen-labor', { query: kitchenQuery })
+const restricted = computed(() => !!(data.value && data.value.hasData && data.value.restricted))
 
 // The Executive Chef is salaried owner compensation; including them moves the
 // ratio a lot, so it's a toggle, off by default (user's call 2026-10-27).
@@ -64,7 +71,7 @@ function formatDate(s: string, withYear = false) {
 const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`
 
-const laborOf = (w: Week) => w.laborBoh + (includeOvertime.value ? w.laborOvertime : 0) + (includeExecChef.value ? w.laborExecChef : 0)
+const laborOf = (w: Week) => w.laborBoh + (includeOvertime.value ? w.laborOvertime : 0) + (includeExecChef.value && !restricted.value ? w.laborExecChef : 0)
 
 type Row = Week & { labor: number, pct: number | null, otPct: number | null, otHours: number | null, deltaPts: number | null }
 
@@ -166,7 +173,7 @@ function fmtDelta(v: number) {
             <div class="summary-label">Last 4 weeks</div>
             <template v-if="trailing4">
               <div class="summary-figure">{{ fmtPct(trailing4.pct) }}</div>
-              <div class="summary-sub">{{ fmtMoney(trailing4.labor) }} on {{ fmtMoney(trailing4.rev) }} food revenue</div>
+              <div class="summary-sub">{{ restricted ? 'Weighted by each week\'s sales' : `${fmtMoney(trailing4.labor)} on ${fmtMoney(trailing4.rev)} food revenue` }}</div>
             </template>
             <div v-else class="summary-sub">Needs 4 weeks of payroll</div>
           </div>
@@ -174,7 +181,7 @@ function fmtDelta(v: number) {
             <div class="summary-label">Last 13 weeks</div>
             <template v-if="trailing13">
               <div class="summary-figure">{{ fmtPct(trailing13.pct) }}</div>
-              <div class="summary-sub">{{ fmtMoney(trailing13.labor) }} on {{ fmtMoney(trailing13.rev) }} food revenue</div>
+              <div class="summary-sub">{{ restricted ? 'Weighted by each week\'s sales' : `${fmtMoney(trailing13.labor)} on ${fmtMoney(trailing13.rev)} food revenue` }}</div>
             </template>
             <div v-else class="summary-sub">Needs 13 weeks of payroll</div>
           </div>
@@ -199,7 +206,7 @@ function fmtDelta(v: number) {
               <input v-model="includeOvertime" type="checkbox">
               Include overtime (BOH OT)
             </label>
-            <label class="toggle">
+            <label v-if="!restricted" class="toggle">
               <input v-model="includeExecChef" type="checkbox">
               Include Executive Chef (salaried, owner compensation)
             </label>
@@ -213,6 +220,7 @@ function fmtDelta(v: number) {
           <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
+              :hide-dollars="restricted"
               label="Line chart of kitchen labor as a percent of food revenue, by week"
             />
           </div>
@@ -220,6 +228,7 @@ function fmtDelta(v: number) {
           <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
+              :hide-dollars="restricted"
               metric="overtime"
               label="Line chart of BOH overtime as a percent of food revenue, by week"
             />
@@ -228,6 +237,7 @@ function fmtDelta(v: number) {
           <div class="table-card chart-card">
             <KitchenLaborChart
               :points="chartPoints"
+              :hide-dollars="restricted"
               metric="hours"
               label="Line chart of estimated BOH overtime hours, by week"
             />
@@ -240,10 +250,10 @@ function fmtDelta(v: number) {
                 <tr>
                   <th scope="col">Week (Mon–Sun)</th>
                   <th scope="col">Paid</th>
-                  <th scope="col">Food revenue</th>
-                  <th scope="col">Kitchen labor</th>
+                  <th v-if="!restricted" scope="col">Food revenue</th>
+                  <th v-if="!restricted" scope="col">Kitchen labor</th>
                   <th scope="col">Labor %</th>
-                  <th scope="col">Overtime</th>
+                  <th v-if="!restricted" scope="col">Overtime</th>
                   <th scope="col">Overtime %</th>
                   <th scope="col">Est. OT hours</th>
                   <th scope="col">vs. prior week</th>
@@ -253,15 +263,19 @@ function fmtDelta(v: number) {
                 <tr v-for="r in rows" :key="r.weekStart">
                   <th scope="row">
                     {{ formatDate(r.weekStart) }} – {{ formatDate(r.weekEnd) }}
-                    <span class="hint">{{ streamBreakdown(r, data.streams) }}</span>
+                    <span v-if="!restricted" class="hint">{{ streamBreakdown(r, data.streams) }}</span>
                   </th>
                   <td>{{ formatDate(r.payrollDate) }}</td>
-                  <td>{{ fmtMoney(r.revenue.total) }}</td>
-                  <td v-if="r.hasPayroll">{{ fmtMoney(r.labor) }}</td>
-                  <td v-else class="muted">Awaiting payroll</td>
+                  <template v-if="!restricted">
+                    <td>{{ fmtMoney(r.revenue.total) }}</td>
+                    <td v-if="r.hasPayroll">{{ fmtMoney(r.labor) }}</td>
+                    <td v-else class="muted">Awaiting payroll</td>
+                  </template>
                   <td class="amount">{{ r.pct !== null ? fmtPct(r.pct) : '—' }}</td>
-                  <td v-if="r.hasPayroll">{{ fmtMoney(r.laborOvertime) }}</td>
-                  <td v-else class="muted">—</td>
+                  <template v-if="!restricted">
+                    <td v-if="r.hasPayroll">{{ fmtMoney(r.laborOvertime) }}</td>
+                    <td v-else class="muted">—</td>
+                  </template>
                   <td class="muted">{{ r.otPct !== null ? fmtPct(r.otPct) : '—' }}</td>
                   <td class="muted">{{ r.otHours !== null ? Math.round(r.otHours) : '—' }}</td>
                   <td class="muted">{{ r.deltaPts !== null ? fmtDelta(r.deltaPts) : '—' }}</td>
@@ -276,7 +290,8 @@ function fmtDelta(v: number) {
           <ul>
             <li><strong>Labor:</strong> wages under BOH Wages (cooks, chefs, sous and pastry, service charge distribution{{ includeOvertime ? ', BOH overtime' : '' }}), excluding Porter{{ includeExecChef ? ', plus the Executive Chef' : '' }}. Payroll taxes, benefits and bonuses are not included.</li>
             <li><strong>Food revenue:</strong> restaurant food, event food (on-site and off-site), catering food and retail food. Beverage, service and equipment fees, and retail non-food are left out, and discounts &amp; comps can't be split between food and beverage, so revenue is before them.</li>
-            <li><strong>Est. OT hours:</strong> BOH overtime dollars divided by the Staffing Plan's blended OT rate (1.5 × $25.84/hr). QBO posts dollars, not hours, so this is an estimate; overtime actually paid has run nearer $42/hr, which would mean roughly 8% fewer hours.</li>
+            <li v-if="restricted"><strong>Est. OT hours:</strong> worked out from overtime pay, so approximate. The hours report at the top of the page has the exact hours from Toast.</li>
+            <li v-else><strong>Est. OT hours:</strong> BOH overtime dollars divided by the Staffing Plan's blended OT rate (1.5 × $25.84/hr). QBO posts dollars, not hours, so this is an estimate; overtime actually paid has run nearer $42/hr, which would mean roughly 8% fewer hours.</li>
             <li v-if="data.offCycleLabor > 0.5"><strong>Off-cycle postings:</strong> {{ fmtMoney(data.offCycleLabor) }} of kitchen labor was posted on days other than a Friday; each is counted with the next Friday's payroll.</li>
           </ul>
         </section>

@@ -21,7 +21,8 @@ type Point = {
   otHours: number | null
   revenue: number
 }
-const props = defineProps<{ points: Point[], label: string, metric?: 'labor' | 'overtime' | 'hours' }>()
+// hideDollars: the Sous Chef's view, whose labor/revenue figures aren't dollars.
+const props = defineProps<{ points: Point[], label: string, metric?: 'labor' | 'overtime' | 'hours', hideDollars?: boolean }>()
 const isHours = computed(() => props.metric === 'hours')
 const isOt = computed(() => props.metric === 'overtime' || isHours.value)
 // The plotted number: a percent (0-100) for labor/overtime, hours for 'hours'.
@@ -168,13 +169,13 @@ const fmtMoney = (v: number) => `$${Math.round(v).toLocaleString()}`
       <div class="tooltip-date">{{ fmtShort(hoveredPoint.weekStart) }} – {{ fmtShort(hoveredPoint.weekEnd) }}</div>
       <template v-if="hoveredPoint.pct !== null">
         <div class="tooltip-row"><span class="tooltip-label">Labor %</span><span class="tooltip-value">{{ (hoveredPoint.pct * 100).toFixed(1) }}%</span></div>
-        <div class="tooltip-row"><span class="tooltip-label">Kitchen labor</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.labor) }}</span></div>
+        <div v-if="!props.hideDollars" class="tooltip-row"><span class="tooltip-label">Kitchen labor</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.labor) }}</span></div>
         <div class="tooltip-row"><span class="tooltip-label">Overtime %</span><span class="tooltip-value">{{ (hoveredPoint.otPct! * 100).toFixed(1) }}%</span></div>
-        <div class="tooltip-row"><span class="tooltip-label">Overtime</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.overtime) }}</span></div>
+        <div v-if="!props.hideDollars" class="tooltip-row"><span class="tooltip-label">Overtime</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.overtime) }}</span></div>
         <div class="tooltip-row"><span class="tooltip-label">Est. OT hours</span><span class="tooltip-value">{{ Math.round(hoveredPoint.otHours!) }}</span></div>
       </template>
       <div v-else class="tooltip-row"><span class="tooltip-label">Awaiting payroll</span></div>
-      <div class="tooltip-row"><span class="tooltip-label">Food revenue</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.revenue) }}</span></div>
+      <div v-if="!props.hideDollars" class="tooltip-row"><span class="tooltip-label">Food revenue</span><span class="tooltip-value">{{ fmtMoney(hoveredPoint.revenue) }}</span></div>
     </div>
   </div>
 </template>

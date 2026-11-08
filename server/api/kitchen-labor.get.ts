@@ -82,7 +82,15 @@ interface WeekAcc {
   laborRows: number
 }
 
-export default defineEventHandler(() => {
+// ?view=kitchen is the Sous Chef's version (decided 2026-11-08): percentages and
+// hours only. Every dollar figure is rescaled so that the window's total food
+// revenue is 1, which keeps each ratio and the weighted 4/13-week averages exact
+// while no dollar amount can be read back. The Executive Chef's pay (owner
+// compensation) is zeroed, and off-cycle labor dollars are dropped. It is a
+// downgrade only, so it's safe as a plain query param; phase 2's roles will
+// force it for the kitchen role server-side.
+export default defineEventHandler((event) => {
+  const kitchenView = getQuery(event).view === 'kitchen'
   const db = useDb()
   const { asOf } = db.prepare('SELECT MAX(date) AS asOf FROM daily_line_items').get() as { asOf: string | null }
   if (!asOf) return { hasData: false as const }
@@ -171,8 +179,28 @@ export default defineEventHandler(() => {
     }
   })
 
+  if (kitchenView) {
+    const totalRevenue = rows.reduce((sum, r) => sum + r.revenue.total, 0)
+    const k = totalRevenue > 0 ? 1 / totalRevenue : 0
+    for (const r of rows) {
+      for (const key of Object.keys(r.revenue) as (keyof typeof r.revenue)[]) r.revenue[key] *= k
+      r.laborBoh *= k
+      r.laborOvertime *= k
+      r.laborExecChef = 0
+    }
+    return {
+      hasData: true as const,
+      restricted: true as const,
+      asOf,
+      streams: FOOD_STREAMS.map(s => ({ key: s.key, label: s.label })),
+      offCycleLabor: 0,
+      weeks: rows
+    }
+  }
+
   return {
     hasData: true as const,
+    restricted: false as const,
     asOf,
     streams: FOOD_STREAMS.map(s => ({ key: s.key, label: s.label })),
     offCycleLabor,
