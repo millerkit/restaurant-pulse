@@ -143,6 +143,8 @@ function fmtDelta(v: number) {
         @synced="refresh()"
       />
 
+      <BohHoursReport />
+
       <section v-if="!data.hasData" class="note-card">
         <span class="chip warning">No data synced yet</span>
       </section>

@@ -106,9 +106,9 @@ async function fetchTimeEntries(isoDay) {
 }
 
 const db = new Database(dbPath)
-for (const table of ['daily_toast_employee_hours', 'toast_employees']) {
+for (const table of ['daily_toast_employee_hours', 'toast_employees', 'daily_toast_job_hours', 'toast_jobs']) {
   if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table)) {
-    console.error(`Table ${table} is missing — run: node scripts/add-toast-employee-hours-tables.mjs`)
+    console.error(`Table ${table} is missing — run: node scripts/add-toast-employee-hours-tables.mjs (and add-toast-job-hours-tables.mjs)`)
     process.exit(1)
   }
 }
@@ -135,6 +135,20 @@ db.transaction(() => {
 })()
 console.log(`Wrote ${employees.length} employee(s) (${employees.filter(e => e.deleted).length} deleted/former).`)
 
+// Job titles for the Kitchen Labor tab's BOH hours report.
+const jobs = await toastGet('/labor/v1/jobs')
+const upsertJob = db.prepare(`
+  INSERT INTO toast_jobs (guid, title, wage_frequency, deleted, synced_at) VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT (guid) DO UPDATE SET title = excluded.title, wage_frequency = excluded.wage_frequency,
+    deleted = excluded.deleted, synced_at = excluded.synced_at
+`)
+db.transaction(() => {
+  for (const j of jobs) upsertJob.run(j.guid, j.title ?? '(untitled)', j.wageFrequency ?? null, j.deleted ? 1 : 0, syncedAtEmployees)
+})()
+console.log(`Wrote ${jobs.length} job(s).`)
+
+const deleteJobDay = db.prepare('DELETE FROM daily_toast_job_hours WHERE date = ?')
+const insertJobHours = db.prepare('INSERT INTO daily_toast_job_hours (date, employee_guid, job_guid, regular_hours, overtime_hours, auto_clocked_out_shifts, auto_clocked_out_hours, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
 const deleteDay = db.prepare('DELETE FROM daily_toast_employee_hours WHERE date = ?')
 const insertHours = db.prepare('INSERT INTO daily_toast_employee_hours (date, employee_guid, hours, auto_clocked_out_shifts, auto_clocked_out_hours, synced_at) VALUES (?, ?, ?, ?, ?, ?)')
 
@@ -170,10 +184,31 @@ for (const isoDay of days) {
     hoursByEmployee.set(guid, entry)
   }
 
+  const hoursByJob = new Map()
+  for (const te of entries) {
+    const employee = te.employeeReference?.guid
+    const job = te.jobReference?.guid
+    if (!employee || !job || te.deleted) continue
+    const regular = te.regularHours ?? 0
+    const overtime = te.overtimeHours ?? 0
+    if (regular + overtime <= 0) continue
+    const k = `${employee}|${job}`
+    const e = hoursByJob.get(k) ?? { employee, job, regular: 0, overtime: 0, autoShifts: 0, autoHours: 0 }
+    e.regular += regular
+    e.overtime += overtime
+    if (te.autoClockedOut) {
+      e.autoShifts += 1
+      e.autoHours += regular + overtime
+    }
+    hoursByJob.set(k, e)
+  }
+
   const syncedAt = new Date().toISOString()
   db.transaction(() => {
     deleteDay.run(isoDay)
     for (const [guid, e] of hoursByEmployee) insertHours.run(isoDay, guid, e.hours, e.autoShifts, e.autoHours, syncedAt)
+    deleteJobDay.run(isoDay)
+    for (const e of hoursByJob.values()) insertJobHours.run(isoDay, e.employee, e.job, e.regular, e.overtime, e.autoShifts, e.autoHours, syncedAt)
   })()
   if (hoursByEmployee.size > 0) daysWithHours++
   console.log(`${isoDay}: ${hoursByEmployee.size} employee(s)`)

@@ -227,6 +227,37 @@ CREATE TABLE toast_employees (
   synced_at    TEXT NOT NULL
 );
 
+-- Hours by job, for the Kitchen Labor tab's BOH hours report (added 2026-11-06).
+-- daily_toast_employee_hours above is one row per employee-day and has no job,
+-- so it can't say whether a shift was kitchen or floor; this is the same Toast
+-- time entries kept at employee-day-JOB grain (a person can work two jobs in a
+-- day). regular_hours/overtime_hours are Toast's own fields, kept apart so the
+-- report can show overtime. Only entries with hours > 0 get a row. Replaced
+-- wholesale per date like the table above. Written by the same Toast sync
+-- (server/utils/toast-employee-hours.ts) and scripts/backfill-toast-employee-hours.mjs.
+CREATE TABLE daily_toast_job_hours (
+  date            TEXT NOT NULL,
+  employee_guid   TEXT NOT NULL,
+  job_guid        TEXT NOT NULL,
+  regular_hours   REAL NOT NULL,
+  overtime_hours  REAL NOT NULL,
+  -- Part of the day's hours from entries Toast clocked out automatically (the
+  -- employee forgot); added 2026-11-06 so the BOH report can flag them.
+  auto_clocked_out_shifts  INTEGER NOT NULL DEFAULT 0,
+  auto_clocked_out_hours   REAL NOT NULL DEFAULT 0,
+  synced_at       TEXT NOT NULL,
+  PRIMARY KEY (date, employee_guid, job_guid)
+);
+
+-- Job titles for the guids above, from /labor/v1/jobs (one call per sync run).
+CREATE TABLE toast_jobs (
+  guid            TEXT PRIMARY KEY,
+  title           TEXT NOT NULL,
+  wage_frequency  TEXT,               -- 'HOURLY' | 'SALARY'
+  deleted         INTEGER NOT NULL DEFAULT 0,
+  synced_at       TEXT NOT NULL
+);
+
 -- Benefits enrollment marks for the Staff Hours report (added 2026-10-27):
 -- the enrollment decision for someone who is health-benefits eligible. No row
 -- means TBD — eligible, but no decision recorded yet (newly qualified, or

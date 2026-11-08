@@ -15,6 +15,7 @@ export interface ToastEmployeeTimeEntry {
   regularHours: number | null
   overtimeHours: number | null
   employeeReference: { guid: string } | null
+  jobReference?: { guid: string } | null
   deleted?: boolean
   autoClockedOut?: boolean
 }
@@ -49,6 +50,7 @@ export function writeEmployeeHoursForDate(isoDate: string, timeEntries: ToastEmp
 
   const db = useDb()
   const syncedAt = new Date().toISOString()
+  writeJobHoursForDate(isoDate, timeEntries, syncedAt)
   const insert = db.prepare(`
     INSERT INTO daily_toast_employee_hours (date, employee_guid, hours, auto_clocked_out_shifts, auto_clocked_out_hours, synced_at)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -57,6 +59,74 @@ export function writeEmployeeHoursForDate(isoDate: string, timeEntries: ToastEmp
     db.prepare('DELETE FROM daily_toast_employee_hours WHERE date = ?').run(isoDate)
     for (const [guid, e] of byEmployee) insert.run(isoDate, guid, e.hours, e.autoShifts, e.autoHours, syncedAt)
   })()
+}
+
+// Same entries at employee-day-job grain, for the BOH hours report. A missing
+// table (migration not run yet) only warns, so it can't fail the covers and
+// labor-hours sync the dashboard depends on.
+function writeJobHoursForDate(isoDate: string, timeEntries: ToastEmployeeTimeEntry[], syncedAt: string) {
+  const byKey = new Map<string, { employee: string; job: string; regular: number; overtime: number; autoShifts: number; autoHours: number }>()
+  for (const te of timeEntries) {
+    const employee = te.employeeReference?.guid
+    const job = te.jobReference?.guid
+    if (!employee || !job || te.deleted) continue
+    const regular = te.regularHours ?? 0
+    const overtime = te.overtimeHours ?? 0
+    if (regular + overtime <= 0) continue
+    const key = `${employee}|${job}`
+    const e = byKey.get(key) ?? { employee, job, regular: 0, overtime: 0, autoShifts: 0, autoHours: 0 }
+    e.regular += regular
+    e.overtime += overtime
+    if (te.autoClockedOut) {
+      e.autoShifts += 1
+      e.autoHours += regular + overtime
+    }
+    byKey.set(key, e)
+  }
+  try {
+    const db = useDb()
+    const insert = db.prepare(`
+      INSERT INTO daily_toast_job_hours (date, employee_guid, job_guid, regular_hours, overtime_hours, auto_clocked_out_shifts, auto_clocked_out_hours, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    db.transaction(() => {
+      db.prepare('DELETE FROM daily_toast_job_hours WHERE date = ?').run(isoDate)
+      for (const e of byKey.values()) insert.run(isoDate, e.employee, e.job, e.regular, e.overtime, e.autoShifts, e.autoHours, syncedAt)
+    })()
+  } catch (err) {
+    console.warn(`writeJobHoursForDate(${isoDate}) failed — BOH hours report will be stale (run scripts/add-toast-job-hours-tables.mjs?): ${err instanceof Error ? err.message : err}`)
+  }
+}
+
+interface ToastJobRecord {
+  guid: string
+  title: string | null
+  wageFrequency: string | null
+  deleted?: boolean
+}
+
+// Job titles for the BOH hours report. One call per sync run.
+export async function syncToastJobs(creds: ToastCredentials) {
+  const res = await toastFetch(creds, '/labor/v1/jobs')
+  if (!res.ok) {
+    throw new Error(`Toast API request failed [/labor/v1/jobs]: ${res.status} ${await res.text()}`)
+  }
+  const jobs = await res.json() as ToastJobRecord[]
+  const db = useDb()
+  const syncedAt = new Date().toISOString()
+  const upsert = db.prepare(`
+    INSERT INTO toast_jobs (guid, title, wage_frequency, deleted, synced_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (guid) DO UPDATE SET
+      title = excluded.title,
+      wage_frequency = excluded.wage_frequency,
+      deleted = excluded.deleted,
+      synced_at = excluded.synced_at
+  `)
+  db.transaction(() => {
+    for (const j of jobs) upsert.run(j.guid, j.title ?? '(untitled)', j.wageFrequency, j.deleted ? 1 : 0, syncedAt)
+  })()
+  return jobs.length
 }
 
 export async function syncToastEmployees(creds: ToastCredentials) {

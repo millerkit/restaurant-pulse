@@ -153,6 +153,13 @@ export async function runNightlySync(dateOverride?: string) {
       } catch (err) {
         console.warn(`syncToastEmployees failed — Staff Hours names may be stale: ${err instanceof Error ? err.message : err}`)
       }
+      // Job titles for the Kitchen Labor tab's BOH hours report; same
+      // non-fatal treatment as the names above.
+      try {
+        await syncToastJobs(toast)
+      } catch (err) {
+        console.warn(`syncToastJobs failed — BOH hours report job titles may be stale: ${err instanceof Error ? err.message : err}`)
+      }
       for (let date = catchUpStartDate; date <= endDate; date = addDaysToIsoDate(date, 1)) {
         const dayResult = await syncToastMetricsForDate(toast, date)
         toastResult.covers += dayResult.covers

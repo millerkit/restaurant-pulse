@@ -4629,6 +4629,52 @@ averaged percents) cards.
 - Verified only against local dev, whose labor is posted daily (stale accrual-era data), so the percentages
   there are not meaningful; check against production, where payroll posts on Fridays. No schema change.
 
+## BOH hours report on the Kitchen Labor tab — 2026-11-06
+
+Requested so the Sous Chef (Rebecca) can manage hours: BOH hours worked per person for a
+Mon–Sun week, at the top of the Kitchen Labor page
+([`app/components/BohHoursReport.vue`](app/components/BohHoursReport.vue)), plus a
+**Download report (HTML)** link that returns a standalone page (inline CSS, no scripts, phone-
+friendly, light/dark) to send over Slack. First placed on the Staff Hours page, moved to
+Kitchen Labor at the user's call.
+
+- **Hours, not dollars**: from Toast time entries, so no payroll lag (the rest of the tab is
+  QBO dollars a week behind). Runs through the last synced day (normally yesterday); the week
+  nav (‹ ›) defaults to the week containing the latest synced day. Shows total BOH hours, overtime hours,
+  vs. the same days last week, last week's full total and the average of the 4 weeks before,
+  a per-person Mon–Sun grid, and chips: **In overtime** (Toast logged OT or 40+ hrs) and
+  **Near 40** (36+).
+- **New tables** (schema.sql): `daily_toast_job_hours` (employee-day-**job** hours, regular and
+  overtime kept apart) and `toast_jobs` (titles). `daily_toast_employee_hours` has no job, so it
+  can't tell kitchen from floor. Written by `writeEmployeeHoursForDate` /
+  `syncToastJobs` ([`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts))
+  in the nightly sync; a missing table only warns, so it can't fail the covers sync.
+  `scripts/backfill-toast-employee-hours.mjs` now fills both too.
+- **"BOH" = Toast job title** (`BOH_JOB_PATTERN` in
+  [`server/utils/boh-hours-report.ts`](server/utils/boh-hours-report.ts)): line/prep/pastry/sous/
+  executive chef/chef de partie/garde manger/dishwasher/porter/culinary intern. Porters are shown
+  in their own group (they're in the Labor tab's BOH hourly lines). Bar Prep, Project Manager and
+  all FOH jobs are not counted; the report lists them with their hours under "Not counted as BOH"
+  so a misclassification is visible. The Executive Chef shows only if they clock in.
+- **Auto clock-outs are flagged (added same day)**: `daily_toast_job_hours` also keeps
+  `auto_clocked_out_shifts`/`_hours` (Toast clocks out a forgotten shift automatically and those run
+  long). The page and the HTML show an "Auto clock-outs" summary card (only when there are any), a
+  "⚠ Auto clock-out" chip under the person, and a ⚠ on the day's cell. No BOH shift has been auto
+  clocked out since Sep 28 in local data (the recent ones are the Service Bar login and one
+  Cater-Waiter), so it was verified by temporarily flagging one local row, then reverting it.
+  Unlike the Staff Hours page this flags every one in the week shown, not just the last 7 days.
+- **Finding while verifying (local data)**: nearly every cook was over 40 hrs in each of the last
+  five weeks (overtime 13–48 hrs/week, 27.8 for the week of Oct 26).
+- **Production rollout (migrate first, then deploy)**: run
+  `node scripts/add-toast-job-hours-tables.mjs` (also adds the auto clock-out columns to an older table) on the volume (`fly ssh console`) BEFORE
+  `fly deploy`, or `/api/kitchen-labor/hours` 500s; then backfill history inside the container:
+  `fly ssh console -C "node scripts/backfill-toast-employee-hours.mjs --since=2026-09-28"`.
+  Local dev is migrated and backfilled from 2026-09-28.
+- Verified in the browser (desktop, phone width, dark mode for the downloaded file, week
+  navigation, download link) and the totals against a live Toast pull (251.4 hrs, Nov 2–5).
+  The console's 401/hydration warnings also appear on untouched pages (credentials-in-URL
+  loading and the shared header). Not deployed.
+
 ## Labor-tab hours recalibrated from Toast hours/earnings — 2026-10-28
 
 Toast's "Hours & Earnings by Range" CSV (Sep 1–Oct 26) was compared with production's Labor settings.
@@ -5298,6 +5344,7 @@ was deployed:
 - [`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts) — year-end scenarios (budget / recent pace / pace with night-by-night revenue) shown on Cash Flow (see "Year-end outlook on the Cash Flow tab")
 - [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection and dated special nights (see "Night-by-night revenue projection")
 - [`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts) — Next 7 Nights booking pace on the Dashboard (see "Booking pace: next 7 nights")
+- [`app/components/BohHoursReport.vue`](app/components/BohHoursReport.vue) / [`server/utils/boh-hours-report.ts`](server/utils/boh-hours-report.ts) — BOH hours-by-week report on the Kitchen Labor tab, plus its downloadable HTML (see "BOH hours report on the Kitchen Labor tab")
 - [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)
 - [`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts) / [`scripts/backfill-toast-employee-hours.mjs`](scripts/backfill-toast-employee-hours.mjs) — per-employee hours + names from Toast's Labor API
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
