@@ -42,7 +42,7 @@ export default defineEventHandler(async (event) => {
     if (err instanceof Error && err.message.includes('CHECK constraint')) {
       throw createError({
         statusCode: 500,
-        statusMessage: "The enrollment table is out of date — run scripts/add-toast-employee-hours-tables.mjs on this server, then try again."
+        statusMessage: "The enrollment table is out of date — database migrations haven't been applied on this server (see Settings)."
       })
     }
     throw err

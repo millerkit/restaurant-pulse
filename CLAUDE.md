@@ -924,6 +924,8 @@ Employees API is forbidden, and it isn't needed here).
 ## Running it
 
 - `npm install`
+- `npm run db:migrate` — applies pending schema migrations (also runs automatically before `npm run dev`
+  and on every production start); see "Database migrations run automatically on deploy"
 - `npm run db:init` — creates `data/restaurant.sqlite` from `schema.sql`
   (destructive re-run: drops and recreates the file). **As of 2026-07-22
   this now also destroys real data** — the connected QBO OAuth token and any
@@ -5122,6 +5124,38 @@ Toast note, reservation upload, and a directory of settings still on other pages
   (QuickBooks status resolves), and the phone layout + dark mode by applying the ≤860px rules at 390px width (Chrome
   wouldn't resize the window). Typecheck shows no new errors.
 
+## Database migrations run automatically on deploy — 2026-11-08
+
+Replaces the "run `scripts/add-*.mjs` on the volume by hand BEFORE `fly deploy`" step that nearly every
+schema change in this file describes (and that went wrong at least once, 2026-08-19). **Those instructions
+in older sections are superseded**: the ten `add-*` scripts were moved into
+[`scripts/migrations/`](scripts/migrations/) as `0001`–`0010` and deleted, along with their `db:add-*`
+npm scripts.
+
+- **[`scripts/migrate.mjs`](scripts/migrate.mjs)** applies pending migrations in order, each in its own
+  transaction, recording ids in `schema_migrations`. It runs before the app starts in production (Dockerfile
+  `CMD`: `node scripts/migrate.mjs; exec node .output/server/index.mjs`) and before `npm run dev` (`predev`);
+  `npm run db:migrate` runs it by hand. So **`fly deploy` alone now applies schema changes**.
+- **Writing a migration**: add `scripts/migrations/NNNN-name.mjs` exporting `up(db, log)`; it must be safe to
+  re-run (check before adding a column/table), because a database built from `schema.sql` already has
+  everything and still gets every migration run once. Also update `schema.sql`. Data backfills that call
+  Toast/QBO are deliberately not migrations (slow, external); they stay one-off `fly ssh console` commands.
+  The old one-time data migrations (`migrate-*.mjs`) were left as they were.
+- **Backups**: before applying anything (never on a no-op start) it saves `data/backups/pre-migrate-<time>.sqlite`
+  via `VACUUM INTO` and keeps only the newest 3, since copies include the QuickBooks tokens. Older hand-made
+  `/app/data/backup-pre-*` copies on the production volume are a different pattern and still need deleting by hand.
+- **A failed migration does not stop the app** (`;` not `&&`): with a single machine, a container that won't
+  start is a full outage, while a missing column only breaks the routes that need it. The failed migration's
+  transaction rolls back; earlier ones stay applied. The Settings page has a **Database updates** card
+  (`/api/settings/migrations`) listing anything not applied; the reason is in `fly logs` ("[migrate] FAILED").
+- **First production deploy**: all ten are recorded; 0001–0009 should be no-ops there, and 0010 creates the
+  BOH hours tables (replacing that commit's manual step). The BOH history backfill is still manual:
+  `fly ssh console -C "node scripts/backfill-toast-employee-hours.mjs --since=2026-09-28"`.
+- Verified on scratch copies: up-to-date local copy (no-op, recorded, rerun "up to date"), fresh `schema.sql`
+  database, an old-shape copy (missing tables/columns and the old enrollment CHECK: all restored, an existing
+  enrollment row kept), a forced failure (rolled back, exit 1, earlier migration kept), backup pruning to 3;
+  plus the Settings card in both states. The Docker `CMD` itself wasn't run locally (no Docker build here).
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
@@ -5390,7 +5424,8 @@ was deployed:
 - [`scripts/import-debt-schedule.mjs`](scripts/import-debt-schedule.mjs) — one-time seed of `loan_schedule` from the debt amortization workbooks
 - [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts) — types/constants/fetch shared by both budget pages
 - [`app/layouts/default.vue`](app/layouts/default.vue) / [`app/utils/navigation.ts`](app/utils/navigation.ts) — section nav, sub-tabs and phone bottom bar
-- [`app/pages/settings.vue`](app/pages/settings.vue) — Settings: connections, reservation upload, where other settings live
+- [`app/pages/settings.vue`](app/pages/settings.vue) — Settings: connections, reservation upload, database update status, where other settings live
+- [`scripts/migrate.mjs`](scripts/migrate.mjs) / [`scripts/migrations/`](scripts/migrations/) — schema migrations, applied automatically on start
 - [`app/assets/css/main.css`](app/assets/css/main.css) — shared design tokens (colors, chips, header) used by all four pages
 - [`server/utils/db.ts`](server/utils/db.ts) — `useDb()` helper for server routes/API endpoints
 - [`server/utils/toast.ts`](server/utils/toast.ts) — Toast POS auth/fetch helper

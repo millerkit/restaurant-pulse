@@ -94,7 +94,7 @@ function writeJobHoursForDate(isoDate: string, timeEntries: ToastEmployeeTimeEnt
       for (const e of byKey.values()) insert.run(isoDate, e.employee, e.job, e.regular, e.overtime, e.autoShifts, e.autoHours, syncedAt)
     })()
   } catch (err) {
-    console.warn(`writeJobHoursForDate(${isoDate}) failed — BOH hours report will be stale (run scripts/add-toast-job-hours-tables.mjs?): ${err instanceof Error ? err.message : err}`)
+    console.warn(`writeJobHoursForDate(${isoDate}) failed — BOH hours report will be stale (database migration 0010 not applied? see Settings): ${err instanceof Error ? err.message : err}`)
   }
 }
 

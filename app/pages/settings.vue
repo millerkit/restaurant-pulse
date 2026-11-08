@@ -15,6 +15,13 @@ type QboStatus =
 
 const { data: qbo, pending: qboPending, error: qboError } = await useFetch<QboStatus>('/api/qbo/status', { server: false })
 
+type MigrationStatus =
+  | { available: false }
+  | { available: true, total: number, pending: string[], lastAppliedAt: string | null }
+const { data: migrations } = await useFetch<MigrationStatus>('/api/settings/migrations')
+const migrationsPending = computed(() => (migrations.value?.available ? migrations.value.pending : []))
+const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+
 const elsewhere = [
   { title: 'Weekly sales goal', where: 'This Week', to: '/', note: 'The "good week" target the daily goals are built from.' },
   { title: 'Overspending alert levels', where: 'Budget Check', to: '/budget', note: 'How large a change must be before a cost line is flagged.' },
@@ -65,6 +72,24 @@ const elsewhere = [
           </div>
           <p class="settings-card-body">Upload a reservation export to update the “Next 7 Nights” booking pace on This Week. Weekly at least.</p>
           <NuxtLink class="settings-btn" to="/reservations">Upload reservations</NuxtLink>
+        </div>
+
+        <div v-if="migrations?.available" class="settings-card">
+          <div class="settings-card-top">
+            <span class="settings-card-title">Database updates</span>
+            <span v-if="migrationsPending.length" class="chip critical">✕ {{ migrationsPending.length }} not applied</span>
+            <span v-else class="chip good">✓ Up to date</span>
+          </div>
+          <p class="settings-card-body">
+            <template v-if="migrationsPending.length">
+              These didn't apply when the app last started, so some pages may show errors:
+              <strong>{{ migrationsPending.join(', ') }}</strong>. The server log has the reason (search for “[migrate] FAILED”).
+            </template>
+            <template v-else>
+              Applied automatically each time a new version starts.
+              <template v-if="migrations.lastAppliedAt"> Last change {{ fmtDateTime(migrations.lastAppliedAt) }}.</template>
+            </template>
+          </p>
         </div>
       </div>
     </section>

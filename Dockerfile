@@ -34,4 +34,7 @@ COPY --from=build /app/server ./server
 ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["node", ".output/server/index.mjs"]
+# Apply pending database migrations, then start the app. `;` not `&&`: a failed
+# migration is logged (and listed on the Settings page) but must not keep the
+# app from starting, since this is the only machine. See scripts/migrate.mjs.
+CMD ["sh", "-c", "node scripts/migrate.mjs; exec node .output/server/index.mjs"]

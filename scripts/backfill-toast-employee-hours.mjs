@@ -11,7 +11,7 @@
 // rows are replaced wholesale, so an interrupted run can be re-invoked with
 // the same flags.
 //
-// Needs the tables from scripts/add-toast-employee-hours-tables.mjs, and the
+// Needs the tables from migrations 0003 and 0010 (node scripts/migrate.mjs), and the
 // TOAST_* credential's labor:read + labor.employees:read scopes.
 //
 // Auth is a small, deliberate duplicate of server/utils/toast.ts, and the
@@ -108,7 +108,7 @@ async function fetchTimeEntries(isoDay) {
 const db = new Database(dbPath)
 for (const table of ['daily_toast_employee_hours', 'toast_employees', 'daily_toast_job_hours', 'toast_jobs']) {
   if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table)) {
-    console.error(`Table ${table} is missing — run: node scripts/add-toast-employee-hours-tables.mjs (and add-toast-job-hours-tables.mjs)`)
+    console.error(`Table ${table} is missing — run: node scripts/migrate.mjs`)
     process.exit(1)
   }
 }

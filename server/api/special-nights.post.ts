@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
     })()
   } catch (err) {
     if (err instanceof Error && /no such table/i.test(err.message)) {
-      throw createError({ statusCode: 500, statusMessage: 'special_nights table is missing — run scripts/add-special-nights.mjs' })
+      throw createError({ statusCode: 500, statusMessage: 'special_nights table is missing — database migrations have not been applied (see Settings)' })
     }
     throw err
   }
