@@ -33,6 +33,18 @@ async function add() {
   await save({ email: newEmail.value, role: newRole.value, name: newName.value || null })
   if (message.value?.kind === 'ok') { newEmail.value = ''; newName.value = '' }
 }
+// Preview the app as the GM or Sous Chef (owner only; server/api/view-as.post.ts). Full reload so
+// every page and request starts fresh under the previewed role.
+async function previewAs(role: 'gm' | 'kitchen') {
+  busy.value = true
+  try {
+    await $fetch('/api/view-as', { method: 'POST', body: { role } })
+    window.location.href = '/'
+  } catch (err: any) {
+    message.value = { kind: 'error', text: err?.data?.statusMessage || err?.message || 'Could not start the preview.' }
+    busy.value = false
+  }
+}
 async function remove(p: Person) {
   if (!confirm(`Remove ${p.email}? They will no longer be able to open the app.`)) return
   busy.value = true
@@ -76,6 +88,11 @@ async function remove(p: Person) {
       </select>
       <button type="submit" class="pa-btn" :disabled="busy">Add person</button>
     </form>
+    <div class="pa-preview">
+      <span class="pa-note" style="margin:0">See what they see:</span>
+      <button type="button" class="pa-remove" :disabled="busy" @click="previewAs('gm')">Preview as General Manager</button>
+      <button type="button" class="pa-remove" :disabled="busy" @click="previewAs('kitchen')">Preview as Sous Chef</button>
+    </div>
     <div v-if="message" :class="['chip', message.kind === 'ok' ? 'good' : 'critical']" class="pa-msg">{{ message.text }}</div>
   </div>
 </template>
@@ -96,4 +113,5 @@ async function remove(p: Person) {
 .pa-btn { font-size: 12.5px; font-weight: 700; padding: 7px 14px; border-radius: 8px; border: none; background: var(--accent); color: white; cursor: pointer; }
 .pa-remove { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--hair); background: var(--surface); color: var(--accent-text); cursor: pointer; }
 .pa-msg { margin-top: 8px; }
+.pa-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 </style>

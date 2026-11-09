@@ -4,8 +4,9 @@
 //
 // Roles:
 //   owner   - everything, including Settings and every write.
-//   gm      - read-only: This Week, Daily Results (sales view), Covers & Spend, Seasonal
-//             Trends, Kitchen Hours & Cost with dollars (Executive Chef pay still withheld).
+//   gm      - read-only: This Week (with cost pace and budget runway), Daily Results (sales and
+//             profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
+//             with dollars. Owner compensation is withheld server-side (see the redactions).
 //   kitchen - read-only: Kitchen Hours & Cost, percentages and hours only (forced
 //             server-side, see server/api/kitchen-labor.get.ts).
 // Default deny: anything not listed here is owner-only.
@@ -19,7 +20,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 }
 
 const PAGES: Record<Exclude<Role, 'owner'>, string[]> = {
-  gm: ['/', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor'],
+  gm: ['/', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/budget'],
   kitchen: ['/kitchen-labor']
 }
 
@@ -30,12 +31,18 @@ const API_GET: Record<Exclude<Role, 'owner'>, string[]> = {
   gm: [
     ...COMMON_GET,
     '/api/dashboard', '/api/booking-pace', '/api/pl', '/api/capacity',
-    '/api/kitchen-labor'
+    '/api/kitchen-labor', '/api/nightly-margin',
+    // Budget Check
+    '/api/budget/targets', '/api/budget/actuals', '/api/budget/overspending-detail'
   ],
   kitchen: [...COMMON_GET, '/api/kitchen-labor']
 }
-// The "Sync now" button in the page header.
-const API_WRITES = ['/api/qbo/sync']
+// Writes a non-owner may make: the "Sync now" button in the page header (not for the Sous Chef,
+// 2026-11-09), and /api/view-as, whose handler itself only honors a real owner.
+const API_WRITES: Record<Exclude<Role, 'owner'>, string[]> = {
+  gm: ['/api/qbo/sync', '/api/view-as'],
+  kitchen: ['/api/view-as']
+}
 
 function norm(p: string) {
   return p.length > 1 ? p.replace(/\/+$/, '') : p
@@ -57,7 +64,7 @@ export function roleCanCallApi(role: Role, path: string, method: string): boolea
   const p = norm(path)
   const m = method.toUpperCase()
   if (m === 'GET' || m === 'HEAD') return matches(p, API_GET[role])
-  return m === 'POST' && API_WRITES.includes(p)
+  return m === 'POST' && API_WRITES[role].includes(p)
 }
 
 export function roleHome(role: Role): string {

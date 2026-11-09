@@ -33,5 +33,28 @@ export default defineEventHandler((event) => {
   // (BudgetAccount.laborManaged: boolean) doesn't have to know that.
   for (const r of rows) r.laborManaged = !!r.laborManaged
 
+  // A parent account's own budget row is never counted: its amount is the sum of its children
+  // (that's how the Budget page's tree works), so a stored parent amount would double count in every
+  // category/year total that sums raw rows. The client sums this response, so null them here;
+  // server-side sums skip parents in SQL (NOT EXISTS child) for the same reason.
+  const parentIds = new Set(rows.map(r => r.parentAccountId).filter(id => id != null))
+  for (const r of rows) if (parentIds.has(r.accountId)) r.amount = null
+
+  // Non-owner roles (see shared/utils/access.ts) get the owners' own pay merged into one
+  // "Owner pay" row, unflagged, so individual salaries can't be read and labor totals still add up.
+  const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
+  if (role !== 'owner') {
+    const owner = rows.filter(r => r.isOwnerCompensation === 1)
+    const first = owner[0]
+    if (first) {
+      first.amount = owner.some(r => r.amount != null) ? owner.reduce((s, r) => s + (r.amount ?? 0), 0) : null
+      first.name = 'Owner pay'
+      first.accountNumber = null
+      first.isOwnerCompensation = 0
+      const drop = new Set(owner.slice(1).map(r => r.accountId))
+      rows.splice(0, rows.length, ...rows.filter(r => !drop.has(r.accountId)))
+    }
+  }
+
   return { year, month, accounts: rows }
 })

@@ -1,9 +1,17 @@
 # Restaurant Pulse
 
-**Status: Nuxt scaffold in place as of 2026-07-20.** Both approved mockups are
-now real pages with static sample data (matching the mockups exactly) backed
-by a SQLite database initialized from `schema.sql`. QuickBooks sync and
-wiring the UI to real data are not yet built — see Not yet done.
+**Status (updated 2026-11-09): live in production.** The app is wired to real QuickBooks and
+Toast data, runs a nightly sync, has per-person roles behind Cloudflare Access, and is organized
+into five sections (Home, Sales, Team, Money, Planning). Most sections below are dated working
+notes written as features were built; read them as history, and trust the later ones where they
+disagree with an earlier one.
+
+**Terminology (2026-11-09).** The app's wording was made plainer; older sections of this file,
+`schema.sql` and the code still use the old names:
+COGS = "Food & drink cost"; Opex = "operating expenses"; benchmark = "target" (on screen);
+Free Cash Flow = "cash left after loans"; Debt Service = "loan payments"; DSCR = "loan coverage
+ratio"; EBITDA = "operating profit before interest & depreciation". Page names changed in the
+2026-11-08 navigation cleanup (see that section). Net Income and Prime cost are unchanged.
 
 ## What this is
 
@@ -1098,11 +1106,11 @@ debt service, with `Free Cash Flow = Net Income + Depreciation − Principal
 - **`loan_key` is a plain slug ('sba', 'chen', 'savage', ...), not a QBO
   liability account number** — a real data conflict was caught while
   building this: the brief's own Section 1 cites the SBA loan's QBO account
-  as "2740," but 2740 is actually the investor Price loan's real account
-  (confirmed against the investor workbook's own "DR 2740 NP ..." QBO Entry
-  Notes column). Rather than guess which citation is right, `loan_schedule`
-  sidesteps the ambiguity entirely — the real SBA sub-account number is
-  still unconfirmed (see Not yet done).
+  as "2740," which conflicted with a "DR 2740 NP ..." note in the investor
+  workbook. **Resolved 2026-11-09 by the user: the SBA loan is QBO account
+  2740 and the investor Price loan is 2702** (the workbook note was
+  wrong). `loan_schedule` still uses slugs, so nothing in the code depends
+  on either number.
 - **The reserve transfer target ($50,562.50) is computed, not hardcoded** —
   it's the sum of catch-up interest across the 7 original investor loans
   only (`server/api/cashflow.get.ts`), excluding Jones & Miller's separate,
@@ -5251,9 +5259,10 @@ Each person now gets a role, taken from the email Cloudflare Access verifies, an
 server for pages **and** API routes, not just hidden in the nav.
 
 - **Roles** ([`shared/utils/access.ts`](shared/utils/access.ts), one definition used by server and app; default
-  deny): `owner` = everything incl. Settings and all writes. `gm` = read-only: This Week, Daily Results (sales view
-  only), Covers & Spend, Seasonal Trends, Kitchen Hours & Cost with dollars. `kitchen` = read-only Kitchen Hours &
-  Cost, percentages and hours only. Non-owners may only GET, plus `POST /api/qbo/sync` (the header's "Sync now").
+  deny): `owner` = everything incl. Settings and all writes. `gm` = read-only: This Week (including cost pace and budget
+  runway), Daily Results (sales and profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
+  with dollars (widened 2026-11-09; see below). `kitchen` = read-only Kitchen Hours & Cost, percentages and hours only.
+  Non-owners may only GET, plus `POST /api/qbo/sync` for the GM (the header's "Sync now"; **not** the Sous Chef, 2026-11-09).
 - **Enforcement**: [`server/middleware/auth.ts`](server/middleware/auth.ts) now returns the verified JWT email, looks
   it up in `user_roles` (migration `0012`), sets `event.context.auth`, then refuses disallowed API calls with 403 and
   redirects disallowed pages to the role's home. A Cloudflare-verified email with **no row is refused (403)**. Basic
@@ -5294,9 +5303,39 @@ server for pages **and** API routes, not just hidden in the nav.
   messages), Opex as "operating expenses", "benchmark" as "target" in the P&L and Dashboard, Free Cash Flow as "cash left
   after loans", Debt Service as "loan payments". DSCR and EBITDA keep their names but are spelled out beside them (loan
   coverage ratio; operating profit before interest & depreciation). Prime cost, Net Income and the code/schema names are
-  unchanged. Not touched: older sections of this file, `schema.sql` and code identifiers, which still say COGS/Opex.
+  unchanged. Code identifiers, `schema.sql` and older sections of this file keep the old names; see the Terminology note at
+  the top.
+- **Deployed 2026-11-09 and checked in production by the user**: Settings lists nothing pending, the five seeded rules
+  and the two owner-pay flags are present, and Benefits Eligibility looks right.
 - Verified: production build and typecheck (no new errors), the new routes by round trip against local dev (add, replace,
-  remove, owner-pay list, Settings page 200). Not clicked through in a browser.
+  remove, owner-pay list, Settings page 200).
+
+## Roles tweaks, budget double-counting and a QuickBooks diff script — 2026-11-09
+
+- **GM sees more** (the user's call): cost pace and budget runway on This Week, Budget Check, and the Daily Results
+  profit view. The owners' own pay stays out of reach: `/api/dashboard` and `/api/budget/actuals` zero the owner-pay
+  figures for non-owners, and `/api/budget/targets` merges the owner-pay accounts into one unflagged "Owner pay" row
+  (totals still add up, individual salaries can't be read, and the "labor without owner pay" view is hidden). Budget
+  Edit, Sales Plan, Staffing Plan, Profit & Loss, Cash & Loans, Benefits, What-If and Settings stay owner-only. The
+  Sous Chef can no longer press "Sync now" (API refuses it; the button is hidden).
+- **Preview as GM / Sous Chef** (owner only): Settings › People & Access has "Preview as General Manager / Sous Chef".
+  `POST /api/view-as` sets an httpOnly `view_as` cookie; `applyViewAs` in `server/middleware/auth.ts` honors it only
+  when the signed-in person really is an owner and only ever downgrades, keeping `realRole: 'owner'` so the banner's
+  "Exit preview" always works. A GM or Sous Chef who sends the cookie gets nothing (verified). The preview runs the same
+  server enforcement the real role gets, so what you see is what they see.
+- **Budget rows are no longer double-counted.** Budget entry was already leaf-only, but older parent-account rows could
+  still be summed by readers. Now a parent account's budget is never counted: `/api/budget/targets` nulls parent amounts
+  (the client sums that response), and the server-side sums in `dashboard.get.ts`, `overspending-detail.get.ts` and
+  `breakeven.get.ts` skip parents in SQL (`NOT EXISTS` a child). Local dev has no such rows. To see whether production
+  has any, run (read-only):
+  `fly ssh console -a restaurant-pulse -C "node -e \"const D=require('/app/node_modules/better-sqlite3');const d=new D('/app/data/restaurant.sqlite',{readonly:true});console.log(d.prepare('SELECT a.account_number n,a.name,bt.year y,bt.month m,bt.amount amt FROM budget_targets bt JOIN accounts a ON a.id=bt.account_id WHERE bt.amount<>0 AND a.is_active=1 AND EXISTS(SELECT 1 FROM accounts c WHERE c.parent_account_id=a.id) ORDER BY y,m,n').all())\""`.
+  Any rows it lists were being counted in some totals before this change.
+- **`scripts/diff-qbo-pl.mjs`**: read-only comparison of `daily_line_items` against QuickBooks's cash-basis P&L for the same
+  dates, per account, with category totals (only a refreshed OAuth token is written). Run it in production:
+  `fly ssh console -a restaurant-pulse -C "node scripts/diff-qbo-pl.mjs --since=2026-01-01 --category=cogs"`. It can't run
+  against local dev (the sync guard and sandbox connection). Written 2026-11-09 to chase the ~$1.9K food & drink cost
+  mismatch; not yet run. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
+  (inactive/renamed), a backdated entry the forward-only sync never reached, or a parent account's own postings.
 
 ## Not yet done
 
@@ -5324,14 +5363,11 @@ server for pages **and** API routes, not just hidden in the nav.
 - Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
   production and saving once there to correct Salon's stale stored capacity
   (80/80 vs. the correct 60/60) — done in local dev only so far.
-- A small, low-priority COGS discrepancy (~$1,926.79, ~0.25% of revenue)
-  surfaced by the net income investigation above, not yet root-caused —
-  called closed for now given its size relative to everything else found
-  and fixed in that pass.
-- Confirming the SBA loan's real QBO liability account number directly
-  against QBO (see Debt Service / Cash Flow tab above) — currently
-  unconfirmed since the source brief's own citation ("2740") conflicts with
-  a real investor loan's account number.
+- A small COGS (food & drink cost) discrepancy (~$1,926.79, ~0.25% of revenue)
+  surfaced by the net income investigation above, not yet root-caused.
+  2026-11-09: `scripts/diff-qbo-pl.mjs` now compares the app against QuickBooks account by
+  account (see "Roles tweaks, budget double-counting and a QuickBooks diff script"); run it
+  with `--category=cogs` to find the accounts that differ.
 - Wiring the P&L page to the real schema — it still renders the same static
   sample data as the approved mockup, not `useDb()` queries. The Dashboard
   page was wired to real data (`server/api/dashboard.get.ts`) and no longer

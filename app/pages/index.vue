@@ -360,7 +360,7 @@ function meterStatusLabel(status: string | null) {
       </section>
 
       <!-- COGS / labor vs revenue -->
-      <section v-if="isOwner">
+      <section>
         <div class="section-label">Cost Pace — Month to Date</div>
         <div v-if="costPaceMeters.length" class="meter-row">
           <div v-for="m in costPaceMeters" :key="m.key" :class="['meter-card', m.key === 'prime' && 'anchor']">
@@ -387,7 +387,7 @@ function meterStatusLabel(status: string | null) {
       </section>
 
       <!-- Are we on target to meet budget? -->
-      <section v-if="isOwner">
+      <section>
         <div class="section-label">Budget Runway — Actual vs. Expected Pace</div>
 
         <div class="runway-card" v-if="monthView?.hasBudget">

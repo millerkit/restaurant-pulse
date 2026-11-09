@@ -5,9 +5,7 @@ import { MONTH_NAMES } from '~/composables/useBudgetData'
 useHead({ title: `${site.restaurantName} — Daily Results` })
 
 const { data, pending, error, refresh } = await useFetch('/api/pl', { lazy: true })
-// Profit view is owner-only (the server refuses /api/nightly-margin for other roles).
-const { isOwner } = useMe()
-const { data: marginData, pending: marginPending, error: marginError, refresh: refreshMargin } = await useFetch('/api/nightly-margin', { lazy: true, immediate: isOwner.value })
+const { data: marginData, pending: marginPending, error: marginError, refresh: refreshMargin } = await useFetch('/api/nightly-margin', { lazy: true })
 
 type Period = 'month' | 'year'
 const PERIOD_LABEL: Record<Period, string> = { month: 'month', year: 'year' }
@@ -311,7 +309,7 @@ function refreshBoth() {
         @synced="refreshBoth()"
       />
 
-      <div v-if="isOwner" class="drilldown-toggle-bar">
+      <div class="drilldown-toggle-bar">
         <div class="drilldown-toggle-label">View</div>
         <div class="period-tabs">
           <span :class="['period-tab', view === 'revenue' && 'active']" @click="view = 'revenue'">Sales</span>

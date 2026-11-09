@@ -125,6 +125,7 @@ export default defineEventHandler((event) => {
       SELECT ${LABEL_CASE} AS label, SUM(bt.amount) AS total
       FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
       WHERE a.category = ? AND bt.year = ? AND bt.month = ?
+        AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
         ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
       GROUP BY ${LABEL_CASE}
     `).all(...(costBehavior ? [category, year, month, costBehavior] : [category, year, month])) as { label: string, total: number }[]
@@ -155,6 +156,7 @@ export default defineEventHandler((event) => {
       SELECT ${LABEL_CASE} AS label, a.name AS account, SUM(bt.amount) AS total
       FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
       WHERE a.category = ? AND bt.year = ? AND bt.month = ?
+        AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
         ${costBehavior ? 'AND a.cost_behavior = ?' : ''}
       GROUP BY a.id
     `).all(...(costBehavior ? [category, year, month, costBehavior] : [category, year, month])) as AcctRow[]

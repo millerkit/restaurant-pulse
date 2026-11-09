@@ -3,7 +3,7 @@
 // (server/middleware/auth.ts); this only decides what to show.
 import type { Role } from '#shared/utils/access'
 
-export type Me = { role: Role, email: string | null, name: string | null }
+export type Me = { role: Role, email: string | null, name: string | null, viewingAs?: boolean }
 
 export function useMe() {
   const me = useState<Me | null>('me', () => null)

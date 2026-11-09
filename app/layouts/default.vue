@@ -7,7 +7,11 @@ import site from '~/config/site.json'
 // Use the router's own current route, not useRoute(): inside a layout, useRoute()
 // can lag behind the real navigation (it only updates once the new page has
 // finished mounting), which left the nav highlighting the old section.
-const { role, isOwner } = useMe()
+const { me, role, isOwner } = useMe()
+async function exitViewAs() {
+  try { await $fetch('/api/view-as', { method: 'POST', body: { role: null } }) } catch {}
+  window.location.href = '/settings'
+}
 const visibleSections = computed(() => visibleNav(role.value))
 const router = useRouter()
 const route = router.currentRoute
@@ -65,6 +69,11 @@ const subPages = computed(() => {
       >{{ p.label }}</NuxtLink>
     </nav>
 
+    <div v-if="me?.viewingAs" class="viewas-banner" role="status">
+      <span>Previewing as <strong>{{ role === 'gm' ? 'General Manager' : 'Sous Chef' }}</strong>. This is what they see; nothing here changes their account.</span>
+      <button type="button" class="viewas-exit" @click="exitViewAs">Exit preview</button>
+    </div>
+
     <slot />
 
     <footer class="app-footer">
@@ -87,3 +96,12 @@ const subPages = computed(() => {
     </nav>
   </div>
 </template>
+
+<style scoped>
+.viewas-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 8px 0 12px; padding: 8px 14px; border-radius: 10px; font-size: 13px;
+  background: var(--warning-wash); color: var(--ink); border: 1px solid var(--hair);
+}
+.viewas-exit { font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 8px; border: none; background: var(--accent); color: white; cursor: pointer; }
+</style>

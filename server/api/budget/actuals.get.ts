@@ -47,7 +47,9 @@ export default defineEventHandler((event) => {
     m.totals[r.category] = r.total
   }
 
-  for (const r of ownerRows) months[r.month - 1].ownerCompLabor = r.total
+  // Owners' own pay is withheld from non-owner roles (shared/utils/access.ts).
+  const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
+  if (role === 'owner') for (const r of ownerRows) months[r.month - 1].ownerCompLabor = r.total
 
   return { year, months }
 })

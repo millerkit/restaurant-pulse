@@ -89,6 +89,7 @@ export default defineEventHandler((event) => {
     SELECT COALESCE(SUM(bt.amount), 0) AS total
     FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
     WHERE a.category = 'opex' AND a.cost_behavior = 'fixed' AND a.is_active = 1 AND bt.year = ? AND bt.month = ?
+      AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
   `).get(year, month) as { total: number }).total
   const loanPrincipal = (db.prepare(`
     SELECT COALESCE(SUM(principal), 0) AS total FROM loan_schedule WHERE payment_date LIKE ?

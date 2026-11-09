@@ -71,6 +71,17 @@ function resolveRole(email: string | null): { role: Role, email: string | null, 
   return row ? { role: row.role, email, name: row.name } : null
 }
 
+// "View as" (2026-11-09): a real owner can preview what the GM or Sous Chef sees. The choice is
+// kept in an httpOnly cookie set by POST /api/view-as and is honored ONLY when the signed-in
+// person is really an owner, and only ever downgrades (to gm or kitchen), so it can't be used to
+// gain access. The real role is kept in `realRole` so the owner can always switch back.
+function applyViewAs(event: H3Event, auth: { role: Role, email: string | null, name: string | null }) {
+  if (auth.role !== 'owner') return auth
+  const want = parseCookies(event)['view_as']
+  if (want !== 'gm' && want !== 'kitchen') return auth
+  return { ...auth, role: want as Role, realRole: 'owner' as Role }
+}
+
 function enforceRole(event: H3Event, path: string, auth: { role: Role, email: string | null }) {
   if (auth.role === 'owner') return
   const isApi = path.startsWith('/api/')
@@ -99,11 +110,12 @@ export default defineEventHandler(async (event) => {
       console.error(`Access: ${email ?? 'unknown email'} has no role in user_roles`)
       throw createError({ statusCode: 403, statusMessage: 'This account has not been given access yet. Ask the owner to add it under Settings > People & Access.' })
     }
-    event.context.auth = resolved
-    return enforceRole(event, path, resolved)
+    const effective = applyViewAs(event, resolved)
+    event.context.auth = effective
+    return enforceRole(event, path, effective)
   }
 
   checkBasicAuth(event, basicAuth.user, basicAuth.pass)
-  event.context.auth = { role: 'owner' as Role, email: null, name: null }
-  return
+  event.context.auth = applyViewAs(event, { role: 'owner' as Role, email: null, name: null })
+  return enforceRole(event, path, event.context.auth)
 })

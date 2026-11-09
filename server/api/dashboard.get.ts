@@ -109,6 +109,7 @@ export default defineEventHandler((event) => {
       SELECT a.category AS category, SUM(bt.amount) AS total
       FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
       WHERE bt.year = ? AND bt.month IN (${placeholders})
+        AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
       GROUP BY a.category
     `).all(year, ...months) as { category: string, total: number }[]
     if (rows.length === 0) return null
@@ -131,6 +132,7 @@ export default defineEventHandler((event) => {
           SELECT a.category AS category, bt.month AS month, SUM(bt.amount) AS total
           FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
           WHERE bt.year = ?
+            AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
           GROUP BY a.category, bt.month
         `).all(year) as { category: string, month: number, total: number }[]
       : db.prepare(`
@@ -422,21 +424,9 @@ export default defineEventHandler((event) => {
       }
     }
   }
-  // Non-owner roles (see shared/utils/access.ts) get the sales-side numbers only: the cost
-  // pace, budget runway and suggested-goal inputs are blanked here, not just hidden by the page.
+  // Non-owner roles (see shared/utils/access.ts) see the same numbers except owner compensation
+  // (the owners' own pay), which is zeroed so labor % "ex owner pay" can't be backed out.
   const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
   if (role === 'owner') return payload
-  return {
-    ...payload,
-    month: { actuals: { ...EMPTY_TOTALS }, budget: { ...EMPTY_TOTALS }, ownerCompLabor: 0, ownerCompAccountNames: [] as string[] },
-    yearToDate: {
-      actuals: { ...EMPTY_TOTALS }, budget: { ...EMPTY_TOTALS }, projectedRevenue: 0,
-      monthlyCategoryBudget: [] as unknown[], unbudgetedPastMonthCount: 0
-    },
-    benchmarks: [] as unknown[],
-    weeklyTargets: {
-      ...payload.weeklyTargets,
-      suggestedWeeklyGoal: { amount: null, laborMonthEstimate: null, opexMonthEstimate: null, principalDueThisMonth: null, operatingWeeksThisMonth: null, cogsPct: null, cogsPctSource: null }
-    }
-  }
+  return { ...payload, month: { ...payload.month, ownerCompLabor: 0, ownerCompAccountNames: [] as string[] } }
 })

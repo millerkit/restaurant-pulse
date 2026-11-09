@@ -24,6 +24,8 @@ const props = defineProps<{
 // completes — the header doesn't know what data each page shows, so it
 // only reports that a sync finished, not what changed.
 const emit = defineEmits<{ synced: [] }>()
+// The Sous Chef can't trigger a sync (server refuses it too, shared/utils/access.ts).
+const { role } = useMe()
 
 type SyncStatus = { status: 'running' | 'success' | 'error', finishedAt: string | null } | null
 const { data: syncData, refresh: refreshSyncStatus } = await useFetch<SyncStatus>('/api/sync-status')
@@ -110,7 +112,7 @@ async function syncNow() {
         <template v-else>Never synced</template>
       </div>
       <div class="sync-now-row">
-        <button class="mini-btn" :disabled="onCooldown || triggerState === 'syncing'" :title="onCooldown ? `Synced recently — available again in ${cooldownRemainingMin}m` : 'Trigger a sync from QuickBooks/Toast now'" @click="syncNow">
+        <button v-if="role !== 'kitchen'" class="mini-btn" :disabled="onCooldown || triggerState === 'syncing'" :title="onCooldown ? `Synced recently — available again in ${cooldownRemainingMin}m` : 'Trigger a sync from QuickBooks/Toast now'" @click="syncNow">
           {{ triggerState === 'syncing' ? 'Syncing…' : 'Sync now' }}
         </button>
         <span v-if="onCooldown && triggerState !== 'syncing'" class="cooldown-note">available in {{ cooldownRemainingMin }}m</span>
