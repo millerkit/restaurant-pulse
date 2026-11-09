@@ -109,7 +109,7 @@ const sensitivity = computed(() => {
     <div v-else-if="loading && !data" class="quiet-note">Loading…</div>
     <template v-else-if="data">
       <div v-if="data.avgSpend === null || data.contribRate === null" class="quiet-note">
-        Not enough data yet — needs recent Toast covers with matching core revenue, and COGS / variable-opex benchmarks.
+        Not enough data yet — needs recent Toast covers with matching core revenue, and food & drink cost and variable-expense targets.
       </div>
       <template v-else>
         <div class="be-lead">
@@ -141,7 +141,7 @@ const sensitivity = computed(() => {
         </table>
 
         <div class="be-basis">
-          Each cover contributes about <strong>{{ fmtMoney(data.contribPerCover ?? 0) }}</strong> after COGS ({{ Math.round((data.cogsPct ?? 0) * 100) }}%),
+          Each cover contributes about <strong>{{ fmtMoney(data.contribPerCover ?? 0) }}</strong> after food & drink cost ({{ Math.round((data.cogsPct ?? 0) * 100) }}%),
           variable opex ({{ Math.round((data.varOpexPct ?? 0) * 100) }}%) and front-of-house hourly (about {{ fmtMoney(data.fohPerCover) }}/cover).
           {{ data.nights }} operating nights in {{ MONTH_NAMES[data.month - 1] }}.
         </div>

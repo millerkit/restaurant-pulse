@@ -5279,6 +5279,25 @@ server for pages **and** API routes, not just hidden in the nav.
 - **Not covered**: a GM can see the Home page's weekly goal and the Next 7 Nights booking pace; the GM's Capacity page
   still lists per-area spend assumptions (read-only). Kitchen can use the "Sync now" button.
 
+## UI cleanup phase 3: plainer wording, staff and owner-pay rules in Settings — 2026-11-09
+
+- **Staff & Pay Rules** in Settings ([`StaffRulesSettings.vue`](app/components/StaffRulesSettings.vue)). The salaried /
+  grandfathered / shared-login lists that were constants in `staff-hours.get.ts` are now the `staff_overrides` table
+  (migration `0013`, seeded with the same five names), read by [`server/utils/staff-overrides.ts`](server/utils/staff-overrides.ts)
+  and edited by picking a Toast employee plus a rule (`/api/settings/staff-overrides` GET/POST/DELETE). One rule per
+  person; a stored name nobody in Toast matches is shown with a "check for a rename" warning. Keys are Toast's lowercased
+  "first last" for salaried/grandfathered and the lowercased display name for shared logins, as before.
+- **Owner pay accounts** (same card, `/api/settings/owner-pay`): flag or unflag any active leaf labor account as
+  `accounts.is_owner_compensation`, which used to be hand-run SQL. The flag is per database (production's accounts have
+  their own flags), so check it in production after deploying.
+- **Wording**: COGS now reads "Food & drink cost" everywhere the app shows it (`CATEGORY_LABEL`, tables, notes, buttons,
+  messages), Opex as "operating expenses", "benchmark" as "target" in the P&L and Dashboard, Free Cash Flow as "cash left
+  after loans", Debt Service as "loan payments". DSCR and EBITDA keep their names but are spelled out beside them (loan
+  coverage ratio; operating profit before interest & depreciation). Prime cost, Net Income and the code/schema names are
+  unchanged. Not touched: older sections of this file, `schema.sql` and code identifiers, which still say COGS/Opex.
+- Verified: production build and typecheck (no new errors), the new routes by round trip against local dev (add, replace,
+  remove, owner-pay list, Settings page 200). Not clicked through in a browser.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

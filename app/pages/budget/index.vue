@@ -411,7 +411,7 @@ function hasDetail(cat: Category) {
               </span>
             </div>
             <div class="figure">{{ actualNetIncome >= 0 ? '+' : '' }}${{ actualNetIncome.toLocaleString() }}</div>
-            <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − COGS − labor − opex)</div>
+            <div class="caption">vs. ${{ budgetNetIncome.toLocaleString() }} budgeted (revenue − food & drink cost − labor − operating expenses)</div>
             <div v-if="periodOtherNet !== 0" class="caption">
               Includes {{ periodOtherNet >= 0 ? 'net' : 'a net cost of' }} ${{ Math.abs(Math.round(periodOtherNet)).toLocaleString() }} in other income/expense (grants, insurance proceeds, depreciation, etc.) — not broken out below
             </div>
@@ -560,7 +560,7 @@ function hasDetail(cat: Category) {
                       </ul>
                     </div>
                   </div>
-                  <div v-if="!opexFixedDetailRows.length && !opexVariableDetailRows.length" class="quiet-note">No opex data synced for this {{ selectedPeriod }} yet.</div>
+                  <div v-if="!opexFixedDetailRows.length && !opexVariableDetailRows.length" class="quiet-note">No operating expense data synced for this {{ selectedPeriod }} yet.</div>
                   <div v-else-if="!opexVariableDetailRows.length" class="quiet-note">
                     No single variable subcategory stands out. Accounts furthest over budget:
                     <ul v-if="topAccountsFor('opex').length" class="acct-list"><li v-for="ac in topAccountsFor('opex')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>

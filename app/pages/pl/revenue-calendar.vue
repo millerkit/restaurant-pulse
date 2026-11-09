@@ -200,7 +200,7 @@ function buildMarginTip(status: MarginDayStatus, profit: number, marginPct: numb
   rows.push(
     { label: 'Revenue', value: fmtMoney0(d.actual) },
     { label: 'Labor', value: fmtMoney0(d.estVariableLabor) },
-    { label: 'COGS', value: fmtMoney0(d.estCogs) },
+    { label: 'Food & drink cost', value: fmtMoney0(d.estCogs) },
     { label: 'Fixed', value: fmtMoney0(d.estFixedLabor) },
     { label: 'Profit', value: `${fmtMoneySigned(profit)} (${marginPct.toFixed(0)}%)`, strong: true, tone: profit >= 0 ? 'good' : 'bad' }
   )
@@ -224,7 +224,7 @@ function marginDayStatus(dateStr: string): MarginDayCell {
   const cost = costFor(entry)
   const profit = entry.actual - cost
   const marginPct = (profit / entry.actual) * 100
-  // Didn't even cover variable (hourly) labor + COGS — a distinct, rarer,
+  // Didn't even cover variable (hourly) labor + food & drink cost — a distinct, rarer,
   // and worse signal than an ordinary fully-loaded loss (which mostly just
   // reflects the normal fixed-cost allocation), so it overrides the usual
   // profit-margin band with its own darkest status.
@@ -251,7 +251,7 @@ const marginCalendarView = computed<MarginCalendarView | null>(() => {
   return { kind: 'year', months: Array.from({ length: 12 }, (_, i) => buildMarginMonthGrid(marginData.value!.asOfYear, i + 1)) }
 })
 
-const COST_LABEL = 'their own variable labor + COGS + fixed labor & benefits share'
+const COST_LABEL = 'their own variable labor + food & drink cost + fixed labor & benefits share'
 
 const marginDays = computed(() => (marginData.value?.margin[period.value]?.days ?? []) as MarginDayLocal[])
 const marginShortfallDays = computed(() => marginDays.value.filter(d => d.actual < costFor(d)))
@@ -275,7 +275,7 @@ const variableShortfallCallout = computed(() => {
   const n = variableShortfallDays.value.length
   if (!n) return ''
   const dates = variableShortfallDays.value.map(d => formatWeekdayDate(d.date)).join(', ')
-  return `${n} night${n === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} didn't even cover variable (hourly) labor + COGS — revenue itself fell short of the marginal cost of being open: ${dates}.`
+  return `${n} night${n === 1 ? '' : 's'} this ${PERIOD_LABEL[period.value]} didn't even cover variable (hourly) labor + food & drink cost — revenue itself fell short of the marginal cost of being open: ${dates}.`
 })
 
 const rates = computed(() => marginData.value?.rates ?? null)
@@ -404,7 +404,7 @@ function refreshBoth() {
         <section v-if="rates && !rates.ratesAvailable">
           <div class="drill-card quiet">
             <span class="chip warning">Not enough data yet</span>
-            <span class="quiet-note">Needs both QuickBooks and Toast data synced since the location move (Jun 20, 2026) to estimate a labor rate, COGS%, and fixed-labor allocation.</span>
+            <span class="quiet-note">Needs both QuickBooks and Toast data synced since the location move (Jun 20, 2026) to estimate a labor rate, food & drink cost %, and fixed-labor allocation.</span>
           </div>
         </section>
 
@@ -467,7 +467,7 @@ function refreshBoth() {
               <span class="legend-chip neutral">0–20% margin</span>
               <span class="legend-chip bad">Loss, under 10% of revenue</span>
               <span class="legend-chip critical">Loss, 10%+ of revenue</span>
-              <span class="legend-chip severe">⚠ Didn't cover variable labor + COGS</span>
+              <span class="legend-chip severe">⚠ Didn't cover variable labor + food &amp; drink cost</span>
               <span class="legend-chip no-data">No data / closed</span>
             </div>
           </div>

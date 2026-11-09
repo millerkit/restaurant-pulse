@@ -185,7 +185,7 @@ async function apply() {
   <div class="drill-card build-card">
     <div class="build-head">
       <span class="chip accent">Build {{ year }} budget</span>
-      <span class="quiet-note">Starts {{ year }} from existing numbers: fixed expenses from {{ MONTH_NAMES[11] }} {{ sourceYear }}'s budget, revenue from the Capacity planning page, and labor from the Staffing Plan (with its Friday paychecks). COGS, variable expenses, events and retail are left for you.</span>
+      <span class="quiet-note">Starts {{ year }} from existing numbers: fixed expenses from {{ MONTH_NAMES[11] }} {{ sourceYear }}'s budget, revenue from the Capacity planning page, and labor from the Staffing Plan (with its Friday paychecks). food & drink cost, variable expenses, events and retail are left for you.</span>
     </div>
 
     <div class="build-actions">
@@ -230,7 +230,7 @@ async function apply() {
       <div class="quiet-note small build-notes">
         <template v-if="plan.usedLoanSchedule">7020 Loan Interest is budgeted from the loan schedule, plus accrued interest on the deferred Miller note in the months it isn't paid. </template>
         Labor uses the Staffing Plan as currently saved<template v-if="plan.sutaRatePct != null"> — including its SUTA rate of {{ plan.sutaRatePct.toFixed(2) }}%</template>. Payroll-tax rates and wage-base caps reset each January, so check the tax rates on the Staffing Plan before relying on early-year labor.
-        Fixed utilities (gas, electricity) are carried at {{ MONTH_NAMES[11] }}'s level all year; adjust seasonally on the month tabs if you want. COGS and variable operating expenses aren't budgeted yet, so the year's Net Income will read far too high until they are (each month tab's COGS recompute can fill COGS from revenue).
+        Fixed utilities (gas, electricity) are carried at {{ MONTH_NAMES[11] }}'s level all year; adjust seasonally on the month tabs if you want. Food & drink cost and variable operating expenses aren't budgeted yet, so the year's Net Income will read far too high until they are (each month tab's food & drink cost recompute can fill food & drink cost from revenue).
       </div>
 
       <div class="build-actions">

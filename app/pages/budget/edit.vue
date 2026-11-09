@@ -669,6 +669,9 @@ function hasNoStoredAmount(amount: number | null): boolean {
 
 function leafVisible(acc: BudgetAccount): boolean {
   if (!hideZeroRows.value) return true
+  // A row with real actuals this month stays visible even with no budget, or
+  // the parent's Actual/Projected would include dollars from rows you can't see.
+  if (Math.abs(selectedMonthAccountActuals.value[acc.accountId] || 0) >= 0.5) return true
   return !hasNoStoredAmount(acc.amount)
 }
 
@@ -1300,7 +1303,7 @@ async function recomputeCogsFromTrailingAverage() {
     if (!revenueBudget) throw new Error(`Set a Revenue budget for ${MONTH_NAMES[editMonth.value - 1]} first`)
 
     const months = cogsTrailingMonths.value
-    if (months.length === 0) throw new Error('No prior months with revenue and COGS data to average from')
+    if (months.length === 0) throw new Error('No prior months with revenue and food & drink cost data to average from')
 
     const targets: { year: number, month: number, accountId: number, amount: number }[] = []
 
@@ -1336,11 +1339,11 @@ async function recomputeCogsFromTrailingAverage() {
       targets.push({ year: YEAR, month: editMonth.value, accountId: cogsAcc.accountId, amount: Math.round(subgroupBudget * 100) / 100 })
     }
 
-    if (targets.length === 0) throw new Error('No Food/Beverage COGS accounts found to recompute')
+    if (targets.length === 0) throw new Error('No Food/Beverage cost accounts found to recompute')
 
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
     await loadYear()
-    cogsRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} COGS from trailing average.`
+    cogsRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} food & drink cost from trailing average.`
     cogsRecomputeStatus.value = 'done'
   } catch (err: any) {
     cogsRecomputeStatus.value = 'error'
@@ -1613,14 +1616,15 @@ function exportForQuickBooks() {
             @click="fillMissingFromLastMonth"
           >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
-          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <span v-if="saveStatus === 'saving'" class="chip neutral">Saving…</span>
+          <span v-else-if="saveStatus === 'saved' && !hasUnsavedChanges" class="chip good">✓ Saved</span>
+          <span v-else-if="saveStatus === 'error'" class="chip critical">✕ Not saved: {{ saveMessage }}</span>
+          <span v-else-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
         </div>
         <div v-else class="action-row">
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
-        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
-        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
         <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
         <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
 
@@ -1651,7 +1655,7 @@ function exportForQuickBooks() {
             <span>— darker red = bigger overrun; unshaded = within a normal range</span>
           </div>
           <div v-if="!viewingAnnualTotal && selectedMonthIsCurrent && selectedMonthHasActuals" class="tint-legend">
-            Projected: COGS and processing fees run at a steady rate, payroll follows the Friday runs, and every other expense (rent, utilities, insurance, ICHRA…) is projected at its budget unless actuals have already exceeded it.
+            Projected: food & drink cost and processing fees run at a steady rate, payroll follows the Friday runs, and every other expense (rent, utilities, insurance, ICHRA…) is projected at its budget unless actuals have already exceeded it.
           </div>
           <div class="edit-table-scroll">
           <table class="pl-table edit-table">
@@ -1809,13 +1813,13 @@ function exportForQuickBooks() {
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
-                      COGS is variable — it scales with revenue, not a fixed dollar guess. Trailing
+                      Food & drink cost is variable — it scales with revenue, not a fixed dollar guess. Trailing
                       {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }}, from {{ cogsTrailingAllActuals ? 'actuals' : cogsTrailingSomeActuals ? 'actuals + budget' : 'budget' }})</template>:
                       Food <strong>{{ cogsTrailingFoodPct !== null ? (cogsTrailingFoodPct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Food revenue.
                       Beverage, by type:
                       <template v-for="(sg, i) in cogsTrailingBeverageSubgroups" :key="sg.key"><template v-if="i > 0">, </template>{{ sg.label }} <strong>{{ sg.pct !== null ? (sg.pct * 100).toFixed(1) + '%' : 'n/a' }}</strong></template>.
                       <button v-if="cogsNeedsRecompute" class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
-                        Recompute {{ MONTH_NAMES[editMonth - 1] }} COGS from this average
+                        Recompute {{ MONTH_NAMES[editMonth - 1] }} food & drink cost from this average
                       </button>
                       <span v-else-if="cogsRecomputeStatus !== 'done' && cogsHasComparableData" class="chip neutral">Already tracking the trailing average</span>
                       <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
@@ -1927,14 +1931,15 @@ function exportForQuickBooks() {
             @click="fillMissingFromLastMonth"
           >Fill in missing accounts from {{ previousMonthLabel || '—' }}</button>
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
-          <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
+          <span v-if="saveStatus === 'saving'" class="chip neutral">Saving…</span>
+          <span v-else-if="saveStatus === 'saved' && !hasUnsavedChanges" class="chip good">✓ Saved</span>
+          <span v-else-if="saveStatus === 'error'" class="chip critical">✕ Not saved: {{ saveMessage }}</span>
+          <span v-else-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
           <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="saveBudgets">Save budget</button>
         </div>
         <div v-else class="action-row">
           <button class="action-btn" @click="exportForQuickBooks">Export for QuickBooks</button>
         </div>
-        <div v-if="saveStatus === 'saved'" class="chip good">Saved</div>
-        <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
         <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
         <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
       </section>

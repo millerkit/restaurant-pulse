@@ -43,7 +43,7 @@ export function useBudgetYearSelection() {
   return { year, setYear }
 }
 export const CATEGORIES: Category[] = ['revenue', 'cogs', 'labor', 'opex', 'other_income', 'other_expense']
-export const CATEGORY_LABEL: Record<Category, string> = { revenue: 'Revenue', cogs: 'COGS', labor: 'Labor', opex: 'Operating Expenses', other_income: 'Other Income', other_expense: 'Other Expense' }
+export const CATEGORY_LABEL: Record<Category, string> = { revenue: 'Revenue', cogs: 'Food & Drink Cost', labor: 'Labor', opex: 'Operating Expenses', other_income: 'Other Income', other_expense: 'Other Expense' }
 export const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export function daysInMonth(year: number, month: number) {

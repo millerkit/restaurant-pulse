@@ -203,9 +203,9 @@ const weekToDateStatus = computed(() => {
 // ---- cost pace meters (COGS / labor / prime cost, month-to-date) --------
 const benchmarkByCategory = computed(() => Object.fromEntries((data.value?.benchmarks ?? []).map((b: any) => [b.category, b])))
 const COST_METERS = [
-  { key: 'cogs', label: 'COGS', benchmarkKey: 'cogs', scaleMax: 40 },
+  { key: 'cogs', label: 'Food & Drink Cost', benchmarkKey: 'cogs', scaleMax: 40 },
   { key: 'labor', label: 'Labor', benchmarkKey: 'labor', scaleMax: 40 },
-  { key: 'prime', label: 'Prime Cost', hint: 'COGS + labor', benchmarkKey: 'prime_cost', scaleMax: 80 }
+  { key: 'prime', label: 'Prime Cost', hint: 'food & drink + labor', benchmarkKey: 'prime_cost', scaleMax: 80 }
 ] as const
 // Owner-operator compensation (Executive Chef, Business Manager) is left out
 // of the Labor and Prime Cost meters: a hired-staff/industry benchmark was
@@ -374,7 +374,7 @@ function meterStatusLabel(status: string | null) {
             <div class="meter-scale"><span>0%</span><span>{{ m.scaleMax / 2 }}%</span><span>{{ m.scaleMax }}%</span></div>
             <div class="meter-foot">
               <span v-if="m.benchmark">Target: &le;{{ (m.benchmark.targetPct * 100).toFixed(0) }}% of revenue</span>
-              <span v-else>No benchmark set</span>
+              <span v-else>No target set</span>
               <span :class="['chip', m.status ?? 'warning']">{{ meterStatusLabel(m.status) }}</span>
             </div>
           </div>

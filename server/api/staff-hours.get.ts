@@ -21,21 +21,9 @@ const DATA_GAP_GRACE_DAYS = 6
 // days (user's call 2026-10-27): older ones have presumably been corrected in
 // payroll already, so flagging them is noise.
 const AUTO_CLOCKOUT_FLAG_DAYS = 7
-// Toast logins that are a station, not a person (confirmed in local data
-// 2026-10-27: "Service Bar" logs ~9 hrs a day across 76 days, 46 of them
-// auto clock-outs — several people sharing one login). Counting it would
-// put a fake 55 hrs/week employee at the top of the benefits list. Matched
-// case-insensitively on the full display name, and always reported back to
-// the page so the exclusion is visible rather than silent.
-const NON_PERSON_LOGIN_NAMES = new Set(['service bar'])
-// Benefits eligibility that doesn't depend on hours, named by the user
-// 2026-10-27. Keys are Toast's own "first last" (not the chosen name),
-// lowercased — Joshua Sokol is "Josh Sokol" in Toast. Salaried staff are
-// always eligible and listed even with no hours at all (Josh doesn't clock
-// in, so he has no time entries and would otherwise never appear). Katie
-// Janik is a grandfathered special case: eligible regardless of her average.
-const SALARIED_EMPLOYEES = new Set(['abigail taylor', 'shane allerheiligen', 'josh sokol'])
-const GRANDFATHERED_EMPLOYEES = new Set(['katie janik'])
+// Salaried / grandfathered people and shared station logins now live in the
+// staff_overrides table (Settings > Benefits eligibility rules); see
+// server/utils/staff-overrides.ts for what each kind means.
 
 type Eligibility = 'hours' | 'grandfathered' | 'salaried'
 
@@ -100,6 +88,8 @@ export default defineEventHandler(() => {
     WHERE h.date BETWEEN ? AND ?
     GROUP BY h.employee_guid
   `).all(recentStart, recentStart, effectiveStart, windowEnd) as HoursRow[]
+
+  const { salaried: SALARIED_EMPLOYEES, grandfathered: GRANDFATHERED_EMPLOYEES, excluded: NON_PERSON_LOGIN_NAMES } = loadStaffOverrides(db)
 
   const nameKey = (first: string | null, last: string | null) =>
     `${(first ?? '').trim()} ${(last ?? '').trim()}`.trim().toLowerCase()

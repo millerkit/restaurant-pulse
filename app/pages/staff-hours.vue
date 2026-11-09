@@ -172,7 +172,7 @@ const partTimeNote = computed(() => {
 
         <section v-if="data.unmatchedSalaried.length" class="drill-card">
           <span class="chip serious">Salaried name not found in Toast</span>
-          <span class="quiet-note">No active Toast employee matches: {{ data.unmatchedSalaried.join(', ') }}. Check the spelling in SALARIED_EMPLOYEES (server/api/staff-hours.get.ts).</span>
+          <span class="quiet-note">No active Toast employee matches: {{ data.unmatchedSalaried.join(', ') }}. Check the name in Settings › Benefits eligibility rules.</span>
         </section>
 
         <div v-if="saveError" class="save-error" role="alert">

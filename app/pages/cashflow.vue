@@ -133,7 +133,7 @@ const OUTLOOK_KIND: Record<string, string> = {
 }
 const OUTLOOK_NOTE: Record<string, string> = {
   budget: "Real actuals for months already closed; this month's and every later month's budget.",
-  pace: 'Revenue for the rest of the year at that pace (COGS follows it); labor and operating expenses at budget.',
+  pace: 'Revenue for the rest of the year at that pace (food & drink cost follows it); labor and operating expenses at budget.',
   paceSpecials: "Same as Recent pace for the rest of the year, but this month's revenue comes from the detailed forecast. OpenTable bookings adjust only the next few nights."
 }
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -333,7 +333,7 @@ async function submitPlan() {
     <template v-else-if="data">
       <section>
         <div class="section-head">
-          <div class="section-label">Free Cash Flow</div>
+          <div class="section-label">Cash Left After Loans (Free Cash Flow)</div>
         </div>
 
         <div class="hero-row">
@@ -390,7 +390,7 @@ async function submitPlan() {
               <span class="period">Profit needed to cover the loans</span>
             </div>
             <div class="figure">{{ fmt(breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year Free Cash Flow to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue<template v-if="data.yearProjection.giftCardCushion > 0">, after holding back {{ data.yearProjection.giftCardCushionPct }}% as a cushion</template>)</template>.</div>
+            <div class="caption">Net Income needed for full-year cash left after loans to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue<template v-if="data.yearProjection.giftCardCushion > 0">, after holding back {{ data.yearProjection.giftCardCushionPct }}% as a cushion</template>)</template>.</div>
           </div>
         </div>
         <div v-if="outlook" class="outlook">
@@ -413,7 +413,7 @@ async function submitPlan() {
               <div class="caption">{{ OUTLOOK_NOTE[sc.key] }}</div>
               <div v-if="breakevenNetIncomeAfterGiftCards !== null" class="outlook-fcf">
                 <div class="outlook-fcf-row">
-                  <span>Projected year-end Free Cash Flow</span>
+                  <span>Projected year-end cash left after loans</span>
                   <strong :class="sc.netIncome - breakevenNetIncomeAfterGiftCards >= 0 ? 'pos' : 'neg'">{{ fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards) }}</strong>
                 </div>
                 <div v-if="data.yearProjection.giftCardCash > 0" class="outlook-fcf-row sub">
@@ -425,9 +425,9 @@ async function submitPlan() {
           </div>
           <div class="quiet-note small">
             Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out): revenue ran
-            {{ pctOfBudget(outlook.ratios.revenue) }} of budget. That ratio is applied to revenue for the current month and December, and COGS moves with it.
+            {{ pctOfBudget(outlook.ratios.revenue) }} of budget. That ratio is applied to revenue for the current month and December, and food & drink cost moves with it.
             Labor and operating expenses stay at budget on purpose: November and December's budgets were already recalibrated from recent actuals, so applying the closed months' overruns
-            (against their older budgets: COGS {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}) would count them twice.
+            (against their older budgets: food & drink cost {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}) would count them twice.
             Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
             <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night card needs the current month's revenue projection, which isn't available yet.</template>
             Three months is a thin sample, so treat the pace cards as a rough guide, not a forecast. Seasonality is in the budget (December's monthly budget already reflects the Capacity planning page's seasonal covers); the pace ratio doesn't add any December-specific lift.
@@ -473,26 +473,26 @@ async function submitPlan() {
            loans only (the all-10-loans version was removed 2026-10-26). -->
       <section v-if="data.covenantScoped">
         <div class="section-head">
-          <div class="section-label">Debt Service Coverage Ratio (SBA + 5 investor loans)</div>
+          <div class="section-label">Loan Coverage Ratio, DSCR (SBA + 5 investor loans)</div>
           <div class="section-note">{{ data.covenantScoped.minimumRatio.toFixed(2) }}x minimum, first tested at FY{{ data.covenantScoped.testYear }} year-end</div>
         </div>
         <div class="hero-row">
           <div class="hero-card">
             <div class="hero-top">
-              <span class="period">Projected FY{{ data.covenantScoped.testYear }} DSCR</span>
+              <span class="period">Projected FY{{ data.covenantScoped.testYear }} coverage ratio</span>
               <span v-if="dscrScoped !== null" :class="['chip', dscrScoped >= data.covenantScoped.minimumRatio ? 'good' : 'critical']">
                 {{ dscrScoped >= data.covenantScoped.minimumRatio ? 'Meets covenant' : 'Below covenant' }}
               </span>
             </div>
             <div class="figure">{{ dscrScoped !== null ? fmtRatio(dscrScoped) : '—' }}</div>
-            <div class="caption">EBITDA ÷ annual principal + interest on the SBA, Chen, Savage, Schaefer, Gilreath, and Mis loans only.</div>
+            <div class="caption">Operating profit before interest & depreciation (EBITDA) ÷ a year of principal + interest on the SBA, Chen, Savage, Schaefer, Gilreath, and Mis loans only.</div>
           </div>
         </div>
         <div class="fcf-breakdown">
           <div class="fcf-row"><span>Net Income (projected, full year)</span><span>{{ projectedNetIncomeForYear !== null ? fmt(projectedNetIncomeForYear) : '—' }}</span></div>
           <div class="fcf-row"><span>+ Loan interest expense (account 7020, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.loanInterestExpenseForYear) }}</span></div>
           <div class="fcf-row"><span>+ Depreciation (budgeted, full year)</span><span>{{ fmt(data.covenantScoped.fullYearProjectionInputs.budgetedDepreciationForYear) }}</span></div>
-          <div class="fcf-row total"><span>= EBITDA</span><span>{{ projectedEbitdaScoped !== null ? fmt(projectedEbitdaScoped) : '—' }}</span></div>
+          <div class="fcf-row total"><span>= EBITDA (operating profit before interest &amp; depreciation)</span><span>{{ projectedEbitdaScoped !== null ? fmt(projectedEbitdaScoped) : '—' }}</span></div>
           <div class="fcf-row"><span>Annual debt service (principal + interest + catch-up)</span><span>{{ fmt(data.covenantScoped.annualDebtService.total) }}</span></div>
         </div>
         <div class="section-note">
@@ -535,7 +535,7 @@ async function submitPlan() {
               <tr class="total">
                 <th>Bottom line</th>
                 <td>Net Income: {{ fmt(data.thisYear.freeCashFlow.netIncome) }}</td>
-                <td>Free Cash Flow: {{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</td>
+                <td>Cash left after loans: {{ fmt(data.thisYear.freeCashFlow.freeCashFlow) }}</td>
               </tr>
             </tbody>
           </table>
@@ -548,7 +548,7 @@ async function submitPlan() {
       <!-- Debt service payment calendar -->
       <section>
         <div class="section-head">
-          <div class="section-label">Upcoming Debt Service Payments</div>
+          <div class="section-label">Upcoming Loan Payments</div>
           <div class="section-note">Next 45 days</div>
         </div>
         <div class="cf-table-card">

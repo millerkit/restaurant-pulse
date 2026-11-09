@@ -122,6 +122,11 @@ const fmtDay = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString('
     </section>
 
     <section class="settings-section">
+      <h2 class="settings-h">Staff &amp; Pay Rules</h2>
+      <StaffRulesSettings />
+    </section>
+
+    <section class="settings-section">
       <h2 class="settings-h">Restaurant Setup</h2>
       <RestaurantSetupSettings />
     </section>

@@ -544,7 +544,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
 
       <template v-else>
         <section v-if="annualDataLoading" class="rm-section">
-          <div class="quiet-note">Loading this year's revenue/COGS/labor/opex…</div>
+          <div class="quiet-note">Loading this year's revenue, food & drink cost, labor and operating expenses…</div>
         </section>
 
         <section v-else-if="!canModelAnnualImpact" class="rm-section">
@@ -597,7 +597,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
               </div>
             </div>
             <div v-if="covenantImpact" class="assumption-card">
-              <div class="card-head"><span class="period-name">EBITDA (loan covenant)</span></div>
+              <div class="card-head"><span class="period-name">Operating profit for the loan covenant (EBITDA)</span></div>
               <div class="metric primary">
                 <div class="metric-top">
                   <div class="metric-figure">
@@ -614,11 +614,11 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
             </div>
           </div>
 
-          <button type="button" class="link-btn breakdown-toggle" @click="showBreakdown = !showBreakdown">{{ showBreakdown ? '▾ Hide' : '▸ Show' }} full revenue/COGS/labor/opex breakdown</button>
+          <button type="button" class="link-btn breakdown-toggle" @click="showBreakdown = !showBreakdown">{{ showBreakdown ? '▾ Hide' : '▸ Show' }} full revenue, cost and expense breakdown</button>
 
           <div v-if="showBreakdown" class="pl-table-card">
             <table class="pl-table breakdown-table">
-              <caption>Current versus simulated annual dollar totals for revenue, COGS, labor split into fixed and variable, operating expenses split into fixed and variable, and net income</caption>
+              <caption>Current versus simulated annual dollar totals for revenue, food and drink cost, labor split into fixed and variable, operating expenses split into fixed and variable, and net income</caption>
               <thead>
                 <tr>
                   <th scope="col">Line</th>
@@ -635,7 +635,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.revenue.base, annualImpact!.revenue.sim) }}</td>
                 </tr>
                 <tr>
-                  <th scope="row">COGS</th>
+                  <th scope="row">Food &amp; drink cost</th>
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.cogs.base) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.cogs.sim) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.cogs.base, annualImpact!.cogs.sim) }}</td>
@@ -665,19 +665,19 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.labor.base, annualImpact!.labor.sim) }}</td>
                 </tr>
                 <tr>
-                  <th scope="row">Opex — fixed</th>
+                  <th scope="row">Operating expenses — fixed</th>
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseFixed) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simFixed) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseFixed, annualImpact!.opex.simFixed) }}</td>
                 </tr>
                 <tr>
-                  <th scope="row">Opex — variable</th>
+                  <th scope="row">Operating expenses — variable</th>
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.baseVariable) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.simVariable) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.baseVariable, annualImpact!.opex.simVariable) }}</td>
                 </tr>
                 <tr class="subtotal-row">
-                  <th scope="row">Opex — total</th>
+                  <th scope="row">Operating expenses — total</th>
                   <td class="derived">{{ fmtMoneyFull(annualImpact!.opex.base) }}</td>
                   <td class="derived sim">{{ fmtMoneyFull(annualImpact!.opex.sim) }}</td>
                   <td class="derived">{{ fmtDeltaMoney(annualImpact!.opex.base, annualImpact!.opex.sim) }}</td>
@@ -913,7 +913,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
         </div>
 
         <footer class="rm-footer">
-          <span>Baseline: real trailing 3-month Toast per-area covers/revenue, annualized against this year's real budget/actual revenue, COGS, labor, and opex. Added events and retail are on top of anything already budgeted; their direct-cost % replaces the blended COGS % (include any extra event labor in it), and they add no variable labor.</span>
+          <span>Baseline: real trailing 3-month Toast per-area covers/revenue, annualized against this year's real budget/actual revenue, food and drink cost, labor, and operating expenses. Added events and retail are on top of anything already budgeted; their direct-cost % replaces the blended COGS % (include any extra event labor in it), and they add no variable labor.</span>
         </footer>
       </template>
     </template>

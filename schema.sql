@@ -403,6 +403,16 @@ CREATE TABLE holiday_closures (
   updated_at  TEXT NOT NULL
 );
 
+-- Benefits-eligibility overrides (2026-11-09), edited in Settings > Benefits eligibility rules.
+-- salaried: always eligible, listed even with no hours; grandfathered: eligible whatever the
+-- average; excluded: a shared station login, not a person. name_key is Toast's lowercased
+-- "first last" (salaried/grandfathered) or the lowercased display name (excluded).
+CREATE TABLE staff_overrides (
+  name_key    TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('salaried', 'grandfathered', 'excluded')),
+  updated_at  TEXT NOT NULL
+);
+
 -- Per-person access (2026-11-09), keyed by the email Cloudflare Access verifies.
 -- Roles and what they can see: shared/utils/access.ts. Edited in Settings > People & Access.
 CREATE TABLE user_roles (

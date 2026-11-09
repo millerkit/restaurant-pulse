@@ -86,7 +86,7 @@ const yearRow = computed(() => periodRow('year'))
       <section>
         <div class="section-head">
           <div class="section-label">Profit &amp; Loss</div>
-          <div class="section-note">COGS%, labor%, and prime cost colored against configurable benchmarks — see legend below. For what's driving Labor/Opex costs, see <NuxtLink to="/budget">Budget Check</NuxtLink>'s Overspending section; for the day-by-day revenue picture, see <NuxtLink to="/pl/revenue-calendar">Daily Results</NuxtLink>.</div>
+          <div class="section-note">Food &amp; drink cost %, labor %, and prime cost colored against your targets (set in Settings) — see legend below. For what's driving labor and operating costs, see <NuxtLink to="/budget">Budget Check</NuxtLink>'s Overspending section; for the day-by-day revenue picture, see <NuxtLink to="/pl/revenue-calendar">Daily Results</NuxtLink>.</div>
         </div>
 
         <div class="pl-table-card">
@@ -106,7 +106,7 @@ const yearRow = computed(() => periodRow('year'))
                 <td class="amount">${{ Math.round(yearRow.revenue).toLocaleString() }}</td>
               </tr>
               <tr>
-                <th scope="row">COGS</th>
+                <th scope="row">Food &amp; drink cost</th>
                 <td><span :class="['amount', monthRow.cogsStatus]">${{ Math.round(monthRow.cogs).toLocaleString() }}</span><span :class="['pct', monthRow.cogsStatus]">{{ (monthRow.cogsPct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', yearRow.cogsStatus]">${{ Math.round(yearRow.cogs).toLocaleString() }}</span><span :class="['pct', yearRow.cogsStatus]">{{ (yearRow.cogsPct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
@@ -116,7 +116,7 @@ const yearRow = computed(() => periodRow('year'))
                 <td><span :class="['amount', yearRow.laborStatus]">${{ Math.round(yearRow.labor).toLocaleString() }}</span><span :class="['pct', yearRow.laborStatus]">{{ (yearRow.laborPct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
               <tr class="subtotal">
-                <th scope="row">Prime cost <span class="hint">(COGS + labor)</span></th>
+                <th scope="row">Prime cost <span class="hint">(food &amp; drink + labor)</span></th>
                 <td><span :class="['amount', monthRow.primeStatus]">${{ Math.round(monthRow.prime).toLocaleString() }}</span><span :class="['pct', monthRow.primeStatus]">{{ (monthRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
                 <td><span :class="['amount', yearRow.primeStatus]">${{ Math.round(yearRow.prime).toLocaleString() }}</span><span :class="['pct', yearRow.primeStatus]">{{ (yearRow.primePct * 100).toFixed(1) }}% of rev.</span></td>
               </tr>
@@ -136,10 +136,10 @@ const yearRow = computed(() => periodRow('year'))
       </section>
 
       <div class="legend">
-        <span class="chip good">Within benchmark</span>
+        <span class="chip good">Within target</span>
         <span class="chip warning">Watch</span>
-        <span class="chip serious">Off benchmark</span>
-        <span class="chip critical">Over benchmark</span>
+        <span class="chip serious">Off target</span>
+        <span class="chip critical">Over target</span>
       </div>
 
       <footer>
