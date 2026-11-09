@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import type { H3Event } from 'h3'
-import type { Role } from '../../shared/utils/access'
+import type { Role } from '#shared/utils/access'
 
 // Gates every request. This app shows real restaurant financials once QBO
 // is wired in, so it must never be reachable by an unauthenticated visitor

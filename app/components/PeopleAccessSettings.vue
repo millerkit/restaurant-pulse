@@ -3,7 +3,7 @@
 // by email, matched against the address Cloudflare Access verifies. Adding someone here is
 // not enough on its own: their email must also be on the Cloudflare Access allow-list
 // (done in Cloudflare), or they can't sign in at all.
-import { ROLES, ROLE_LABELS, type Role } from '../../shared/utils/access'
+import { ROLES, ROLE_LABELS, type Role } from '#shared/utils/access'
 
 type Person = { email: string, role: Role, name: string | null }
 const { data, refresh } = await useFetch<{ people: Person[] }>('/api/settings/people')

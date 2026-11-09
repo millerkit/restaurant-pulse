@@ -22,7 +22,7 @@ export type NavSection = {
   pages: NavPage[]
 }
 
-import { roleCanViewPage, type Role } from '../../shared/utils/access'
+import { roleCanViewPage, type Role } from '#shared/utils/access'
 
 export const NAV_SECTIONS: NavSection[] = [
   {
