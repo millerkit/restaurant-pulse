@@ -4788,9 +4788,10 @@ $15,520 ($199,579 to $184,059 excluding SBA), and the weekly goal drops about $8
 - **Status (2026-11-09):** the user's parents agreed to this option (pause Nov 15 2026 – Jun 15 2027, resume Jul 15
   2027, level payments to Jan 15 2032). It was applied to production's `loan_schedule` on 2026-11-01, before the
   agreement, so no further run is needed (the script refuses to run twice; the replaced rows are in
-  `loan_schedule_miller_backup`). Still to confirm: the $2,913.91 payment is built from the schedule's balance
-  ($143,160), which is $478 above the $142,682 the lender was quoted ($2,909/month). If the note's true balance
-  differs, `--revert` then re-run with `--balance=`. The monthly interest accrual entry in QuickBooks is still needed.
+  `loan_schedule_miller_backup`). **Balance confirmed 2026-11-09:** QuickBooks's liability register
+  (2727 Notes Payable, Steve and Mary) shows $143,159.84, matching the schedule's $143,159.82, so no revert is needed. The
+  lender's $142,682 figure (quoted payment $2,909/month) was about $477 low; the correct level payment for the real balance
+  is $2,913.91 (about $5/month more). Paying $2,909 instead would leave roughly $295 owing at the end. The monthly interest accrual entry in QuickBooks is still needed.
 
 ## 2027 budget: year toggle + "Build 2027 budget" — 2026-11-02
 
