@@ -4772,7 +4772,7 @@ circular. Instead:
   month-close path can't run locally (sync refuses outside production) and first fires on the
   first production sync of November.
 
-## Miller loan deferral (modeled locally, not agreed or in production) - 2026-11-01
+## Miller loan deferral (Option A agreed 2026-11-09; applied in production 2026-11-01) - 2026-11-01
 
 The user is proposing to the lender (their parents) that Miller's payments pause Nov 15 2026 - Jun 15 2027,
 with 3.82% interest accruing and capitalizing, then a level payment Jul 15 2027 - Jan 15 2032.
@@ -4785,10 +4785,12 @@ $15,520 ($199,579 to $184,059 excluding SBA), and the weekly goal drops about $8
 - **Budget:** 7020 interest is essentially unchanged (accrual about $455.73/mo vs. $448.42 in Dec): the only
   edit is Dec 2026 +$7.31. Not written; 2027 has no 7020 budget yet. QBO needs a monthly accrual JE for the
   deferred interest, or the P&L understates it.
-- **Applied to local dev only.** Production needs the user's go-ahead after the lender agrees; run the script
-  on the volume via `fly ssh console` (it reads `data/restaurant.sqlite`). The $2,913.91 differs from the
-  $2,909 quoted to the lender because the schedule's balance ($143,160) is $478 above the $142,682 used then:
-  confirm the note's true balance and re-run with `--balance=` if needed.
+- **Status (2026-11-09):** the user's parents agreed to this option (pause Nov 15 2026 – Jun 15 2027, resume Jul 15
+  2027, level payments to Jan 15 2032). It was applied to production's `loan_schedule` on 2026-11-01, before the
+  agreement, so no further run is needed (the script refuses to run twice; the replaced rows are in
+  `loan_schedule_miller_backup`). Still to confirm: the $2,913.91 payment is built from the schedule's balance
+  ($143,160), which is $478 above the $142,682 the lender was quoted ($2,909/month). If the note's true balance
+  differs, `--revert` then re-run with `--balance=`. The monthly interest accrual entry in QuickBooks is still needed.
 
 ## 2027 budget: year toggle + "Build 2027 budget" — 2026-11-02
 
