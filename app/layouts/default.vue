@@ -7,6 +7,8 @@ import site from '~/config/site.json'
 // Use the router's own current route, not useRoute(): inside a layout, useRoute()
 // can lag behind the real navigation (it only updates once the new page has
 // finished mounting), which left the nav highlighting the old section.
+const { role, isOwner } = useMe()
+const visibleSections = computed(() => visibleNav(role.value))
 const router = useRouter()
 const route = router.currentRoute
 const queryTab = computed(() => (typeof route.value.query.tab === 'string' ? route.value.query.tab : undefined))
@@ -24,7 +26,10 @@ const pendingActive = computed(() => {
   return findActive(u.pathname, u.searchParams.get('tab') ?? undefined)
 })
 const shownSection = computed(() => (pendingActive.value ?? active.value)?.section.key)
-const subPages = computed(() => (active.value && active.value.section.pages.length > 1 ? active.value.section.pages : []))
+const subPages = computed(() => {
+  const sec = active.value ? visibleSections.value.find(s => s.key === active.value!.section.key) : null
+  return sec && sec.pages.length > 1 ? sec.pages : []
+})
 </script>
 
 <template>
@@ -33,7 +38,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
       <NuxtLink to="/" class="brand">{{ site.restaurantName }}</NuxtLink>
       <nav class="section-nav" aria-label="Sections">
         <NuxtLink
-          v-for="s in NAV_SECTIONS"
+          v-for="s in visibleSections"
           :key="s.key"
           :to="s.pages[0]!.to"
           :class="['section-link', shownSection === s.key && 'active']"
@@ -45,7 +50,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
       </nav>
       <div class="topbar-tools">
         <ThemeToggle />
-        <NuxtLink to="/settings" :class="['gear', onSettings && 'active']" title="Settings" aria-label="Settings">
+        <NuxtLink v-if="isOwner" to="/settings" :class="['gear', onSettings && 'active']" title="Settings" aria-label="Settings">
           <NavIcon name="settings" />
         </NuxtLink>
       </div>
@@ -71,7 +76,7 @@ const subPages = computed(() => (active.value && active.value.section.pages.leng
     <!-- Phone: sections move to a bottom bar, easier to reach mid-shift. -->
     <nav class="bottom-nav" aria-label="Sections">
       <NuxtLink
-        v-for="s in NAV_SECTIONS"
+        v-for="s in visibleSections"
         :key="s.key"
         :to="s.pages[0]!.to"
         :class="['bottom-link', shownSection === s.key && 'active']"

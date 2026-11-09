@@ -4,6 +4,7 @@ import { CATEGORY_DIRECTION, benchmarkStatus, daysInMonth, daysInYear, dayOfYear
 
 useHead({ title: `${site.restaurantName} — This Week` })
 
+const { isOwner } = useMe()
 const { data, pending, error, refresh } = await useFetch('/api/dashboard', { lazy: true })
 
 // Next 7 nights booking pace (server/api/booking-pace.get.ts). Fetched apart from
@@ -308,13 +309,13 @@ function meterStatusLabel(status: string | null) {
         </div>
 
         <div class="quiet-note" v-if="weeklyTargets.closureNote">{{ weeklyTargets.closureNote }} The weekly goal is unchanged; only how it's split across the days.</div>
-        <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount">Set a weekly sales goal in <NuxtLink to="/settings">Settings</NuxtLink> to see a goal for each night.</div>
+        <div class="quiet-note" v-if="!weeklyTargets.benchmarkAmount && isOwner">Set a weekly sales goal in <NuxtLink to="/settings">Settings</NuxtLink> to see a goal for each night.</div>
         <div class="quiet-note" v-else-if="weeklyTargets.sampleOpenDays < 6">Based on only {{ weeklyTargets.sampleOpenDays }} real open day{{ weeklyTargets.sampleOpenDays === 1 ? '' : 's' }} since the location move ({{ formatWeekdayDate(weeklyTargets.sinceDate) }}) — the weekday pattern will sharpen as more data accumulates.</div>
 
         <div class="benchmark-form">
           <div class="section-note" v-if="weeklyTargets.benchmarkAmount">
             Weekly goal: <strong>${{ Math.round(weeklyTargets.benchmarkAmount).toLocaleString() }}</strong> of core dining sales.
-            <NuxtLink to="/settings">Change it in Settings</NuxtLink>, where you'll also find what the week needs to cover costs and loan payments.
+            <template v-if="isOwner"><NuxtLink to="/settings">Change it in Settings</NuxtLink>, where you'll also find what the week needs to cover costs and loan payments.</template>
           </div>
           <div class="section-note" v-if="weeklyTargets.avgSpendPerCover">
             Covers targets use a real avg spend/cover of ${{ weeklyTargets.avgSpendPerCover.toFixed(2) }}, computed the same way, since {{ formatWeekdayDate(weeklyTargets.sinceDate) }}.
@@ -354,12 +355,12 @@ function meterStatusLabel(status: string | null) {
         </div>
         <div v-if="bookingPace.staleDays >= bookingPace.staleAfterDays" class="drill-card">
           <span class="chip warning">⚠ Bookings {{ bookingPace.staleDays }} days old</span>
-          <span class="quiet-note">Upload a fresh export on the <NuxtLink to="/reservations">Reservations</NuxtLink> tab — pace and estimates use the book as of the last upload.</span>
+          <span class="quiet-note">Upload a fresh export on the <NuxtLink v-if="isOwner" to="/reservations">Reservations</NuxtLink><template v-else>Reservations</template> tab — pace and estimates use the book as of the last upload.</span>
         </div>
       </section>
 
       <!-- COGS / labor vs revenue -->
-      <section>
+      <section v-if="isOwner">
         <div class="section-label">Cost Pace — Month to Date</div>
         <div v-if="costPaceMeters.length" class="meter-row">
           <div v-for="m in costPaceMeters" :key="m.key" :class="['meter-card', m.key === 'prime' && 'anchor']">
@@ -386,7 +387,7 @@ function meterStatusLabel(status: string | null) {
       </section>
 
       <!-- Are we on target to meet budget? -->
-      <section>
+      <section v-if="isOwner">
         <div class="section-label">Budget Runway — Actual vs. Expected Pace</div>
 
         <div class="runway-card" v-if="monthView?.hasBudget">

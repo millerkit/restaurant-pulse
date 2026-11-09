@@ -31,6 +31,7 @@ type KitchenLabor =
 // dollars are sent at all). Phase 2's roles will force this for the kitchen role.
 const route = useRoute()
 const kitchenQuery = computed(() => (route.query.view === 'kitchen' ? { view: 'kitchen' } : {}))
+const { isOwner } = useMe()
 const { data, pending, error, refresh } = await useFetch<KitchenLabor>('/api/kitchen-labor', { query: kitchenQuery, lazy: true })
 const restricted = computed(() => !!(data.value && data.value.hasData && data.value.restricted))
 
@@ -206,7 +207,7 @@ function fmtDelta(v: number) {
               <input v-model="includeOvertime" type="checkbox">
               Include overtime (BOH OT)
             </label>
-            <label v-if="!restricted" class="toggle">
+            <label v-if="!restricted && isOwner" class="toggle">
               <input v-model="includeExecChef" type="checkbox">
               Include Executive Chef (salaried, owner compensation)
             </label>

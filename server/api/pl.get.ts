@@ -144,14 +144,21 @@ export default defineEventHandler((event) => {
 
   const lastSyncRow = db.prepare('SELECT status, finished_at AS finishedAt FROM sync_runs ORDER BY id DESC LIMIT 1').get() as { status: string, finishedAt: string | null } | undefined
 
+  // Non-owner roles only get the daily revenue-vs-goal data (Daily Results, sales view);
+  // P&L totals and cost benchmarks are blanked server-side (shared/utils/access.ts).
+  const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
+  const isOwner = role === 'owner'
+  const shownPeriods = isOwner
+    ? periods
+    : Object.fromEntries(Object.entries(periods).map(([k, v]) => [k, { ...v, totals: { ...EMPTY_TOTALS } }])) as typeof periods
   return {
     asOfDate,
     asOfYear,
     asOfMonth,
     asOfDay,
     lastSync: lastSyncRow ?? null,
-    periods,
+    periods: shownPeriods,
     revenue,
-    benchmarks
+    benchmarks: isOwner ? benchmarks : []
   }
 })

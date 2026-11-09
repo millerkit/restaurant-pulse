@@ -32,6 +32,7 @@ type Actual = { throughDate: string, covers: number | null, revenue: number | nu
 type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolean, assumed: Assumed, actual: Actual }
 type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNight: number, assumedPerCover: number, actualCoversPerNight: number | null, actualNights?: number, byWeekday?: Record<number, { covers: number, nights: number }>, actualPerCover: number | null }
 
+const { isOwner } = useMe()
 const { data: paceData, pending: pacePending, error: paceError, refresh: paceRefresh } = await useFetch('/api/capacity')
 
 function fmtMoney(n: number | null | undefined): string {
@@ -870,7 +871,7 @@ async function save() {
           </section>
 
           <!-- Breakeven: covers/night needed to carry each layer of fixed cost -->
-          <BreakevenCard />
+          <BreakevenCard v-if="isOwner" />
 
           <!-- Month by month, one at a time -->
           <section>

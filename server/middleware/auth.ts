@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import type { H3Event } from 'h3'
+import type { Role } from '../../shared/utils/access'
 
 // Gates every request. This app shows real restaurant financials once QBO
 // is wired in, so it must never be reachable by an unauthenticated visitor
@@ -31,7 +32,7 @@ const PUBLIC_PATHS = ['/privacy', '/terms']
 
 let accessJwks: ReturnType<typeof createRemoteJWKSet> | undefined
 
-async function checkCloudflareAccess(event: H3Event, teamDomain: string, aud: string) {
+async function checkCloudflareAccess(event: H3Event, teamDomain: string, aud: string): Promise<string | null> {
   const token = getHeader(event, 'cf-access-jwt-assertion')
   if (!token) {
     console.error(`Cloudflare Access: request to ${event.path} had no Cf-Access-Jwt-Assertion header`)
@@ -39,7 +40,8 @@ async function checkCloudflareAccess(event: H3Event, teamDomain: string, aud: st
   }
   accessJwks ??= createRemoteJWKSet(new URL(`https://${teamDomain}/cdn-cgi/access/certs`))
   try {
-    await jwtVerify(token, accessJwks, { issuer: `https://${teamDomain}`, audience: aud })
+    const { payload } = await jwtVerify(token, accessJwks, { issuer: `https://${teamDomain}`, audience: aud })
+    return typeof payload.email === 'string' ? payload.email.toLowerCase() : null
   } catch (err) {
     console.error(`Cloudflare Access: JWT verification failed for ${event.path}:`, err)
     throw createError({ statusCode: 401, statusMessage: 'Invalid Cloudflare Access assertion' })
@@ -59,6 +61,30 @@ function checkBasicAuth(event: H3Event, user?: string, pass?: string) {
   }
 }
 
+// Roles (phase 2 of the UI cleanup): the verified Cloudflare Access email picks a role from
+// user_roles; the Basic Auth backstop is always owner. What each role may touch is in
+// shared/utils/access.ts and is enforced here for pages AND API routes, so hiding a nav link
+// is never the only protection. An email with no role row is refused.
+function resolveRole(email: string | null): { role: Role, email: string | null, name: string | null } | null {
+  if (!email) return null
+  const row = useDb().prepare('SELECT role, name FROM user_roles WHERE email = ?').get(email) as { role: Role, name: string | null } | undefined
+  return row ? { role: row.role, email, name: row.name } : null
+}
+
+function enforceRole(event: H3Event, path: string, auth: { role: Role, email: string | null }) {
+  if (auth.role === 'owner') return
+  const isApi = path.startsWith('/api/')
+  // Nuxt internals (payloads, icons, error page) carry no data of their own.
+  if (!isApi && (path.startsWith('/_') || path === '/favicon.ico')) return
+  const tab = new URL(event.path, 'http://x').searchParams.get('tab')
+  const ok = isApi
+    ? roleCanCallApi(auth.role, path, event.method)
+    : roleCanViewPage(auth.role, path, tab)
+  if (ok) return
+  if (isApi) throw createError({ statusCode: 403, statusMessage: 'Your account does not have access to this.' })
+  return sendRedirect(event, roleHome(auth.role), 302)
+}
+
 export default defineEventHandler(async (event) => {
   const path = event.path.split('?')[0]
   if (PUBLIC_PATHS.includes(path) || path.startsWith('/_nuxt/')) return
@@ -67,9 +93,17 @@ export default defineEventHandler(async (event) => {
   const host = (getHeader(event, 'host') ?? '').split(':')[0]
 
   if (cloudflareAccess.hostname && cloudflareAccess.teamDomain && cloudflareAccess.aud && host === cloudflareAccess.hostname) {
-    await checkCloudflareAccess(event, cloudflareAccess.teamDomain, cloudflareAccess.aud)
-    return
+    const email = await checkCloudflareAccess(event, cloudflareAccess.teamDomain, cloudflareAccess.aud)
+    const resolved = resolveRole(email)
+    if (!resolved) {
+      console.error(`Access: ${email ?? 'unknown email'} has no role in user_roles`)
+      throw createError({ statusCode: 403, statusMessage: 'This account has not been given access yet. Ask the owner to add it under Settings > People & Access.' })
+    }
+    event.context.auth = resolved
+    return enforceRole(event, path, resolved)
   }
 
   checkBasicAuth(event, basicAuth.user, basicAuth.pass)
+  event.context.auth = { role: 'owner' as Role, email: null, name: null }
+  return
 })

@@ -5245,6 +5245,40 @@ production reads.)
   Dec $221,501 → $219,581 after Recompute (two closure nights removed). Remaining steps given to the user: Save Dec if
   the button is active, then Settings › Holiday closures › "Clear old counts".
 
+## Roles and per-person access (UI cleanup phase 2) — 2026-11-09
+
+Each person now gets a role, taken from the email Cloudflare Access verifies, and the role is enforced on the
+server for pages **and** API routes, not just hidden in the nav.
+
+- **Roles** ([`shared/utils/access.ts`](shared/utils/access.ts), one definition used by server and app; default
+  deny): `owner` = everything incl. Settings and all writes. `gm` = read-only: This Week, Daily Results (sales view
+  only), Covers & Spend, Seasonal Trends, Kitchen Hours & Cost with dollars. `kitchen` = read-only Kitchen Hours &
+  Cost, percentages and hours only. Non-owners may only GET, plus `POST /api/qbo/sync` (the header's "Sync now").
+- **Enforcement**: [`server/middleware/auth.ts`](server/middleware/auth.ts) now returns the verified JWT email, looks
+  it up in `user_roles` (migration `0012`), sets `event.context.auth`, then refuses disallowed API calls with 403 and
+  redirects disallowed pages to the role's home. A Cloudflare-verified email with **no row is refused (403)**. Basic
+  Auth on the raw fly.dev hostname is always owner (kept as the owner backstop, per the user's choice).
+- **Server-side redaction** (not just hidden by the page): `/api/dashboard` blanks the month/year actuals and
+  budgets, benchmarks and the suggested-goal inputs for non-owners; `/api/pl` blanks period totals and benchmarks
+  (the Revenue Calendar's per-day goals stay); `/api/kitchen-labor` forces the percentages-only view for `kitchen`
+  whatever the query says, and zeroes the Executive Chef's pay for `gm` (owner compensation). `/api/nightly-margin`,
+  `/api/breakeven`, Budget, Cash & Loans, Benefits, Settings, etc. are owner-only. Pages hide the matching pieces
+  (Cost Pace, Budget Runway, the Profit toggle, the Breakeven card, the Executive Chef toggle) via `useMe()`.
+- **App side**: [`useMe`](app/composables/useMe.ts) (`/api/me`), a global route guard
+  ([`role.global.ts`](app/middleware/role.global.ts)), role-filtered nav (`visibleNav` in `navigation.ts`), and
+  **Settings › People & Access** ([`PeopleAccessSettings.vue`](app/components/PeopleAccessSettings.vue), routes
+  `/api/settings/people` GET/POST/DELETE, owner-only, refuses to remove or demote the last owner).
+- **Seeded** by the migration: `kmillercc@gmail.com` owner (a guess at the owner's Access email), `ataylor@urbanhearth.net`
+  gm, `rebecca.m.daulton@gmail.com` kitchen. Anyone else on the Cloudflare allow-list (e.g. a second owner) is
+  refused until added under People & Access (sign in at restaurant-pulse.fly.dev with Basic Auth to do so). The
+  Cloudflare allow-list itself is still edited in Cloudflare.
+- **Verified** against the real middleware on a local dev server with a throwaway key standing in for Cloudflare
+  (signed tokens for all three roles plus an unknown email): status codes for ~30 page/API combinations, the
+  redactions, the forced kitchen view, and the rendered nav per role. Not clicked through in a browser, and not yet
+  tried with real Cloudflare logins in production.
+- **Not covered**: a GM can see the Home page's weekly goal and the Next 7 Nights booking pace; the GM's Capacity page
+  still lists per-area spend assumptions (read-only). Kitchen can use the "Sync now" button.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's

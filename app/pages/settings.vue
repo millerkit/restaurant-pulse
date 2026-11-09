@@ -22,6 +22,21 @@ const { data: migrations } = await useFetch<MigrationStatus>('/api/settings/migr
 const migrationsPending = computed(() => (migrations.value?.available ? migrations.value.pending : []))
 const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
+// OpenTable upload freshness. Booking pace on This Week is only as current as
+// the last upload, so anything older than this many days is flagged.
+const RESERVATIONS_STALE_AFTER_DAYS = 3
+type ReservationsStatus =
+  | { hasData: false }
+  | { hasData: true, rows: number, dateFrom: string, dateTo: string, imports: { importedAt: string }[] }
+const { data: reservations, pending: reservationsPending } = await useFetch<ReservationsStatus>('/api/reservations', { server: false })
+const reservationsLastUpload = computed(() => (reservations.value?.hasData ? reservations.value.imports[0]?.importedAt ?? null : null))
+const reservationsAgeDays = computed(() => {
+  if (!reservationsLastUpload.value) return null
+  return Math.floor((Date.now() - new Date(reservationsLastUpload.value).getTime()) / 86_400_000)
+})
+const reservationsStale = computed(() => reservationsAgeDays.value !== null && reservationsAgeDays.value >= RESERVATIONS_STALE_AFTER_DAYS)
+const fmtDay = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+
 </script>
 
 <template>
@@ -62,8 +77,17 @@ const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { mon
         <div class="settings-card">
           <div class="settings-card-top">
             <span class="settings-card-title">OpenTable reservations</span>
+            <span v-if="reservationsPending" class="chip neutral">Checking…</span>
+            <span v-else-if="!reservations?.hasData" class="chip warning">▲ No data</span>
+            <span v-else-if="reservationsStale" class="chip warning">▲ Upload due</span>
+            <span v-else class="chip good">✓ Up to date</span>
           </div>
-          <p class="settings-card-body">Upload a reservation export to update the “Next 7 Nights” booking pace on This Week. Weekly at least.</p>
+          <p v-if="reservations?.hasData && reservationsLastUpload" class="settings-card-body">
+            Last uploaded {{ fmtDateTime(reservationsLastUpload) }}<template v-if="reservationsAgeDays">
+              ({{ reservationsAgeDays }} days ago)</template>. Covers {{ fmtDay(reservations.dateFrom) }} – {{ fmtDay(reservations.dateTo) }}, {{ reservations.rows.toLocaleString() }} reservations.
+            <template v-if="reservationsStale"> The “Next 7 Nights” booking pace on This Week is out of date until you upload a fresh export.</template>
+          </p>
+          <p v-else class="settings-card-body">Upload a reservation export to update the “Next 7 Nights” booking pace on This Week. Every few days at least.</p>
           <NuxtLink class="settings-btn" to="/reservations">Upload reservations</NuxtLink>
         </div>
 
@@ -90,6 +114,11 @@ const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { mon
     <section class="settings-section">
       <h2 class="settings-h">Targets &amp; Alert Levels</h2>
       <TargetsSettings />
+    </section>
+
+    <section class="settings-section">
+      <h2 class="settings-h">People &amp; Access</h2>
+      <PeopleAccessSettings />
     </section>
 
     <section class="settings-section">

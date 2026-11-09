@@ -22,6 +22,8 @@ export type NavSection = {
   pages: NavPage[]
 }
 
+import { roleCanViewPage, type Role } from '../../shared/utils/access'
+
 export const NAV_SECTIONS: NavSection[] = [
   {
     key: 'home',
@@ -93,4 +95,11 @@ export function findActive(path: string, tab: string | undefined): { section: Na
     }
   }
   return null
+}
+
+// The sections and pages a role can see (same rules the server enforces, shared/utils/access.ts).
+export function visibleNav(role: Role): NavSection[] {
+  return NAV_SECTIONS
+    .map(s => ({ ...s, pages: s.pages.filter(p => roleCanViewPage(role, p.path, p.tab ?? null)) }))
+    .filter(s => s.pages.length > 0)
 }

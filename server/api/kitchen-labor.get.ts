@@ -89,8 +89,14 @@ interface WeekAcc {
 // compensation) is zeroed, and off-cycle labor dollars are dropped. It is a
 // downgrade only, so it's safe as a plain query param; phase 2's roles will
 // force it for the kitchen role server-side.
+//
+// Phase 2 (2026-11-09): the kitchen role is forced into this view here, whatever the query says.
+// The gm role gets dollars but, like the kitchen view, never the Executive Chef's pay (owner
+// compensation), so it is zeroed for gm too.
 export default defineEventHandler((event) => {
-  const kitchenView = getQuery(event).view === 'kitchen'
+  const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
+  const kitchenView = role === 'kitchen' || getQuery(event).view === 'kitchen'
+  const hideExecChef = role === 'gm'
   const db = useDb()
   const { asOf } = db.prepare('SELECT MAX(date) AS asOf FROM daily_line_items').get() as { asOf: string | null }
   if (!asOf) return { hasData: false as const }
@@ -197,6 +203,8 @@ export default defineEventHandler((event) => {
       weeks: rows
     }
   }
+
+  if (hideExecChef) for (const r of rows) r.laborExecChef = 0
 
   return {
     hasData: true as const,

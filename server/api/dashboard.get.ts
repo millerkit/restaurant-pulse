@@ -368,7 +368,7 @@ export default defineEventHandler((event) => {
   // state rather than a fabricated number.
   const toastRow = db.prepare('SELECT covers, labor_hours AS laborHours FROM daily_toast_metrics WHERE date = ?').get(asOfDate) as { covers: number, laborHours: number } | undefined
 
-  return {
+  const payload = {
     asOfDate,
     asOfYear,
     asOfMonth,
@@ -420,6 +420,23 @@ export default defineEventHandler((event) => {
         cogsPct,
         cogsPctSource
       }
+    }
+  }
+  // Non-owner roles (see shared/utils/access.ts) get the sales-side numbers only: the cost
+  // pace, budget runway and suggested-goal inputs are blanked here, not just hidden by the page.
+  const role = (event.context.auth as { role?: string } | undefined)?.role ?? 'owner'
+  if (role === 'owner') return payload
+  return {
+    ...payload,
+    month: { actuals: { ...EMPTY_TOTALS }, budget: { ...EMPTY_TOTALS }, ownerCompLabor: 0, ownerCompAccountNames: [] as string[] },
+    yearToDate: {
+      actuals: { ...EMPTY_TOTALS }, budget: { ...EMPTY_TOTALS }, projectedRevenue: 0,
+      monthlyCategoryBudget: [] as unknown[], unbudgetedPastMonthCount: 0
+    },
+    benchmarks: [] as unknown[],
+    weeklyTargets: {
+      ...payload.weeklyTargets,
+      suggestedWeeklyGoal: { amount: null, laborMonthEstimate: null, opexMonthEstimate: null, principalDueThisMonth: null, operatingWeeksThisMonth: null, cogsPct: null, cogsPctSource: null }
     }
   }
 })

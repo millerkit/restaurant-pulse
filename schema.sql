@@ -403,6 +403,15 @@ CREATE TABLE holiday_closures (
   updated_at  TEXT NOT NULL
 );
 
+-- Per-person access (2026-11-09), keyed by the email Cloudflare Access verifies.
+-- Roles and what they can see: shared/utils/access.ts. Edited in Settings > People & Access.
+CREATE TABLE user_roles (
+  email       TEXT PRIMARY KEY,
+  role        TEXT NOT NULL CHECK (role IN ('owner', 'gm', 'kitchen')),
+  name        TEXT,
+  updated_at  TEXT NOT NULL
+);
+
 -- Per-area, per-month expected nightly covers — the real editable
 -- projection input as of 2026-08-07, replacing capacity_seasonality's old
 -- single blended expected_pct. Stored as a raw covers count (not a %):
