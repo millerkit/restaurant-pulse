@@ -4791,7 +4791,12 @@ $15,520 ($199,579 to $184,059 excluding SBA), and the weekly goal drops about $8
   `loan_schedule_miller_backup`). **Balance confirmed 2026-11-09:** QuickBooks's liability register
   (2727 Notes Payable, Steve and Mary) shows $143,159.84, matching the schedule's $143,159.82, so no revert is needed. The
   lender's $142,682 figure (quoted payment $2,909/month) was about $477 low; the correct level payment for the real balance
-  is $2,913.91 (about $5/month more). Paying $2,909 instead would leave roughly $295 owing at the end. The monthly interest accrual entry in QuickBooks is still needed.
+  is $2,913.91 (about $5/month more). Paying $2,909 instead would leave roughly $295 owing at the end.
+  **Amendment drafted 2026-11-09** (`reports/miller-note-amendment/First Amendment to Promissory Note - Miller.docx`, not
+  committed, for the user and the lenders to sign): defers Nov 15 2026 – Jun 15 2027, accrues $3,645.80 (8 × $455.73, monthly
+  one-twelfth rate, no compounding during the deferral) and adds it to principal on Jun 15 2027 ($146,805.64), then 55
+  payments of $2,913.91 from Jul 15 2027 with the last, Jan 15 2032, at $2,913.86. The original Note's maturity (Jun 4 2031)
+  is extended to Jan 15 2032; the rate stays 3.82%. The Note requires a written amendment signed by both sides. The monthly interest accrual entry in QuickBooks is still needed.
 
 ## 2027 budget: year toggle + "Build 2027 budget" — 2026-11-02
 
