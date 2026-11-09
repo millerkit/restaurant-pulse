@@ -5338,7 +5338,11 @@ server for pages **and** API routes, not just hidden in the nav.
   cent (the old $1.9K gap was gone); the only differences were stale rows from entries edited in QuickBooks after they synced
   (Dues & Subscriptions +$402.19, Advertising −$110, Worker's comp −$76.52 / Gas +$76.52, Retail Food +$0.30). The script
   gained `--fix`, which backs up the database (`data/backup-pre-diff-fix-*.sqlite`, contains QuickBooks tokens: delete it
-  afterward) and replaces just the differing accounts' rows in the range with QuickBooks's. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
+  afterward) and replaces just the differing accounts' rows in the range with QuickBooks's.
+  **Applied in production 2026-11-09 and re-checked: all six categories (food & drink cost, labor, operating expenses,
+  other income, other expense, revenue) match QuickBooks to the cent for 2026-01-01..2026-11-08, 0 accounts differ.** Re-run
+  `node scripts/diff-qbo-pl.mjs --since=<date>` after recoding or deleting entries in QuickBooks, since the nightly sync
+  never revisits or removes already-synced rows. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
   (inactive/renamed), a backdated entry the forward-only sync never reached, or a parent account's own postings.
 
 ## Not yet done
@@ -5367,7 +5371,7 @@ server for pages **and** API routes, not just hidden in the nav.
 - Deploying the Capacity Nov–Apr/May–Oct calculation change (above) to
   production and saving once there to correct Salon's stale stored capacity
   (80/80 vs. the correct 60/60) — done in local dev only so far.
-- A small COGS (food & drink cost) discrepancy (~$1,926.79, ~0.25% of revenue)
+- (Resolved 2026-11-09, see below) A small COGS (food & drink cost) discrepancy (~$1,926.79, ~0.25% of revenue)
   surfaced by the net income investigation above, not yet root-caused.
   2026-11-09: `scripts/diff-qbo-pl.mjs` now compares the app against QuickBooks account by
   account (see "Roles tweaks, budget double-counting and a QuickBooks diff script"); run it
