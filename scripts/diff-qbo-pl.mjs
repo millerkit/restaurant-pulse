@@ -4,7 +4,15 @@
 // Nothing is written except a refreshed OAuth token, which QuickBooks rotates on every refresh
 // (same as the backfill script).
 //
-//   node scripts/diff-qbo-pl.mjs [--since=YYYY-MM-DD] [--until=YYYY-MM-DD] [--category=cogs]
+//   node scripts/diff-qbo-pl.mjs [--since=YYYY-MM-DD] [--until=YYYY-MM-DD] [--category=cogs] [--fix]
+//
+// --fix (2026-11-09) then replaces, for just the accounts listed as different, the app's rows in the
+// range with what QuickBooks returned: it deletes that account's daily_line_items in the range and
+// inserts QuickBooks's. This is what repairs an entry QuickBooks edited, recategorized or deleted
+// after it synced (the nightly sync only moves forward and never removes a row). It first saves a
+// VACUUM INTO copy next to the database (data/backup-pre-diff-fix-<time>.sqlite, which contains the
+// QuickBooks tokens: delete it once the numbers are trusted) and runs in one transaction. Without
+// --fix nothing is written. Accounts with no local row are reported but never touched.
 //
 // Run in production inside the container (the QBO credentials are in its environment):
 //   fly ssh console -a restaurant-pulse -C "node scripts/diff-qbo-pl.mjs --since=2026-01-01 --category=cogs"
@@ -129,10 +137,12 @@ console.log(`Comparing ${since}..${until} (${environment}, cash basis) in ${chun
 let tokenRow = loadTokenRow()
 const realmId = tokenRow.realm_id
 const qboTotals = new Map() // qboAccountId -> amount
+const qboItems = [] // every {date, qboAccountId, amount} QuickBooks returned
 for (const { start, end } of chunks) {
   const accessToken = await getValidAccessToken(tokenRow)
   tokenRow = db.prepare('SELECT * FROM qbo_tokens WHERE id = 1').get()
   const report = await fetchReportWithRetry(accessToken, realmId, start, end)
+  for (const item of reportToLineItems(report)) qboItems.push(item)
   for (const item of reportToLineItems(report)) qboTotals.set(item.qboAccountId, (qboTotals.get(item.qboAccountId) ?? 0) + item.amount)
   await new Promise(r => setTimeout(r, 700))
 }
@@ -146,12 +156,12 @@ const byQbo = new Map(accounts.filter(a => a.qboId).map(a => [a.qboId, a]))
 for (const [qboId, qbo] of qboTotals) {
   const a = byQbo.get(qboId)
   if (!a) { rows.push({ category: '(no local account)', num: '', name: `QBO account id ${qboId}`, active: '', qbo, local: 0 }); continue }
-  rows.push({ category: a.category, num: a.num ?? '', name: a.name, active: a.active ? 'yes' : 'NO', qbo, local: localTotals.get(a.id) ?? 0 })
+  rows.push({ id: a.id, category: a.category, num: a.num ?? '', name: a.name, active: a.active ? 'yes' : 'NO', qbo, local: localTotals.get(a.id) ?? 0, qboId })
 }
 for (const a of accounts) {
   if (a.qboId && qboTotals.has(a.qboId)) continue
   const local = localTotals.get(a.id) ?? 0
-  if (Math.abs(local) > 0.005) rows.push({ category: a.category, num: a.num ?? '', name: a.name, active: a.active ? 'yes' : 'NO', qbo: 0, local })
+  if (Math.abs(local) > 0.005) rows.push({ id: a.id, category: a.category, num: a.num ?? '', name: a.name, active: a.active ? 'yes' : 'NO', qbo: 0, local, qboId: a.qboId })
 }
 const diffs = rows.filter(r => Math.abs(r.qbo - r.local) > 0.005 && (!onlyCategory || r.category === onlyCategory || r.category.startsWith('('))).sort((x, y) => Math.abs(y.qbo - y.local) - Math.abs(x.qbo - x.local))
 
@@ -161,4 +171,26 @@ console.log('\nCategory totals (QuickBooks vs app):')
 for (const [c, t] of [...cat].sort()) console.log(`  ${c.padEnd(20)} QBO ${money(t.qbo).padStart(14)}  app ${money(t.local).padStart(14)}  diff ${money(t.local - t.qbo).padStart(12)}`)
 console.log(`\nAccounts that differ${onlyCategory ? ` (category ${onlyCategory})` : ''}: ${diffs.length}`)
 for (const r of diffs) console.log(`  ${String(r.category).padEnd(14)} ${String(r.num).padEnd(6)} ${r.name.slice(0, 40).padEnd(40)} active:${String(r.active).padEnd(3)} QBO ${money(r.qbo).padStart(13)}  app ${money(r.local).padStart(13)}  diff ${money(r.local - r.qbo).padStart(12)}`)
+
+if (args.fix) {
+  const fixable = diffs.filter(r => r.id != null)
+  if (!fixable.length) { console.log('\nNothing to fix.'); db.close(); process.exit(0) }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backup = join(rootDir, 'data', `backup-pre-diff-fix-${stamp}.sqlite`)
+  db.exec(`VACUUM INTO '${backup.replace(/'/g, "''")}'`)
+  console.log(`\nBackup saved: ${backup}`)
+  const del = db.prepare('DELETE FROM daily_line_items WHERE account_id = ? AND date BETWEEN ? AND ?')
+  const ins = db.prepare('INSERT INTO daily_line_items (date, account_id, amount) VALUES (?, ?, ?)')
+  db.transaction(() => {
+    for (const r of fixable) {
+      const gone = del.run(r.id, since, until).changes
+      let added = 0
+      if (r.qboId) for (const it of qboItems) if (it.qboAccountId === r.qboId) { ins.run(it.date, r.id, it.amount); added++ }
+      console.log(`  fixed ${r.num} ${r.name}: removed ${gone} row(s), wrote ${added}`)
+    }
+  })()
+  console.log('Done. Re-run without --fix to confirm everything matches.')
+} else if (diffs.length) {
+  console.log('\nRe-run with --fix to replace these accounts\' rows in the app with QuickBooks\'s (a backup is saved first).')
+}
 db.close()

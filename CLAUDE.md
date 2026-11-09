@@ -5334,7 +5334,11 @@ server for pages **and** API routes, not just hidden in the nav.
   dates, per account, with category totals (only a refreshed OAuth token is written). Run it in production:
   `fly ssh console -a restaurant-pulse -C "node scripts/diff-qbo-pl.mjs --since=2026-01-01 --category=cogs"`. It can't run
   against local dev (the sync guard and sandbox connection). Written 2026-11-09 to chase the ~$1.9K food & drink cost
-  mismatch; not yet run. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
+  mismatch. **Run 2026-11-09 against production**: food & drink cost, labor, other income and other expense matched to the
+  cent (the old $1.9K gap was gone); the only differences were stale rows from entries edited in QuickBooks after they synced
+  (Dues & Subscriptions +$402.19, Advertising −$110, Worker's comp −$76.52 / Gas +$76.52, Retail Food +$0.30). The script
+  gained `--fix`, which backs up the database (`data/backup-pre-diff-fix-*.sqlite`, contains QuickBooks tokens: delete it
+  afterward) and replaces just the differing accounts' rows in the range with QuickBooks's. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
   (inactive/renamed), a backdated entry the forward-only sync never reached, or a parent account's own postings.
 
 ## Not yet done
