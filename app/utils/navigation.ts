@@ -13,6 +13,8 @@ export type NavPage = {
   // sibling entry" — used for /capacity, where one page serves two entries.
   path: string
   tab?: string | null
+  // Shown only to these roles (an owner can still open the page by URL / Preview as).
+  onlyFor?: Role[]
 }
 
 export type NavSection = {
@@ -29,7 +31,10 @@ export const NAV_SECTIONS: NavSection[] = [
     key: 'home',
     label: 'Home',
     icon: 'home',
-    pages: [{ label: 'This Week', to: '/', path: '/' }]
+    pages: [
+      { label: 'This Week', to: '/', path: '/', onlyFor: ['owner', 'gm'] },
+      { label: 'This Week', to: '/kitchen-week', path: '/kitchen-week', onlyFor: ['kitchen'] }
+    ]
   },
   {
     key: 'sales',
@@ -100,6 +105,6 @@ export function findActive(path: string, tab: string | undefined): { section: Na
 // The sections and pages a role can see (same rules the server enforces, shared/utils/access.ts).
 export function visibleNav(role: Role): NavSection[] {
   return NAV_SECTIONS
-    .map(s => ({ ...s, pages: s.pages.filter(p => roleCanViewPage(role, p.path, p.tab ?? null)) }))
+    .map(s => ({ ...s, pages: s.pages.filter(p => (!p.onlyFor || p.onlyFor.includes(role)) && roleCanViewPage(role, p.path, p.tab ?? null)) }))
     .filter(s => s.pages.length > 0)
 }

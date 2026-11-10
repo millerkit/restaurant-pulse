@@ -7,8 +7,11 @@
 //   gm      - read-only: This Week (with cost pace and budget runway), Daily Results (sales and
 //             profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
 //             with dollars. Owner compensation is withheld server-side (see the redactions).
-//   kitchen - read-only: Kitchen Hours & Cost, percentages and hours only (forced
-//             server-side, see server/api/kitchen-labor.get.ts).
+//   kitchen - read-only: This Week for the kitchen (covers and bookings only, /kitchen-week) and
+//             Kitchen Hours & Cost, percentages and hours only (forced server-side, see
+//             server/api/kitchen-labor.get.ts). Kitchen is deliberately NOT allowed on
+//             /api/dashboard or /api/booking-pace (they carry dollar goals, budgets, special-night
+//             revenue); /api/kitchen-week selects only covers, so there is nothing to redact.
 // Default deny: anything not listed here is owner-only.
 
 export type Role = 'owner' | 'gm' | 'kitchen'
@@ -21,7 +24,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 const PAGES: Record<Exclude<Role, 'owner'>, string[]> = {
   gm: ['/', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/budget'],
-  kitchen: ['/kitchen-labor']
+  kitchen: ['/kitchen-week', '/kitchen-labor']
 }
 
 // Read-only API prefixes (matched exactly or as a path prefix). Anything with a
@@ -35,7 +38,7 @@ const API_GET: Record<Exclude<Role, 'owner'>, string[]> = {
     // Budget Check
     '/api/budget/targets', '/api/budget/actuals', '/api/budget/overspending-detail'
   ],
-  kitchen: [...COMMON_GET, '/api/kitchen-labor']
+  kitchen: [...COMMON_GET, '/api/kitchen-labor', '/api/kitchen-week']
 }
 // Writes a non-owner may make: the "Sync now" button in the page header (not for the Sous Chef,
 // 2026-11-09), and /api/view-as, whose handler itself only honors a real owner.
@@ -68,5 +71,5 @@ export function roleCanCallApi(role: Role, path: string, method: string): boolea
 }
 
 export function roleHome(role: Role): string {
-  return role === 'kitchen' ? '/kitchen-labor' : '/'
+  return role === 'kitchen' ? '/kitchen-week' : '/'
 }

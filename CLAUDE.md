@@ -5294,7 +5294,29 @@ server for pages **and** API routes, not just hidden in the nav.
   redactions, the forced kitchen view, and the rendered nav per role. Not clicked through in a browser, and not yet
   tried with real Cloudflare logins in production.
 - **Not covered**: a GM can see the Home page's weekly goal and the Next 7 Nights booking pace; the GM's Capacity page
-  still lists per-area spend assumptions (read-only). Kitchen can use the "Sync now" button.
+  still lists per-area spend assumptions (read-only). (Kitchen's "Sync now" was removed 2026-11-09, see below.)
+
+## Kitchen This Week (Sous Chef Home page) — 2026-11-09
+
+The Sous Chef's role now has a Home page, **This Week (kitchen)** at `/kitchen-week` (`app/pages/kitchen-week.vue`),
+the covers-only counterpart of the owner/GM This Week. The user's call, at the Sous Chef's likely need (prep, ordering,
+scheduling): covers and bookings, never dollars.
+
+- **What it shows**: this week's expected covers per night (the same day-specific pattern the owner page uses, converted to
+  covers) against real Toast covers so far, with a week-to-date chip; and the Next 7 Nights OpenTable booking pace. Buyouts,
+  events and closures show as chips and are left out of the week-to-date comparison.
+- **Server side, not just hidden**: `GET /api/kitchen-week` selects only counts, dates and labels. It is the only dashboard-like
+  API the kitchen role may call. `/api/dashboard` and `/api/booking-pace` stay owner/GM-only (default deny in
+  `shared/utils/access.ts`), because they carry the weekly sales goal, per-night dollar targets, budgets and a special
+  night's expected revenue. Verified as the Sous Chef preview on local dev: `/api/dashboard`, `/api/booking-pace`,
+  `/api/capacity`, `/api/pl` and `/api/budget/*` all 403; `/` redirects to `/kitchen-week`; the kitchen-week response has no
+  dollar fields.
+- **Navigation**: `NavPage.onlyFor` (`app/utils/navigation.ts`) gives the kitchen role its own "This Week" entry under Home
+  (owner/GM keep `/`). `roleHome('kitchen')` is now `/kitchen-week`. Kitchen Hours & Cost is unchanged.
+- **Known, accepted**: a special night's free-text note (entered on the Sales Plan) is shown to the kitchen, so avoid putting
+  dollar amounts in those notes. Expected covers come from the owner's weekly goal, so with no goal set they show "—".
+- Verified on local dev in Chrome (Preview as Sous Chef) and by typecheck (no new errors). Not yet deployed, and not seen
+  with the real Sous Chef login.
 
 ## UI cleanup phase 3: plainer wording, staff and owner-pay rules in Settings — 2026-11-09
 
@@ -5609,6 +5631,7 @@ was deployed:
 - [`server/api/revenue-projection.get.ts`](server/api/revenue-projection.get.ts) / [`server/utils/special-nights.ts`](server/utils/special-nights.ts) — night-by-night current-month projection; dated special nights and holiday closures, and the one rule for how they replace a normal night (see "Named holiday closures")
 - [`server/api/booking-pace.get.ts`](server/api/booking-pace.get.ts) — Next 7 Nights booking pace on the Dashboard (see "Booking pace: next 7 nights")
 - [`app/components/BohHoursReport.vue`](app/components/BohHoursReport.vue) / [`server/utils/boh-hours-report.ts`](server/utils/boh-hours-report.ts) — BOH hours-by-week report on the Kitchen Labor tab, plus its downloadable HTML (see "BOH hours report on the Kitchen Labor tab")
+- [`app/pages/kitchen-week.vue`](app/pages/kitchen-week.vue) / [`server/api/kitchen-week.get.ts`](server/api/kitchen-week.get.ts) — covers-only This Week for the Sous Chef role (route `/kitchen-week`; see "Kitchen This Week")
 - [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue) / [`server/api/staff-hours.get.ts`](server/api/staff-hours.get.ts) — Staff Hours: avg hrs/week per employee over 90 days, full-time (30+) vs. part-time (route `/staff-hours`; see "Staff Hours report" above)
 - [`server/utils/toast-employee-hours.ts`](server/utils/toast-employee-hours.ts) / [`scripts/backfill-toast-employee-hours.mjs`](scripts/backfill-toast-employee-hours.mjs) — per-employee hours + names from Toast's Labor API
 - [`app/pages/cashflow.vue`](app/pages/cashflow.vue) — Cash Flow tab: Free Cash Flow, P&L vs. Cash Flow view, debt service calendar, reserve savings plan (route `/cashflow`)
