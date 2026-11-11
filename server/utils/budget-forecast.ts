@@ -32,8 +32,16 @@ type Db = Database.Database
 export const FOOD_SALES = '4010'
 export const BEVERAGE_SALES = ['4022', '4024', '4026', '4028']
 // Food & drink cost lines and the sales line each is a % of.
-export const COST_PAIRS: { cost: string, sales: string }[] = [
-  { cost: '5010', sales: '4010' },
+// Food (2026-11-11): catering and event food is bought through the same Food Costs
+// account, so food cost % is measured against ALL food sales (restaurant + on-site
+// event + off-site event + catering food), and budgeted against all of them too: a
+// month with catering budgeted gets that catering's food cost, a month without it
+// isn't charged for some other month's catering. Assumes catering runs the same food
+// cost % as the dining room. extraCost (5220 Catering Food Costs, rarely used) counts
+// in the %, and its own budget is subtracted from what 5010 gets so the total is right.
+// extraSales lines are budgeted by hand (not written by the forecast).
+export const COST_PAIRS: { cost: string, sales: string, extraCost?: string[], extraSales?: string[] }[] = [
+  { cost: '5010', sales: '4010', extraCost: ['5220'], extraSales: ['4150', '4180', '4230'] },
   { cost: '5110', sales: '4022' },
   { cost: '5120', sales: '4024' },
   { cost: '5125', sales: '4026' },
@@ -88,9 +96,10 @@ export function costWindow(db: Db, today: string): CostWindow {
     JOIN accounts a ON a.id = dli.account_id
     WHERE a.account_number = ? AND dli.date BETWEEN ? AND ?
   `)
+  const total = (nums: string[]) => nums.reduce((sum, n) => sum + (sumFor.get(n, from, to) as { total: number }).total, 0)
   for (const p of COST_PAIRS) {
-    const cost = (sumFor.get(p.cost, from, to) as { total: number }).total
-    const sales = (sumFor.get(p.sales, from, to) as { total: number }).total
+    const cost = total([p.cost, ...(p.extraCost ?? [])])
+    const sales = total([p.sales, ...(p.extraSales ?? [])])
     pctByCost[p.cost] = sales > 0 ? cost / sales : null
   }
   const mixFor = db.prepare(`
@@ -179,6 +188,13 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
   const window = costWindow(db, today)
 
   const existing = db.prepare('SELECT amount, pinned FROM budget_targets WHERE year = ? AND month = ? AND account_id = ?')
+  // Hand-budgeted lines (event/catering food sales, catering food cost), by account number.
+  const budgetedStmt = db.prepare(`
+    SELECT COALESCE(SUM(bt.amount), 0) AS amount FROM budget_targets bt
+    JOIN accounts a ON a.id = bt.account_id
+    WHERE a.account_number = ? AND a.is_active = 1 AND bt.year = ? AND bt.month = ?
+  `)
+  const budgetedAmount = (num: string, year: number, month: number) => (budgetedStmt.get(num, year, month) as { amount: number }).amount
   const upsert = db.prepare(`
     INSERT INTO budget_targets (year, month, account_id, amount, auto_amount, pinned)
     VALUES (@year, @month, @accountId, @amount, @amount, 0)
@@ -208,7 +224,9 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
         const salesId = idByNum.get(p.sales)
         const salesRow = salesId == null ? undefined : existing.get(year, month, salesId) as { amount: number, pinned: number } | undefined
         const salesAmount = salesRow?.pinned ? salesRow.amount : (sales.get(p.sales) ?? 0)
-        values.set(p.cost, pct * salesAmount)
+        const extraSales = (p.extraSales ?? []).reduce((sum, n) => sum + budgetedAmount(n, year, month), 0)
+        const extraCost = (p.extraCost ?? []).reduce((sum, n) => sum + budgetedAmount(n, year, month), 0)
+        values.set(p.cost, Math.max(0, pct * (salesAmount + extraSales) - extraCost))
       }
       for (const [num, value] of values) {
         const accountId = idByNum.get(num)

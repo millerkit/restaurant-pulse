@@ -5518,6 +5518,19 @@ Older sections describing those buttons are history.
   Dec food cost and the 2027 lines from "Build 2027 budget" / `seed-2027-budget-extras.mjs` (their revenue
   and these cost lines are now redundant; other lines they wrote are untouched). November is untouched.
   Previous values: `budget_targets_pre_auto`. The Cash & Loans Budget outlook card moves with them.
+- **Food cost includes catering (2026-11-11, same day, after the first production review)**: catering and
+  event food is bought through 5010, so September's catering inflated the restaurant-only food %. Food cost %
+  is now (5010 + 5220) ÷ all food sales (4010 + 4150 on-site event food + 4180 off-site event food + 4230
+  catering food) over the window. Each month's 5010 = that % × (budgeted restaurant food + those budgeted
+  event/catering food lines) − 5220's own budget, so the two food cost lines total right. (`COST_PAIRS`
+  `extraCost`/`extraSales`.) Assumes catering runs the dining room's food cost %. Purchase timing (food
+  bought the month before an event) is mostly absorbed by the three-month window; catering-heavy months are
+  still flagged. Retail food (4320) is not included.
+  **5220 leftovers**: the old client-side recompute spread food cost across every Food-tagged cost leaf, so
+  some months carry a 5220 budget that isn't catering (local dev had ~$20K/month Sep–Dec). Totals stay right,
+  but 5010 shows only the remainder; zero 5220 in those months to see the full figure on 5010.
+- **Month tabs moved to the top** of the Sales Plan and Budget pages (under the year toggle, `.page-tabs`),
+  since every panel below them is for the selected month.
 - **Verified locally** (temporary Aug–Oct sales/costs and buyout counts added, then everything restored from
   a backup and checked to zero differences): Nov frozen; Dec food sales = Capacity food to the cent; a
   2027 Thursday buyout added exactly (rate − normal night) × food share; costs = window % × sales (and ×

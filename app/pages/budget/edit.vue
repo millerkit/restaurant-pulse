@@ -1232,6 +1232,20 @@ function exportForQuickBooks() {
         </div>
         <BuildNextYearBudget :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
       </details>
+      <!-- Month tabs at the top (2026-11-11): the panels below are for the selected month. -->
+      <div class="month-tabs page-tabs" role="tablist" aria-label="Month">
+        <button
+          v-for="(name, i) in MONTH_NAMES" :key="name"
+          type="button"
+          :class="['month-tab', (editMonth === i + 1 && !viewingAnnualTotal) && 'active', !monthHasBudget(i + 1) && 'unbudgeted']"
+          @click="selectMonth(i + 1)"
+        >{{ name }}</button>
+        <button
+          type="button"
+          :class="['month-tab', 'annual-total-tab', viewingAnnualTotal && 'active']"
+          @click="selectAnnualTotal"
+        >Total</button>
+      </div>
       <section>
         <div v-if="showLivePace" class="live-pace-card">
           <div class="live-pace-head">
@@ -1325,19 +1339,6 @@ function exportForQuickBooks() {
               type="button" class="filter-tab" :class="{ active: hideZeroRows }"
               @click="hideZeroRows = !hideZeroRows"
             >{{ hideZeroRows ? 'Show' : 'Hide' }} $0 rows</button>
-          </div>
-          <div class="month-tabs">
-            <button
-              v-for="(name, i) in MONTH_NAMES" :key="name"
-              type="button"
-              :class="['month-tab', (editMonth === i + 1 && !viewingAnnualTotal) && 'active', !monthHasBudget(i + 1) && 'unbudgeted']"
-              @click="selectMonth(i + 1)"
-            >{{ name }}</button>
-            <button
-              type="button"
-              :class="['month-tab', 'annual-total-tab', viewingAnnualTotal && 'active']"
-              @click="selectAnnualTotal"
-            >Total</button>
           </div>
           <div v-if="!viewingAnnualTotal && (selectedMonthClosed || (selectedMonthIsCurrent && selectedMonthHasActuals))" class="tint-legend">
             Row shading vs. budget:
@@ -1508,6 +1509,7 @@ function exportForQuickBooks() {
                     <div v-if="selectedMonthIsAuto" class="section-note">
                       <strong>Automatic:</strong> {{ MONTH_NAMES[editMonth - 1] }} hasn't started, so food &amp; drink cost follows its sales at recent cost %s<template v-if="costWindowLabel"> ({{ costWindowLabel }} actuals)</template>:
                       <template v-for="(pct, num, i) in (costForecast?.pctByCost ?? {})" :key="num"><template v-if="i > 0">, </template>{{ COST_LABELS[num] ?? num }} <strong>{{ pct != null ? (pct * 100).toFixed(1) + '%' : 'n/a' }}</strong></template>.
+                      Food's % is of all food sales (restaurant, event and catering food), since catering food is bought through Food Costs too, and it's applied to all food sales budgeted for the month.
                       Type over a line to pin it; ↺ sends it back to automatic.
                       <template v-if="pinnedCostLines.length > 0">
                         <button class="mini-btn" :disabled="unpinStatus === 'running'" @click="unpinLines(pinnedCostLines)">Unpin all ({{ pinnedCostLines.length }})</button>
@@ -1520,7 +1522,7 @@ function exportForQuickBooks() {
                     <div v-if="selectedMonthIsAuto && costForecast?.mixedMonths.length" class="section-note">
                       <strong>{{ costForecast.mixedMonths.map(x => ymLabel(x.month)).join(', ') }}</strong>
                       had catering/event sales worth {{ costForecast.mixedMonths.map(x => Math.round(x.share * 100) + '%').join(', ') }}
-                      of dining sales, and catering purchases can't be separated from Food Costs, so the food % probably reads a little high.
+                      of dining sales. Those sales are in the food %, but if an event's food was bought in a different month the % can be off by a bit.
                     </div>
                     <div v-if="!selectedMonthIsAuto && !selectedMonthClosed" class="section-note">
                       {{ MONTH_NAMES[editMonth - 1] }}'s plan froze when the month started; food &amp; drink cost is kept as entered.
@@ -1713,6 +1715,8 @@ function exportForQuickBooks() {
   padding: 8px 8px 0;
   border-bottom: 1px solid var(--hair);
 }
+/* Page-level month tabs (above the month's panels), not attached to the table card. */
+.month-tabs.page-tabs { padding: 0; margin: 4px 0 16px; }
 .month-tab {
   font-size: 12px;
   font-weight: 700;

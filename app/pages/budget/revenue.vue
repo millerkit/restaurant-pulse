@@ -905,6 +905,21 @@ function formatNightDate(iso: string) {
       @synced="loadYear(); loadActualsYear()"
     />
     <BudgetYearToggle :confirm-leave="confirmYearSwitch" />
+    <!-- Month tabs at the top (2026-11-11): every panel below (automatic/frozen banner, buyouts,
+         special nights, the account table) is for the selected month. -->
+    <div class="month-tabs page-tabs" role="tablist" aria-label="Month">
+      <button
+        v-for="month in targetMonths" :key="month"
+        type="button"
+        :class="['month-tab', (editMonth === month && !viewingYearTotal) && 'active', !monthHasBudget(month) && 'unbudgeted']"
+        @click="selectMonth(month)"
+      >{{ MONTH_NAMES[month - 1] }}</button>
+      <button
+        type="button"
+        :class="['month-tab', 'annual-total-tab', viewingYearTotal && 'active']"
+        @click="selectYearTotal"
+      >Total</button>
+    </div>
 
     <div v-if="loadError" class="drill-card">
       <span class="chip critical">Couldn't load budget data</span>
@@ -1099,19 +1114,6 @@ function formatNightDate(iso: string) {
             <template v-if="nightlyProjectionUsable">Projected for core dine-in Food/Beverage is built night by night: synced sales so far, plus each remaining night's recent weekday average (or its Special Night amount below), nudged by OpenTable bookings for the next few nights.</template>
             <template v-else>Projected for core dine-in Food/Beverage extrapolates sales so far by the share of operating days elapsed (not enough recent nights to build it night by night).</template>
             Event Sales, Catering, Retail, and Other Service Income use that account's own budget (floored at actual-to-date) — those land in large, sporadic amounts rather than a steady daily trickle.
-          </div>
-          <div class="month-tabs">
-            <button
-              v-for="month in targetMonths" :key="month"
-              type="button"
-              :class="['month-tab', (editMonth === month && !viewingYearTotal) && 'active', !monthHasBudget(month) && 'unbudgeted']"
-              @click="selectMonth(month)"
-            >{{ MONTH_NAMES[month - 1] }}</button>
-            <button
-              type="button"
-              :class="['month-tab', 'annual-total-tab', viewingYearTotal && 'active']"
-              @click="selectYearTotal"
-            >Total</button>
           </div>
           <div v-if="!viewingYearTotal && selectedMonthIsCurrent && selectedMonthHasActuals" class="tint-legend">
             Row shading vs. budget:
@@ -1335,6 +1337,8 @@ function formatNightDate(iso: string) {
   top: 1px;
 }
 .month-tab.unbudgeted { color: var(--ink-2); opacity: 0.8; }
+/* Page-level month tabs (above the month's panels), not attached to the table card. */
+.month-tabs.page-tabs { padding: 0; margin: 4px 0 16px; }
 .month-tab.annual-total-tab { margin-left: 8px; }
 .month-tab.active {
   background: var(--surface);
