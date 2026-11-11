@@ -5537,6 +5537,83 @@ Older sections describing those buttons are history.
   a pinned sales figure); pin survives refresh; unpin restores the automatic figure; buyout save
   recomputes at once; both pages render the banner, pins and ↺ in the browser. Not checked on production data.
 
+## Spec: forecast snapshots and accuracy report (dynamic budgeting step 3) — written 2026-11-11, not built
+
+Written to be built from directly (possibly by a smaller model). Read "Automatic capacity forecast with
+pins" and "Automatic budget lines" above first. **Do not change the forecast math** in
+`server/utils/capacity-forecast.ts`, `capacity-history.ts`, `capacity-model.ts` or `budget-forecast.ts`;
+this step only records and reads what they produce.
+
+**Why**: past forecasts can't be reconstructed later (the forecast overwrites itself nightly), so the app
+must save them as it goes, to (a) measure how far off the forecast was at different lead times, (b) give each
+month a frozen record of what was planned when it started (Covers & Spend currently compares a closed month
+against the reused per-month row, which is now next year's forecast), and (c) answer the bookmarked Cash &
+Loans question about budget accuracy. Nothing can be backfilled, so it is only useful after weeks of
+snapshots: ship it early.
+
+**Decisions (already made)**
+- **Grain: month × metric, not per account.** Metrics: `sales` (all revenue-category leaf lines),
+  `core_sales` (`CORE_REVENUE_ACCOUNT_NUMBERS`), `food_drink_cost` (cogs), `labor`, `opex`,
+  `other_income`, `other_expense`, `net_income` (= sales − cost − labor − opex + other_income −
+  other_expense, same formula as `netIncome()` in `useBudgetData.ts`), `covers` and `max_covers` (from
+  `createCapacityModel(...).dayByDaySum` for the month), `capacity_sales` (its `expectedRevenue`).
+  Category sums must skip parent accounts (`NOT EXISTS` a child), like every other server-side budget sum.
+- **Sources**, stored side by side: `plan` = `budget_targets` for that month (for months that haven't started
+  this IS the automatic forecast); `live` = for the current month only, the night-by-night projection's
+  core sales (logic in `server/api/revenue-projection.get.ts`; move its body into a util, e.g.
+  `server/utils/revenue-projection.ts`, keep the route as a thin wrapper, and confirm the route's JSON is
+  byte-identical before and after, as was done for `capacity-model.ts`).
+- **Kinds**: `weekly` (every Monday) and `month_start` (the first sync on/after the 1st; this is the frozen
+  plan record). Same row shape for both.
+- **Months covered per snapshot**: the current month through 12 months ahead.
+- **When**: in `runNightlySync()` (`server/utils/qbo-sync-runner.ts`) right after `refreshForecasts()`, inside
+  its own try/catch that only logs. Idempotent: `INSERT OR REPLACE` keyed on (snapshot_date, kind, year,
+  month, source, metric), where snapshot_date = that week's Monday for `weekly` and the 1st for
+  `month_start`; skip if it already exists.
+- **Manual trigger** for local testing (the nightly sync refuses outside production):
+  `POST /api/forecast/snapshot` (owner-only by default, since access is default-deny), taking an optional
+  `{ date }` so a test can take a snapshot "as of" a given day.
+
+**Table (migration `0017-forecast-snapshots.mjs`, plus `schema.sql`)**
+```sql
+CREATE TABLE forecast_snapshots (
+  snapshot_date TEXT NOT NULL,          -- Monday (weekly) or the 1st (month_start)
+  kind          TEXT NOT NULL CHECK (kind IN ('weekly', 'month_start')),
+  year          INTEGER NOT NULL,
+  month         INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+  source        TEXT NOT NULL CHECK (source IN ('plan', 'live')),
+  metric        TEXT NOT NULL,
+  value         REAL NOT NULL,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (snapshot_date, kind, year, month, source, metric)
+);
+```
+
+**Accuracy report**: new owner-only page **Money › Forecast Accuracy** (`app/pages/forecast-accuracy.vue`,
+route `/forecast-accuracy`, entry in `app/utils/navigation.ts`'s Money section; non-owners are blocked by
+`shared/utils/access.ts` default deny, so add nothing there). Data from `GET /api/forecast/accuracy`:
+- For each **closed, fully synced** month (QBO `MAX(date)` ≥ month end, same test as `costWindow`), actuals
+  per metric from `daily_line_items` (and `daily_toast_metrics` for covers), and each snapshot's error
+  = (forecast − actual) ÷ actual, with lead time = weeks from snapshot_date to the month's 1st (negative =
+  taken during the month).
+- Page: a table per closed month (month-start plan vs. actual, and the forecasts 1, 4 and 8 weeks out),
+  plus a summary of mean absolute % error by lead bucket for `sales`, `core_sales`, `covers` and
+  `net_income`. Plain tables; no charts needed. Status coloring follows the existing chip conventions
+  (icon + label, never color alone). Say clearly on the page that it fills in over time.
+
+**Covers & Spend integration (do after the report works)**: in `server/api/capacity.get.ts`, for a closed
+or current month that has a `month_start` snapshot, use its `covers`, `max_covers` and `capacity_sales` as
+the month's "assumed" figures, instead of the reused `capacity_area_seasonality` row. Fall back to today's
+behavior when no snapshot exists (everything before the deploy). Per-area figures stay as they are (not
+snapshotted).
+
+**Verify**: run the migration on a copy of local data; trigger snapshots for two dates via the POST route;
+add temporary actuals for a month to a copy (or a backed-up local DB, restored after, as earlier sections
+did) and check the report's error figures by hand; confirm `revenue-projection` JSON is unchanged after the
+extraction; typecheck (compare error counts, many are pre-existing). In production, after deploy, check `fly
+logs` after the next sync for the snapshot line, and the page shows "fills in over time" until a snapshotted
+month closes. Document the result as a CLAUDE.md section, and delete this spec section when it's built.
+
 ## Not yet done
 
 - **Bookmarked 2026-11-11, to evaluate and propose changes after dynamic budgeting step 2**: simplify
