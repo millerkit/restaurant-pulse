@@ -4956,10 +4956,14 @@ dates shows what the data supports. OpenTable's API is partner-only, so this is 
   `POST /api/reservations/import` (raw CSV body) and `GET /api/reservations` (what's loaded).
 - **Production rollout**: run `node scripts/add-reservations-tables.mjs` on the volume BEFORE
   `fly deploy`, or both routes 500 on the missing tables. Local dev is migrated.
-- **Columns to request in GuestCenter**: Visit Date, Created Date, Created Lead Time, Canceled
-  Date, No-show Date, Seated Date, Size, Status, Table, Dining Area Assigned, Dining Area Booked,
-  Source, Online Waitlist, Experience Title, Prepayment Status; include every status. POS columns
-  come back blank (OpenTable isn't receiving Toast checks), so skip them.
+- **Columns to request in GuestCenter** (narrowed 2026-11-11 to what `server/utils/booking-pace.ts`
+  actually reads): Visit Date, Size, Status, Source, Created Date (plus Created Time if offered
+  separately), Canceled Date; include every status. Everything else the importer can still read
+  (Visit Time, No-show Date, Seated Date, Table, Dining Areas, Online Waitlist, Experience Title,
+  Prepayment Status) is stored if present but nothing uses it, so it's optional. An upload without
+  them nulls those fields for the dates it replaces. The upload page shows the minimum list in a
+  collapsed note and a suggested visit-date range (8 weeks back to 8 weeks ahead of today: the
+  booking pace compares against the last 6 same-weekday nights and fits on the last 60).
 - Verified: parser and replace-on-reimport against the 2026-11-04 export on a scratch DB copy (305
   rows, re-import replaced 305, no PII in stored rows) and typecheck of the new files. Not clicked
   through in a browser (local dev is behind Basic Auth).

@@ -30,8 +30,9 @@ const COLUMN_MAP = {
   'prepayment status': 'prepaymentStatus'
 }
 const REQUIRED = ['visitDate', 'size', 'status']
-// Not required, but without these the booking curve can't be built.
-const IMPORTANT = ['createdAt', 'canceledAt', 'noShowAt']
+// Not required, but without these the booking curve can't be built. (No-show
+// Date is deliberately not here: nothing reads it, and no-shows are ~0.3%.)
+const IMPORTANT = ['createdAt', 'canceledAt']
 
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
 

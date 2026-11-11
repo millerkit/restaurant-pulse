@@ -63,6 +63,19 @@ async function onFile(e: Event) {
   }
 }
 
+// Suggested export window: the booking pace compares against the last 6
+// same-weekday nights and fits on the last 60, so go 8 weeks back; 8 weeks ahead
+// so a late cancellation on a night further out still refreshes. Set after mount
+// (the browser's own date) to avoid a server/client mismatch.
+const EXPORT_WEEKS_BACK = 8
+const EXPORT_WEEKS_AHEAD = 8
+const exportRange = ref<{ from: string, to: string } | null>(null)
+onMounted(() => {
+  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const shift = (weeks: number) => { const d = new Date(); d.setDate(d.getDate() + weeks * 7); return d }
+  exportRange.value = { from: fmt(shift(-EXPORT_WEEKS_BACK)), to: fmt(shift(EXPORT_WEEKS_AHEAD)) }
+})
+
 function formatDate(s: string) {
   return new Date(`${s}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 }
@@ -80,6 +93,24 @@ function formatStamp(s: string) {
 
     <section>
       <div class="section-head"><div class="section-label">Upload</div></div>
+      <div v-if="exportRange" class="drill-card export-hint">
+        <div>
+          <strong>Export visit dates {{ exportRange.from }} – {{ exportRange.to }}</strong>
+          <span class="quiet-note"> with every status (including canceled).</span>
+        </div>
+        <details class="columns-note">
+          <summary>Columns to select in OpenTable</summary>
+          <ul>
+            <li>Visit Date</li>
+            <li>Size</li>
+            <li>Status</li>
+            <li>Source</li>
+            <li>Created Date (and Created Time, if it's a separate column)</li>
+            <li>Canceled Date</li>
+          </ul>
+          <p class="quiet-note">Nothing else is needed. Guest names, phones, emails and notes are never read, so leave them out.</p>
+        </details>
+      </div>
       <div class="drill-card">
         <input type="file" accept=".csv,text/csv" :disabled="uploading" aria-label="OpenTable CSV export" @change="onFile">
         <span v-if="uploading" class="quiet-note">Importing…</span>
@@ -175,5 +206,8 @@ function formatStamp(s: string) {
   padding: 4px 4px;
   overflow-x: auto;
 }
+.export-hint { display: flex; flex-direction: column; gap: 6px; }
+.columns-note summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.columns-note ul { margin: 6px 0 4px; padding-left: 20px; font-size: 13px; color: var(--ink-2); }
 .pl-table .text-cell, .pl-table th.text-cell { text-align: left; white-space: normal; }
 </style>
