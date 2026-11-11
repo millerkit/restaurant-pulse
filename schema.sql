@@ -914,3 +914,22 @@ CREATE TABLE special_nights (
   note             TEXT,
   updated_at       TEXT NOT NULL
 );
+
+-- Forecast snapshots (2026-11-11, server/utils/forecast-snapshots.ts). The forecast overwrites
+-- itself nightly, so month-level copies are saved as it goes: 'weekly' (first sync on/after each
+-- Monday; snapshot_date = that Monday) and 'month_start' (first sync on/after the 1st; the frozen
+-- plan record). One row per month x metric, for the current month through 12 months ahead.
+-- source 'plan' = budget_targets / capacity model for that month; 'live' = the current month's
+-- night-by-night projection (core_sales only). Metrics: sales, core_sales, food_drink_cost, labor,
+-- opex, other_income, other_expense, net_income, covers, max_covers, capacity_sales.
+CREATE TABLE forecast_snapshots (
+  snapshot_date TEXT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('weekly', 'month_start')),
+  year          INTEGER NOT NULL,
+  month         INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+  source        TEXT NOT NULL CHECK (source IN ('plan', 'live')),
+  metric        TEXT NOT NULL,
+  value         REAL NOT NULL,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (snapshot_date, kind, year, month, source, metric)
+);

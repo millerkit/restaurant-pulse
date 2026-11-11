@@ -62,7 +62,8 @@ export const NAV_SECTIONS: NavSection[] = [
     pages: [
       { label: 'Profit & Loss', to: '/pl', path: '/pl' },
       { label: 'Budget Check', to: '/budget', path: '/budget' },
-      { label: 'Cash & Loans', to: '/cashflow', path: '/cashflow' }
+      { label: 'Cash & Loans', to: '/cashflow', path: '/cashflow' },
+      { label: 'Forecast Accuracy', to: '/forecast-accuracy', path: '/forecast-accuracy' }
     ]
   },
   {

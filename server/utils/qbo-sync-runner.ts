@@ -1,4 +1,5 @@
 import { refreshForecasts } from './capacity-forecast'
+import { takeForecastSnapshots } from './forecast-snapshots'
 
 // Single entry point for "run a sync" — called identically by the nightly
 // scheduler plugin (server/plugins/qbo-nightly-sync.ts) and the manual
@@ -182,6 +183,17 @@ export async function runNightlySync(dateOverride?: string) {
         console.log(`budget forecast: ${forecastResult.budget.rowsChanged} automatic budget lines changed (${forecastResult.budget.months[0]}–${forecastResult.budget.months.at(-1)})`)
       } catch (err) {
         console.warn(`forecast refresh failed: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
+    // Forecast snapshots (weekly + month start) for the Forecast Accuracy report; log-only on failure.
+    if (forecastResult) {
+      try {
+        const snaps = takeForecastSnapshots(db, localToday(qbo.syncTimeZone))
+        const made = snaps.filter(s => !s.skipped)
+        if (made.length > 0) console.log(`forecast snapshots: ${made.map(s => `${s.kind} ${s.snapshotDate} (${s.rowsWritten} rows)`).join(', ')}`)
+      } catch (err) {
+        console.warn(`forecast snapshot failed: ${err instanceof Error ? err.message : err}`)
       }
     }
 

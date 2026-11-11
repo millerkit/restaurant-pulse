@@ -5941,3 +5941,34 @@ was deployed:
 - [`server/api/budget/beverage-revenue-mix.get.ts`](server/api/budget/beverage-revenue-mix.get.ts) — real Beer/Liquor/Wine/Non-Alcoholic revenue split since the location move, used by the Recompute Revenue action above
 - [`app/pages/nightly-margin.vue`](app/pages/nightly-margin.vue) — Nightly Margin: each operating night's estimated fully-loaded profit, with a distinct darkest-red/⚠ flag for a night that didn't even cover variable labor + COGS (route `/nightly-margin`)
 - [`server/api/nightly-margin.get.ts`](server/api/nightly-margin.get.ts) — Nightly Margin's data route (trailing hourly-labor rate, COGS%, and fixed-labor-per-night, applied per day)
+
+## 2026-11-11 — Dynamic budgeting step 3: forecast snapshots and accuracy report (built)
+
+Built from the spec that was in CLAUDE.md. Files: `scripts/migrations/0017-forecast-snapshots.mjs` + `schema.sql`;
+`server/utils/forecast-snapshots.ts` (writer); `server/utils/revenue-projection.ts` (moved from the route);
+`server/api/forecast/snapshot.post.ts`, `server/api/forecast/accuracy.get.ts`; `app/pages/forecast-accuracy.vue`;
+nav entry in `app/utils/navigation.ts`; snapshot hook in `qbo-sync-runner.ts`; assumed-figure override in
+`server/api/capacity.get.ts`. No forecast-math file was changed.
+
+Decisions made while building (not in the spec):
+- Each snapshot covers current month + 12 ahead, so a target month appears in ~13 month_start snapshots. A month's
+  frozen plan is the month_start dated its own 1st (used by Covers & Spend and the report's "Month-start plan"
+  bucket); earlier month_start rows are bucketed by lead time like weekly ones. First version mixed them up and
+  both the report and Covers & Spend picked April's snapshot for later months; caught in testing.
+- Weekly snapshots fire on the first sync in a calendar week (dated that Monday), so a missed Monday sync
+  doesn't lose the week. `live` core_sales is skipped when the projection has missingHistory > 0.
+- Report lead buckets (weekly plan snapshots, weeks to the 1st): 1 wk = 0–2, 4 wks = 3–5, 8 wks = 6–10, 11+;
+  month_start; live. The per-month table shows the snapshot nearest each target. Error = (forecast − actual) ÷ |actual|
+  (abs so a negative actual keeps its direction). Chips: ✓ ≤5%, ▲ ≤15%, ⚠ beyond.
+- Covers & Spend: only assumed covers, max covers, capacity sales (and fill %, avg check) come from the snapshot;
+  the food/beverage split fields and per-area breakdown still come from the model.
+
+Verification (local DB backed up first and restored afterward; migration also applied only to the scratch run):
+- `revenue-projection` JSON for 2026-10/11/12 byte-identical before/after the move (`cmp`); bad month still 400.
+- POST route: two dates, second call wrote 0 rows (idempotent); 144 rows per kind (13 months × 11 metrics + live).
+- Accuracy: backdated snapshots (Apr–Jun 2026) against real June actuals; hand-checked from sqlite: sales
+  $89,223, net income −$1,735, covers 1,008, plan net −$25,001 → error −13.41 (−1341%) as the API reported. Pre-opening
+  months show huge covers/live errors because local forecasts use today's Cambridge St assumptions; test artifact only.
+- Typecheck 300 errors before and after (302 mid-way until an `asOfDate` cast in capacity.get.ts).
+- Page checked as server-rendered HTML (200, summary and monthly tables, chips with icons); not screenshotted because the
+  Basic Auth URL could not be opened in the browser pane from this session.

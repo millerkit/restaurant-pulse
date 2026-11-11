@@ -143,7 +143,7 @@ register's ending balance).
 
 ## The planning model (current design)
 
-**Dynamic budgeting** (built 2026-11-11, steps 1–2; step 3 spec below): the forecast updates itself; a
+**Dynamic budgeting** (built 2026-11-11, steps 1–3; step 3 section below): the forecast updates itself; a
 month's plan **freezes on the 1st**; anything typed by hand is **pinned** (↺ unpins). Refresh runs after
 the nightly sync, after any input save, and lazily on page load (`refreshForecasts`,
 `refreshForecastsAfterChange`, `ensureForecastsFresh` in `server/utils/capacity-forecast.ts`).
@@ -201,96 +201,45 @@ Defined in `app/utils/navigation.ts`, rendered by `app/layouts/default.vue` (bot
 Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales: Daily Results (`/pl/revenue-calendar`, sales
 and profit views), Covers & Spend (`/capacity`), Seasonal Trends (`/historical`). Team: Kitchen Hours &
 Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, still sample
-data), Budget Check (`/budget`), Cash & Loans (`/cashflow`). Planning: Budget (`/budget/edit`), Sales Plan
+data), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
 (`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), What-If
 (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
 turns, weekly area closures, holidays), staff and pay rules, people and access, connections, reservation
 upload, database updates.
 
-## Spec: forecast snapshots and accuracy report (dynamic budgeting step 3) — written 2026-11-11, not built
+## Forecast snapshots and accuracy report (dynamic budgeting step 3) — built 2026-11-11
 
-Written to be built from directly (possibly by a smaller model). Read "Automatic capacity forecast with
-pins" and "Automatic budget lines" above first. **Do not change the forecast math** in
-`server/utils/capacity-forecast.ts`, `capacity-history.ts`, `capacity-model.ts` or `budget-forecast.ts`;
-this step only records and reads what they produce.
+The forecast overwrites itself nightly, so `takeForecastSnapshots` (`server/utils/forecast-snapshots.ts`)
+saves month-level copies into `forecast_snapshots` (migration 0017): `weekly` (first sync on/after each
+Monday, dated that Monday) and `month_start` (first sync on/after the 1st, dated the 1st = the month's frozen
+plan). Each covers the current month through 12 months ahead, so a **month's own record is the
+`month_start` dated its own 1st** (earlier months' `month_start` rows also cover it, as a lead-time forecast).
+Metrics per month: `sales`, `core_sales`, `food_drink_cost`, `labor`, `opex`, `other_income`, `other_expense`,
+`net_income` (leaf budget lines, same formula as `netIncome()`), plus `covers`, `max_covers`, `capacity_sales`
+from `createCapacityModel`. `source = 'plan'` is `budget_targets`; `'live'` is the current month's night-by-night
+core sales (`computeRevenueProjection`, moved to `server/utils/revenue-projection.ts`; the route is a thin
+wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` after `refreshForecasts()`
+(log-only on failure, logs "forecast snapshots: …"). Manual: `POST /api/forecast/snapshot` with optional
+`{ date }` takes both kinds "as of" that date (owner-only by default).
+- **Money › Forecast Accuracy** (`/forecast-accuracy`, `GET /api/forecast/accuracy`, owner-only by default
+  deny): each closed, fully synced month with snapshots shows actual vs. month-start plan and the 1/4/8-week-out
+  forecasts (nearest weekly snapshot in a lead bucket) with error chips (✓ ≤5%, ▲ ≤15%, ⚠ beyond; error =
+  (forecast − actual) ÷ |actual|, + = forecast too high), plus mean absolute % error by lead bucket for sales,
+  dine-in sales, covers and net income. States it fills in over time.
+- **Covers & Spend**: `capacity.get.ts` uses a full closed or current month's own `month_start` snapshot for its
+  assumed covers, max covers, capacity sales (and fill %/avg check from them); `assumed.fromSnapshot` carries the
+  date. No snapshot (everything before the deploy) falls back to the model. Per-area figures are not snapshotted.
+- Forecast math files were not touched. Details and verification: `docs/claude-history.md`.
 
-**Why**: past forecasts can't be reconstructed later (the forecast overwrites itself nightly), so the app
-must save them as it goes, to (a) measure how far off the forecast was at different lead times, (b) give each
-month a frozen record of what was planned when it started (Covers & Spend currently compares a closed month
-against the reused per-month row, which is now next year's forecast), and (c) answer the bookmarked Cash &
-Loans question about budget accuracy. Nothing can be backfilled, so it is only useful after weeks of
-snapshots: ship it early.
-
-**Decisions (already made)**
-- **Grain: month × metric, not per account.** Metrics: `sales` (all revenue-category leaf lines),
-  `core_sales` (`CORE_REVENUE_ACCOUNT_NUMBERS`), `food_drink_cost` (cogs), `labor`, `opex`,
-  `other_income`, `other_expense`, `net_income` (= sales − cost − labor − opex + other_income −
-  other_expense, same formula as `netIncome()` in `useBudgetData.ts`), `covers` and `max_covers` (from
-  `createCapacityModel(...).dayByDaySum` for the month), `capacity_sales` (its `expectedRevenue`).
-  Category sums must skip parent accounts (`NOT EXISTS` a child), like every other server-side budget sum.
-- **Sources**, stored side by side: `plan` = `budget_targets` for that month (for months that haven't started
-  this IS the automatic forecast); `live` = for the current month only, the night-by-night projection's
-  core sales (logic in `server/api/revenue-projection.get.ts`; move its body into a util, e.g.
-  `server/utils/revenue-projection.ts`, keep the route as a thin wrapper, and confirm the route's JSON is
-  byte-identical before and after, as was done for `capacity-model.ts`).
-- **Kinds**: `weekly` (every Monday) and `month_start` (the first sync on/after the 1st; this is the frozen
-  plan record). Same row shape for both.
-- **Months covered per snapshot**: the current month through 12 months ahead.
-- **When**: in `runNightlySync()` (`server/utils/qbo-sync-runner.ts`) right after `refreshForecasts()`, inside
-  its own try/catch that only logs. Idempotent: `INSERT OR REPLACE` keyed on (snapshot_date, kind, year,
-  month, source, metric), where snapshot_date = that week's Monday for `weekly` and the 1st for
-  `month_start`; skip if it already exists.
-- **Manual trigger** for local testing (the nightly sync refuses outside production):
-  `POST /api/forecast/snapshot` (owner-only by default, since access is default-deny), taking an optional
-  `{ date }` so a test can take a snapshot "as of" a given day.
-
-**Table (migration `0017-forecast-snapshots.mjs`, plus `schema.sql`)**
-```sql
-CREATE TABLE forecast_snapshots (
-  snapshot_date TEXT NOT NULL,          -- Monday (weekly) or the 1st (month_start)
-  kind          TEXT NOT NULL CHECK (kind IN ('weekly', 'month_start')),
-  year          INTEGER NOT NULL,
-  month         INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
-  source        TEXT NOT NULL CHECK (source IN ('plan', 'live')),
-  metric        TEXT NOT NULL,
-  value         REAL NOT NULL,
-  created_at    TEXT NOT NULL,
-  PRIMARY KEY (snapshot_date, kind, year, month, source, metric)
-);
-```
-
-**Accuracy report**: new owner-only page **Money › Forecast Accuracy** (`app/pages/forecast-accuracy.vue`,
-route `/forecast-accuracy`, entry in `app/utils/navigation.ts`'s Money section; non-owners are blocked by
-`shared/utils/access.ts` default deny, so add nothing there). Data from `GET /api/forecast/accuracy`:
-- For each **closed, fully synced** month (QBO `MAX(date)` ≥ month end, same test as `costWindow`), actuals
-  per metric from `daily_line_items` (and `daily_toast_metrics` for covers), and each snapshot's error
-  = (forecast − actual) ÷ actual, with lead time = weeks from snapshot_date to the month's 1st (negative =
-  taken during the month).
-- Page: a table per closed month (month-start plan vs. actual, and the forecasts 1, 4 and 8 weeks out),
-  plus a summary of mean absolute % error by lead bucket for `sales`, `core_sales`, `covers` and
-  `net_income`. Plain tables; no charts needed. Status coloring follows the existing chip conventions
-  (icon + label, never color alone). Say clearly on the page that it fills in over time.
-
-**Covers & Spend integration (do after the report works)**: in `server/api/capacity.get.ts`, for a closed
-or current month that has a `month_start` snapshot, use its `covers`, `max_covers` and `capacity_sales` as
-the month's "assumed" figures, instead of the reused `capacity_area_seasonality` row. Fall back to today's
-behavior when no snapshot exists (everything before the deploy). Per-area figures stay as they are (not
-snapshotted).
-
-**Verify**: run the migration on a copy of local data; trigger snapshots for two dates via the POST route;
-add temporary actuals for a month to a copy (or a backed-up local DB, restored after, as earlier sections
-did) and check the report's error figures by hand; confirm `revenue-projection` JSON is unchanged after the
-extraction; typecheck (compare error counts, many are pre-existing). In production, after deploy, check `fly
-logs` after the next sync for the snapshot line, and the page shows "fills in over time" until a snapshotted
-month closes. When built: replace this spec with a few lines of current state, and append the detailed write-up to `docs/claude-history.md`.
 
 ## Not yet done
 
-- **Dynamic budgeting step 3**: build the spec above (a Sonnet session was proposed for it). Then
-  **simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
+- **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
   With later months following the forecast, Budget and Night-by-night now converge except for the current
-  month; budget accuracy may belong in step 3's report.
+  month; the Forecast Accuracy page (step 3) now answers budget accuracy once months close.
+- **Forecast snapshots in production**: after the first deploy, check `fly logs` after a sync for the
+  "forecast snapshots" line; Forecast Accuracy shows "fills in over time" until a snapshotted month closes.
 - **Check 5220 Catering Food Costs budgets in production**: the old food-cost recompute spread food cost
   onto 5220; zero it in months with no catering (totals are right either way; 5010 shows only the rest).
 - **Eastern Bank, in writing**: (a) does "all annual principal and interest payments" mean the SBA loan

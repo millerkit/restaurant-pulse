@@ -134,13 +134,39 @@ export default defineEventHandler((event) => {
     }
   }
 
+  // Forecast snapshots (dynamic budgeting step 3): for a closed or current calendar month that has
+  // a month_start snapshot, the "assumed" covers, max covers and capacity sales are what was
+  // planned when the month started, not today's reused per-month row (which is next year's
+  // forecast). Falls back to the model when no snapshot exists (everything before the deploy).
+  const monthStartSnap = db.prepare(`
+    SELECT metric, value, snapshot_date FROM forecast_snapshots
+    WHERE kind = 'month_start' AND source = 'plan' AND snapshot_date = ? AND year = ? AND month = ? AND metric IN ('covers', 'max_covers', 'capacity_sales')
+  `)
+  function assumedFor(startIso: string, endIso: string) {
+    const modeled = assumedForRange(startIso, endIso)
+    const [y, m] = startIso.split('-').map(Number) as [number, number]
+    if (startIso > (asOfDate as string) || startIso !== monthRange(y, m).start || endIso !== monthRange(y, m).end) return modeled
+    const rows = monthStartSnap.all(startIso, y, m) as { metric: string, value: number, snapshot_date: string }[]
+    const snap = Object.fromEntries(rows.map(r => [r.metric, r.value]))
+    if (rows.length < 3) return modeled
+    return {
+      ...modeled,
+      expectedCovers: snap.covers!,
+      maxCapacityCovers: snap.max_covers!,
+      expectedRevenue: snap.capacity_sales!,
+      assumedFillPct: snap.max_covers! > 0 ? snap.covers! / snap.max_covers! : null,
+      assumedAvgCheck: snap.covers! > 0 ? snap.capacity_sales! / snap.covers! : null,
+      fromSnapshot: rows[0]!.snapshot_date
+    }
+  }
+
   function periodFor(startIso: string, endIso: string) {
     return {
       start: startIso,
       end: endIso,
       isFuture: startIso > asOfDate,
       isCurrent: startIso <= asOfDate && asOfDate < endIso,
-      assumed: assumedForRange(startIso, endIso),
+      assumed: assumedFor(startIso, endIso),
       actual: actualForRange(startIso, endIso)
     }
   }
