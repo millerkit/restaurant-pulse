@@ -5614,6 +5614,15 @@ extraction; typecheck (compare error counts, many are pre-existing). In producti
 logs` after the next sync for the snapshot line, and the page shows "fills in over time" until a snapshotted
 month closes. Document the result as a CLAUDE.md section, and delete this spec section when it's built.
 
+## Staffing Plan save also re-prices next year — 2026-11-11
+
+Labor settings (rates, hours, salaries, tips, tax rates) are not year-specific, so the 2027 view already modeled the
+same staff. New: saving the Staffing Plan for 2026 also writes all 12 months of 2027 labor to `budget_targets` using a
+second `createLaborModel` bound to the next year (`nextYearModel` in `app/pages/budget/labor.vue`), so 2026 changes flow
+into 2027 without a separate save. It overwrites any hand-entered 2027 labor figures. Saving on the 2027 view behaves as
+before (no 2028 yet). 2026-only inputs carry into 2027 as-is (Business Manager's reduced salary, reduced SUTA rate); the
+page notes this. Typecheck shows no new errors; not clicked through in a browser.
+
 ## Not yet done
 
 - **Bookmarked 2026-11-11, to evaluate and propose changes after dynamic budgeting step 2**: simplify

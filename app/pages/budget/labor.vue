@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
-import { MONTH_NAMES, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear, useBudgetYearSelection } from '~/composables/useBudgetData'
+import { BUDGET_YEARS, MONTH_NAMES, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear, useBudgetYearSelection } from '~/composables/useBudgetData'
 import { SEASONALITY_CAP_PCT, createLaborModel, seasonalityInfoFrom } from '~/utils/laborModel'
 import type { GroupKey, LaborAccount, LaborSlot as Slot, LaborTaxRates as TaxRates, MonthlyIndexEntry, PayType, RoleClass } from '~/utils/laborModel'
 
@@ -192,6 +192,17 @@ const {
   accountWeeklyDollars, wageSubjectTotal, taxBaseFor, taxRateFor, accountMonthlyDollars
 } = createLaborModel({
   year: YEAR,
+  accounts: () => accounts.value,
+  taxRates: () => taxRates.value,
+  seasonalPct: month => seasonalityInfoFor(month).capped
+})
+
+// Saving the current year also re-prices the NEXT budget year's 12 months from the same saved
+// settings (staff are assumed unchanged in 2027 absent other information). A second model bound
+// to that year; only used by save().
+const flowsToNextYear = BUDGET_YEARS.includes(YEAR + 1)
+const nextYearModel = createLaborModel({
+  year: YEAR + 1,
   accounts: () => accounts.value,
   taxRates: () => taxRates.value,
   seasonalPct: month => seasonalityInfoFor(month).capped
@@ -557,10 +568,17 @@ async function save() {
         targets.push({ year: YEAR, month, accountId: acc.accountId, amount: Math.round(accountMonthlyDollars(acc, month) * 100) / 100 })
       }
     }
+    if (flowsToNextYear) {
+      for (let month = 1; month <= 12; month++) {
+        for (const acc of accounts.value) {
+          targets.push({ year: YEAR + 1, month, accountId: acc.accountId, amount: Math.round(nextYearModel.accountMonthlyDollars(acc, month) * 100) / 100 })
+        }
+      }
+    }
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
 
     await loadAll()
-    saveMessage.value = `Saved — recomputed ${targetMonths.value.length} month(s) of budget (${MONTH_NAMES[asOfMonth - 1]}–Dec).`
+    saveMessage.value = `Saved — recomputed ${targetMonths.value.length} month(s) of budget (${MONTH_NAMES[asOfMonth - 1]}–Dec)${flowsToNextYear ? ` and all of ${YEAR + 1}` : ''}.`
     saveStatus.value = 'done'
   } catch (err: any) {
     saveStatus.value = 'error'
@@ -585,7 +603,7 @@ async function save() {
 
     <template v-else>
       <div class="scope-row">
-        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong><template v-if="asOfMonth > 1"> — already-closed months stay as budgeted.</template><template v-else> — every month of the year.</template></span>
+        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong><template v-if="asOfMonth > 1"> — already-closed months stay as budgeted.</template><template v-else> — every month of the year.</template><template v-if="flowsToNextYear"> Saving also re-prices all of {{ YEAR + 1 }} from these same inputs (staff assumed unchanged). Revisit before 2027: Business Manager's reduced salary, the reduced SUTA rate, and any raises.</template></span>
         <span v-if="hasUnsavedChanges" class="chip warning">Unsaved changes</span>
         <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="save">Save</button>
       </div>
@@ -930,7 +948,7 @@ async function save() {
            own complaint. Same saveStatus/saveMessage state as the top button, so a click
            on either one shows the same result. -->
       <div class="scope-row bottom-save-row">
-        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong> — already-closed months stay as budgeted.</span>
+        <span class="quiet-note">Applies to <strong>{{ MONTH_NAMES[asOfMonth - 1] }}–Dec {{ YEAR }}</strong> — already-closed months stay as budgeted.<template v-if="flowsToNextYear"> Also re-prices all of {{ YEAR + 1 }}.</template></span>
         <button class="action-btn primary" :disabled="saveStatus === 'saving'" @click="save">Save</button>
       </div>
       <div v-if="saveStatus === 'done'" class="chip good">{{ saveMessage }}</div>
