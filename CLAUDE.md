@@ -234,6 +234,9 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Not yet done
 
+- **Dynamic budgeting step 4 — Staffing Plan hours from a rolling 3-week Toast average**: spec in
+  [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md) (not built; migration 0018;
+  assumes direct roles scale with forecast covers — confirm with Kit before building).
 - **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
   With later months following the forecast, Budget and Night-by-night now converge except for the current
