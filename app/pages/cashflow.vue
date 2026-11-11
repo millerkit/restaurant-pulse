@@ -11,7 +11,7 @@ type PeriodFigures = {
   debtService: { principal: number, interest: number, catchUpInterest: number, totalCashOut: number, payments: Payment[] }
   freeCashFlow: { hasData: boolean, netIncome: number, depreciation: number, actualLoanInterest: number, preOpeningNonCashAddBack: number, nonCashAdjustments: { label: string, amount: number }[], reserveTransfers: number, principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, freeCashFlow: number, totals: Record<string, number> }
 }
-type ReserveTransfer = { id: number, date: string, amount: number, note: string | null }
+type ReserveTransfer = { id: number, date: string, amount: number, note: string | null, source?: 'manual' | 'bank' }
 type ReserveSustainability = {
   sustainYear: number
   totalDraws: number
@@ -44,6 +44,7 @@ type CashFlowResponse = {
     target: number, saved: number, remaining: number, currentWeeklyAmount: number | null, complete: boolean
     catchUpDate: string | null, projectedBalanceAtCatchUp: number | null, onPaceForCatchUp: boolean | null, catchUpShortfall: number | null
     transfers: ReserveTransfer[]
+    bankSync: { throughDate: string, endingBalance: number, importedAt: string } | null
     sustainability: ReserveSustainability | null
   }
   upcomingPayments: Payment[]
@@ -604,7 +605,7 @@ async function submitPlan() {
       <section>
         <div class="section-head">
           <div class="section-label">Loan Reserve Savings Plan</div>
-          <div class="section-note">Real transfers only — no bank feed, so this is only as current as what's recorded below</div>
+          <div class="section-note">Real transfers only — import the bank register below to keep this matching the bank</div>
         </div>
         <div class="drill-card">
           <div class="runway-head">
@@ -692,7 +693,7 @@ async function submitPlan() {
                 <tr v-for="(t, i) in data.reserve.transfers" :key="i">
                   <td>{{ fmtDate(t.date) }}</td>
                   <td :class="t.amount < 0 ? 'negative' : ''">{{ fmt(t.amount) }}</td>
-                  <td class="note">{{ t.note || '—' }}</td>
+                  <td class="note">{{ t.note || '—' }}<span v-if="t.source === 'bank'" class="chip neutral bank-tag">bank</span></td>
                   <td class="delete-cell">
                     <button v-if="i === data.reserve.transfers.length - 1" type="button" class="delete-link" @click="deleteTransfer(t)">Delete</button>
                   </td>
@@ -700,6 +701,8 @@ async function submitPlan() {
               </tbody>
             </table>
           </div>
+
+          <BankRegisterImport :bank-sync="data.reserve.bankSync" @imported="load" />
 
           <form class="transfer-form" @submit.prevent="submitTransfer">
             <div class="transfer-form-row">
@@ -805,6 +808,7 @@ table.cf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 .catchup-projection { border-top: 1px solid var(--hair); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .catchup-projection .section-note { line-height: 1.5; }
+.bank-tag { margin-left: 6px; font-size: 10px; }
 .transfer-history { border-top: 1px dashed var(--hair); padding-top: 8px; }
 .toggle-link { font-size: 12px; font-weight: 600; color: var(--accent-text); cursor: pointer; user-select: none; }
 .cf-table.transfers { margin-top: 8px; }

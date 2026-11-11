@@ -504,7 +504,19 @@ CREATE TABLE reserve_transfers (
   id             INTEGER PRIMARY KEY,
   transfer_date  TEXT NOT NULL,   -- ISO 8601, e.g. '2026-07-27'
   amount         REAL NOT NULL,   -- negative = reversal/withdrawal
-  note           TEXT
+  note           TEXT,
+  -- 'bank' rows come from the imported QBO bank register (replaced on every import);
+  -- 'manual' rows were typed into the Record a transfer form.
+  source         TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'bank'))
+);
+
+-- The most recent bank register import (single row): how current the bank-sourced rows are.
+CREATE TABLE reserve_bank_sync (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  through_date   TEXT NOT NULL,
+  ending_balance REAL NOT NULL,
+  row_count      INTEGER NOT NULL,
+  imported_at    TEXT NOT NULL
 );
 
 -- The user's currently-declared weekly reserve transfer plan — separate

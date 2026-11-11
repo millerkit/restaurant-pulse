@@ -10,7 +10,7 @@
 // posted until month-end, so a partial month never had a meaningful number
 // to show here.
 type LoanRow = { loan_key: string, lender: string, payment_date: string, payment_type: 'catch_up' | 'regular', interest: number, principal: number, total_payment: number }
-type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null }
+type ReserveTransferRow = { id: number, transfer_date: string, amount: number, note: string | null, source?: string }
 
 // From this date on, the SBA loan's monthly payment is routed through the 1005
 // loan reserve like every other loan (user's call 2026-10-08): the weekly
@@ -249,6 +249,12 @@ export default defineEventHandler((event) => {
   const reserveFundedRows = allLoanRows.filter(isReserveFunded)
 
   const allTransfers = db.prepare('SELECT * FROM reserve_transfers ORDER BY transfer_date, id').all() as ReserveTransferRow[]
+  // Last bank register import (null if never imported, or the table isn't migrated yet).
+  let bankSync: { throughDate: string, endingBalance: number, importedAt: string } | null = null
+  try {
+    const b = db.prepare('SELECT through_date, ending_balance, imported_at FROM reserve_bank_sync WHERE id = 1').get() as { through_date: string, ending_balance: number, imported_at: string } | undefined
+    if (b) bankSync = { throughDate: b.through_date, endingBalance: b.ending_balance, importedAt: b.imported_at }
+  } catch { /* migration not applied yet */ }
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
   const giftCardPlan = db.prepare('SELECT expected_cash, cushion_pct FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number, cushion_pct: number } | undefined
 
@@ -433,7 +439,8 @@ export default defineEventHandler((event) => {
       onPaceForCatchUp,
       catchUpShortfall,
       complete: remaining <= 0,
-      transfers: toDate.map(t => ({ id: t.id, date: t.transfer_date, amount: t.amount, note: t.note })),
+      transfers: toDate.map(t => ({ id: t.id, date: t.transfer_date, amount: t.amount, note: t.note, source: t.source ?? 'manual' })),
+      bankSync,
       sustainability
     }
   }

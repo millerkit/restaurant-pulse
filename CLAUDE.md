@@ -5375,6 +5375,46 @@ scheduling): covers and bookings, never dollars.
   never revisits or removes already-synced rows. Likely causes to look for, from earlier finds: an account QuickBooks has but the app doesn't
   (inactive/renamed), a backdated entry the forward-only sync never reached, or a parent account's own postings.
 
+## Bank register import for the loan reserve — 2026-11-11
+
+Prompted by reconciling `reserve_transfers` against the QBO bank register for 1002 Loan Reserve: the recorded
+total ($47,283) was $12,283 over the bank ($35,000), almost all from one hand-typed entry with the wrong sign (the
+Nov 9 Eastern Bank payment entered as a deposit), the rest interest and cents. Re-typing bank activity by hand
+can't stay in step, so the bank register is now the source of truth for the reserve.
+
+- **Upload**: Cash & Loans › Loan Reserve Savings Plan › "Import bank register"
+  ([`BankRegisterImport.vue`](app/components/BankRegisterImport.vue), route
+  [`server/api/cashflow/bank-register.post.ts`](server/api/cashflow/bank-register.post.ts), logic in
+  [`server/utils/bank-register-import.mjs`](server/utils/bank-register-import.mjs)). Accepts the QBO export as
+  `.xls` or `.xlsx` (parsed with SheetJS). The upload previews first (`?mode=preview` writes nothing); "Apply
+  import" re-sends the file with `?mode=apply`. Refuses a file whose account isn't "Loan Reserve".
+- **Rules**: every register row becomes a `reserve_transfers` row (amount = Deposit − Payment, to the cent; memo/
+  payee or the counter-account as the note), marked `source='bank'`. Rows before `BANK_IMPORT_START`
+  (2026-07-13) fold into one "Opening balance" row ($102.45 today), so the total always equals the bank balance.
+  Loan payments, interest and owner distributions come through too, as they were already recorded by hand.
+  **Replace, don't append**: an import deletes every bank-sourced row plus every hand-entered row dated from
+  Jul 13 through the file's last day, then inserts the file's rows; hand-entered rows dated after the file stay.
+- **Notes survive**: a hand-entered row that matches a bank row (amount within $1 ignoring sign, date within
+  7 days, best text/date fit) lends its note, so notes like "Reversal to free-up cash" aren't lost. The sign-
+  ignoring match is what flags a wrong-sign entry as "Corrected".
+- **Tie-out guard**: the imported rows must total the register's "Ending Balance" header; otherwise the preview
+  shows a red mismatch and Apply is refused.
+- **Schema**: migration `0014` adds `reserve_transfers.source` and a single-row `reserve_bank_sync` (last import's
+  through-date, shown on the page). `cashflow.get.ts` returns `reserve.bankSync` and each transfer's `source`; the
+  history table tags bank rows. The "Record a transfer" form is still the way to log something newer than the file.
+- **Dependency**: `xlsx` is installed from SheetJS's own CDN (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`),
+  not the npm registry, whose last release (0.18.5) has known vulnerabilities. `npm ci` therefore needs to reach
+  cdn.sheetjs.com during the Docker build.
+- **Free Cash Flow side effect (pre-existing, now more visible)**: `reserveTransferredInRange` sums every row, so
+  reserve-funded loan payments, interest and owner distributions recorded here net against "transfers into the
+  reserve". That was already true for hand-entered rows; the import just records them exactly.
+- **Verified** against the real 2026-11-11 register on an in-memory DB seeded with the screenshots' hand-entered
+  rows: 124 register rows parsed, total ties to $35,000.00, 24 unchanged / 9 corrected (incl. the sign error and
+  the Oct 26 → Oct 23 owner distribution date) / 6 added / 3 removed; apply gave exactly $35,000.00; re-import was
+  a no-op. Route checked on local dev in preview mode (writes nothing); `npm run build` bundles `xlsx`. **Not
+  clicked through in a browser** (local dev is behind Basic Auth) and not yet run against production data: the
+  first production import is the user's to run after deploying.
+
 ## Not yet done
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
