@@ -1,4 +1,4 @@
-import type { FollowActualsUpdate } from './capacity-actuals'
+import { refreshForecasts } from './capacity-forecast'
 
 // Single entry point for "run a sync" — called identically by the nightly
 // scheduler plugin (server/plugins/qbo-nightly-sync.ts) and the manual
@@ -168,19 +168,20 @@ export async function runNightlySync(dateOverride?: string) {
       }
     }
 
-    // Month-close update of per-cover revenue assumptions for capacity areas
-    // that opted in (capacity_areas.follow_actuals). Needs Toast's per-area
-    // data, so only after the Toast block above; a failure only logs, it
-    // shouldn't fail the QBO/Toast sync itself.
-    let followActualsResult: FollowActualsUpdate[] = []
+    // Automatic forecast: capacity inputs (spend per guest at month close,
+    // expected covers for months not yet started), then the budget lines built
+    // from them. Needs Toast's per-area data, so after the Toast block; a
+    // failure only logs, it shouldn't fail the sync itself.
+    let forecastResult: ReturnType<typeof refreshForecasts> | null = null
     if (toastResult) {
       try {
-        followActualsResult = applyMonthCloseActuals(db, localToday(qbo.syncTimeZone), endDate)
-        for (const u of followActualsResult) {
-          console.log(`follow_actuals: ${u.name} per-cover set to food $${u.food} / beverage $${u.beverage} from ${u.closedMonth} close`)
+        forecastResult = refreshForecasts(db, localToday(qbo.syncTimeZone), endDate)
+        if (forecastResult.capacity.perCoverChanged.length > 0) {
+          console.log(`capacity forecast: spend per guest updated from ${forecastResult.capacity.perCoverBasis} close for ${forecastResult.capacity.perCoverChanged.join(', ')}`)
         }
+        console.log(`budget forecast: ${forecastResult.budget.rowsChanged} automatic budget lines changed (${forecastResult.budget.months[0]}–${forecastResult.budget.months.at(-1)})`)
       } catch (err) {
-        console.warn(`applyMonthCloseActuals failed: ${err instanceof Error ? err.message : err}`)
+        console.warn(`forecast refresh failed: ${err instanceof Error ? err.message : err}`)
       }
     }
 
@@ -188,7 +189,7 @@ export async function runNightlySync(dateOverride?: string) {
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'success', rows_synced = ? WHERE id = ?`)
       .run(new Date().toISOString(), rowsSynced, runId)
 
-    return { accountResult, plResult, toastResult, followActualsResult, rowsSynced }
+    return { accountResult, plResult, toastResult, forecastResult, rowsSynced }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'error', error_message = ? WHERE id = ?`)

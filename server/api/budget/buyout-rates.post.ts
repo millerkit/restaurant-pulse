@@ -1,3 +1,4 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 // Declares the current buyout guaranteed-minimum pricing — see schema.sql's
 // buyout_rates comment. Single row, upserted, same shape/pattern as
 // server/api/dashboard/weekly-benchmark.post.ts.
@@ -18,5 +19,7 @@ export default defineEventHandler(async (event) => {
     ON CONFLICT (id) DO UPDATE SET weekday_rate = excluded.weekday_rate, weekend_rate = excluded.weekend_rate, updated_at = excluded.updated_at
   `).run(body.weekdayRate, body.weekendRate, new Date().toISOString())
 
+  // A forecast input changed: recompute the automatic forecast and budget lines.
+  refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
   return { weekdayRate: body.weekdayRate, weekendRate: body.weekendRate }
 })

@@ -1,3 +1,4 @@
+import { refreshForecastsAfterChange } from '../utils/capacity-forecast'
 // Adds or replaces one dated special night. expectedRevenue is core dine-in revenue
 // expected that night (see schema.sql's special_nights comment).
 //
@@ -61,5 +62,7 @@ export default defineEventHandler(async (event) => {
     }
     throw err
   }
+  // A forecast input changed: recompute the automatic forecast and budget lines.
+  refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
   return { date: body.date, kind: body.kind, expectedRevenue: body.expectedRevenue, note, undatedCountBefore, undatedCountAfter }
 })

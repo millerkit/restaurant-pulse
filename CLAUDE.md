@@ -4743,6 +4743,9 @@ balance-sheet liability, so they never reach the P&L or Net Income.
 
 ## Per-area per-cover revenue can follow actuals — 2026-10-29
 
+**Superseded 2026-11-11** by "Automatic capacity forecast with pins" below: the checkbox and the
+"Set from Actuals" button are gone, and every area follows actuals unless pinned.
+
 Replaces the habit of clicking "Set from Actuals" on the Edit Capacity tab by hand. Fully
 automatic updating was rejected: Food/Beverage per cover are *assumptions* the Actual columns
 are judged against (and "Recompute Revenue from Capacity" feeds them into the revenue budget),
@@ -5419,7 +5422,117 @@ can't stay in step, so the bank register is now the source of truth for the rese
   clicked through in a browser** (local dev is behind Basic Auth) and not yet run against production data: the
   first production import is the user's to run after deploying.
 
+## Automatic capacity forecast with pins (dynamic budgeting, step 1) — 2026-11-11
+
+Step 1 of 3 of the move to dynamic budgeting agreed with the user: the forecast updates itself,
+and each month's plan freezes when the month starts. The Capacity page's "Set from Actuals",
+"Auto-update monthly", "Set by History" and "Set by Actuals" controls were removed. Each value is
+now **automatic** or **pinned** (typed by hand, kept until unpinned).
+
+- **[`server/utils/capacity-forecast.ts`](server/utils/capacity-forecast.ts)**
+  `refreshCapacityForecast()` runs after every nightly sync (it replaced `applyMonthCloseActuals`
+  in `qbo-sync-runner.ts`), after every Capacity/Settings save, and lazily on page load:
+  `ensureCapacityForecastFresh` in `capacity.get.ts` and `capacity/settings.get.ts` runs at most once a day, or
+  when newer Toast data exists, so local dev (where the sync refuses to run) stays current.
+- **Spend per guest**: an area's real Toast blend over the two most recently closed months whose
+  data is fully synced (needs 30+ covers, else unchanged). It moves only when a month closes, so the
+  current month is judged against a fixed figure. `capacity_areas.follow_actuals` now means
+  automatic (1) vs. pinned (0). `auto_per_cover_*` hold the automatic figure even when pinned, and
+  `follow_actuals_through` is the later basis month. Food/beverage split: Chef's Counter's real
+  split; else QBO's food/beverage mix for the window; else (no QBO revenue for it) the area's
+  previous automatic share, kept as-is for the same months so it can't drift by rounding.
+- **Expected covers**: for every month that **hasn't started**, the old "Set by History" rule,
+  server-side: the history shape × the data-driven baseline (`dataAnnualFillPct`), split by
+  `areaFillIndex`, rounded by largest remainder. **The current month is never recomputed** (frozen
+  at what the forecast said when it began). Rows are per calendar month and reused every year, so a
+  closed month's row becomes next year's forecast. `capacity_area_seasonality.expected_covers` is
+  still the value every reader uses; `pinned`, `auto_covers`, `auto_basis` ('history:45.3') and
+  `auto_updated_at` were added.
+- **Bug fixed in the history baseline** (`server/utils/capacity-history.ts`, the computation moved out
+  of `capacity/history.get.ts` so the forecast can share it): `dataAnnualFillPct` and `areaFillIndex`
+  measured every day against May–Oct seating, including Outdoor's 40, but the result was applied to
+  winter seating without it, so winter months came out roughly a fifth low. On production's figures,
+  November read about 45% "by history" against about 55% actual. Both now use each day's own
+  season's capacity.
+- **Migration `0015`** (automatic on deploy): adds the columns and `capacity_forecast_refresh`. On its
+  first run every area and covers row becomes automatic, except Chef's Counter, whose spend per guest
+  and covers stay pinned (deliberate price / marketing goal; the hard-coded `CHEFS_COUNTER_2027_GOAL`
+  is gone). The covers as they stood are saved in `capacity_area_seasonality_pre_auto`.
+- **What changes in production on deploy**: the first refresh rewrites covers for December and
+  Jan–Oct (next year's rows) from history, and spend per guest for Dining Room/Bar/Salon/Outdoor
+  from Sep–Oct actuals. November (current) is untouched. **`budget_targets` don't change** until the
+  Sales Plan's "Recompute from Capacity" is clicked (step 2 automates that).
+- **Page**: [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue) Edit tab. Typing into a cell pins it
+  (accent outline + ↺ badge, which unpins); a Basis column shows "History ≈45%" or "Frozen this
+  month"; "Unpin all covers (N)" sits by Save. Pins are saved with Save (`pinned` per row in
+  `POST /api/capacity/settings`; omitted = pinned; unpinned rows take `auto_covers`).
+  `area-actuals.get.ts` no longer returns `trailingTwoMonth`.
+- **Known limits**: Covers & Spend's closed-month comparisons use that month's row, which is now next
+  year's forecast (already true before, since rows were reused, but now it moves automatically).
+  Snapshotting each month at its start is part of step 2. The history shape is still Mass Ave 2025.
+- **Verified locally** (synthetic 2025 sales added for the history, then removed, and the capacity rows
+  restored to post-migration values): recompute and frozen month; spend per guest matched each area's
+  Sep–Oct Toast average to the cent; pin/unpin round trip via the API and the page; refresh stable
+  across runs; related pages 200; dark-mode styles by computed values. Automatic Sep/Oct covers came
+  within ~10% of actual. Not checked on production data.
+- **Next**: step 2 (below) is built; step 3 is weekly forecast snapshots and an accuracy report.
+
+## Automatic budget lines (dynamic budgeting, step 2) — 2026-11-11
+
+A month's food/beverage sales and food & drink cost now follow the forecast automatically until the month
+starts, then freeze. This removed the Sales Plan's "Recompute [month] Revenue from Capacity" / "Recompute
+all", its buyout "Apply to budget", and the Budget page's "Recompute food & drink cost from this average".
+Older sections describing those buttons are history.
+
+- **[`server/utils/budget-forecast.ts`](server/utils/budget-forecast.ts)** `refreshBudgetForecast()` writes
+  10 lines, matched by account number (`MANAGED_ACCOUNT_NUMBERS`): 4010 food sales; 4022/4024/4026/4028
+  beverage sales; 5010 food cost; 5110/5120/5125/5130 drink costs. Months covered: **every month after the
+  current one, through December of next year**. The current month and earlier are never written.
+  - Sales = the Capacity month projection (`createCapacityModel().dayByDaySum`, so holidays, special
+    nights and area closures count exactly as on the Capacity pages) + planned buyouts
+    (`plannedBuyoutIncrement`: dated buyouts' expected − a normal night that weekday, plus the undated
+    per-weekday counts × (rate − normal night)). Food/beverage share and the beer/liquor/wine/N-A split
+    come from real sales since the move.
+  - Cost = each line's actual % of its paired sales line (`COST_PAIRS`) over the (up to) three most
+    recent closed months from Aug 2026 on whose QBO data is fully synced (`costWindow`). It applies to
+    the sales figure actually budgeted, so a pinned sales line drives its cost. No window = cost left as entered.
+    Months whose catering/event sales exceed 5% of dining sales are flagged (catering purchases sit in 5010).
+- **[`server/utils/capacity-model.ts`](server/utils/capacity-model.ts)**: the night-by-night projection
+  moved out of `capacity.get.ts` (output verified byte-identical before/after) so the job uses the same math.
+- **Pins**: `budget_targets.pinned` / `auto_amount` (migration `0016`, automatic on deploy; it copies the 10
+  lines' future-month rows to `budget_targets_pre_auto` first). `POST /api/budget/targets` takes optional
+  `pinned` per row (true = typed by hand; false = back to automatic, uses `auto_amount`; omitted = leave as
+  is) and recomputes when a pin changes. `GET /api/budget/targets` adds `autoMonth` and per-account
+  `autoManaged` / `pinned` / `autoAmount`. Saving a changed managed line on the Sales Plan or Budget page
+  pins it; ↺ next to a pinned line (or "Unpin all") unpins.
+- **When it runs**: `refreshForecasts()` (capacity then budget, `server/utils/capacity-forecast.ts`) after
+  the nightly sync; `refreshForecastsAfterChange()` after saves on Capacity/Settings room setup, holidays,
+  special nights, buyout counts/rates, and pin changes; `ensureForecastsFresh()` (once a day or on newer
+  Toast data) on capacity, budget targets, dashboard and cash flow loads.
+- **Pages**: Sales Plan shows an "Automatic" / "Frozen plan" banner and a "Save planned buyouts" button
+  (counts only; the server adds them to the budget); its Special Nights notes were updated. The Budget page
+  shows the server's cost %s (`GET /api/budget/cost-forecast`) for months that haven't started; the old
+  client-side trailing-average code was removed. `revenue_buyout_applied` is no longer written or read.
+- **What changes in production on deploy**: Dec 2026 and every month of 2027 get these 10 lines rewritten
+  from the (step-1-corrected) Capacity forecast and Aug–Oct cost %s. That includes the hand-entered 26.5%
+  Dec food cost and the 2027 lines from "Build 2027 budget" / `seed-2027-budget-extras.mjs` (their revenue
+  and these cost lines are now redundant; other lines they wrote are untouched). November is untouched.
+  Previous values: `budget_targets_pre_auto`. The Cash & Loans Budget outlook card moves with them.
+- **Verified locally** (temporary Aug–Oct sales/costs and buyout counts added, then everything restored from
+  a backup and checked to zero differences): Nov frozen; Dec food sales = Capacity food to the cent; a
+  2027 Thursday buyout added exactly (rate − normal night) × food share; costs = window % × sales (and ×
+  a pinned sales figure); pin survives refresh; unpin restores the automatic figure; buyout save
+  recomputes at once; both pages render the banner, pins and ↺ in the browser. Not checked on production data.
+
 ## Not yet done
+
+- **Bookmarked 2026-11-11, to evaluate and propose changes after dynamic budgeting step 2**: simplify
+  Cash & Loans' Year-End Outlook (three cards: Budget / Recent pace / Night-by-night) and possibly fold
+  "how accurate is the budget" into another page. The user treats Night-by-night as the most accurate
+  cash forecast, rarely uses Recent pace, and reads the cards mainly as a budget-accuracy indicator.
+  Relevant: once step 2 lands, the Budget card's later months already follow the forecast, so it and
+  Night-by-night converge except for the current month; budget accuracy may belong with step 3's
+  forecast snapshots/accuracy report instead.
 
 - Confirming with Eastern Bank in writing (a) whether the DSCR covenant's
   "all annual principal and interest payments" counts only the SBA loan or
@@ -5698,7 +5811,9 @@ was deployed:
 - [`scripts/init-db.mjs`](scripts/init-db.mjs) — creates the SQLite file from `schema.sql`
 - [`scripts/import-budget-xlsx.mjs`](scripts/import-budget-xlsx.mjs) — one-time seed of accounts + budget from a real QBO budget export
 - `data/qbo-budget-template.xlsx` — sanitized export template (checked in; the real xlsx it came from is not)
-- [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue) — Capacity Pace view (route `/capacity`)
+- [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue) — Capacity Pace view (route `/capacity`) and the Capacity edit tab (automatic/pinned forecast)
+- [`server/utils/capacity-forecast.ts`](server/utils/capacity-forecast.ts) / [`server/utils/capacity-history.ts`](server/utils/capacity-history.ts) — automatic capacity forecast and the history it uses (see "Automatic capacity forecast with pins")
+- [`server/utils/budget-forecast.ts`](server/utils/budget-forecast.ts) / [`server/utils/capacity-model.ts`](server/utils/capacity-model.ts) — automatic budget lines for months not yet started, and the shared Capacity projection (see "Automatic budget lines")
 - [`app/components/BreakevenCard.vue`](app/components/BreakevenCard.vue) / [`server/api/breakeven.get.ts`](server/api/breakeven.get.ts) — breakeven covers/night card on Capacity Pace (see "Breakeven covers/night" above)
 - [`app/pages/capacity/edit.vue`](app/pages/capacity/edit.vue) — editable capacity/turns/per-cover-revenue + monthly fill %/holiday closures (route `/capacity/edit`)
 - [`server/api/capacity.get.ts`](server/api/capacity.get.ts) — Capacity tab's projection-vs-actual data route

@@ -1,3 +1,4 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 // Add or rename a holiday closure, or clear the old per-month counts.
 //   { date: 'YYYY-MM-DD', name: 'Thanksgiving' }  upsert
 //   { clearLegacyCounts: true }                    zero capacity_seasonality.holiday_closures
@@ -16,5 +17,7 @@ export default defineEventHandler(async (event) => {
     INSERT INTO holiday_closures (date, name, updated_at) VALUES (?, ?, ?)
     ON CONFLICT (date) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at
   `).run(date, name, new Date().toISOString())
+  // A forecast input changed: recompute the automatic forecast and budget lines.
+  refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
   return { date, name }
 })

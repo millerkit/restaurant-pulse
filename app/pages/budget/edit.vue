@@ -1000,362 +1000,53 @@ const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] a
 }))
 const yearLiveNetIncome = computed(() => netIncome(yearHybridTotals.value))
 
-// ---- COGS % of revenue (Food/Beverage trailing average) ----------------
-// COGS is fundamentally a variable cost — it scales with revenue, the
-// menu, and month-to-month inventory timing, unlike rent or a salary — so
-// a fixed dollar guess for a future month is closer to a coin flip than a
-// real budget (raised by the user, not an assumption baked in unasked).
-// Instead: track Food and Beverage COGS as a % of revenue (matching
-// accounts.subcategory — see schema.sql — and matching how MarginEdge
-// already budgets this, per product-strategy-notes.md), based on a
-// trailing average of *past* months rather than any single month, so one
-// lumpy ingredient delivery doesn't single-handedly reset the target.
-// Deliberately excludes 'Other' COGS (packaging, catering equipment,
-// retail) — those don't scale with revenue the same way and stay
-// manually edited via the category/account rows above.
-//
-// Each group's % is against its OWN matching revenue (Food COGS ÷ Food
-// revenue, Beverage COGS ÷ Beverage revenue) — the standard restaurant
-// "food cost %" / "beverage cost %" definition — not against total
-// revenue (changed 2026-07-28 after the user caught the two producing
-// materially different numbers; total-revenue was the original,
-// non-standard version). Revenue accounts got a matching Food/Beverage
-// accounts.subcategory tag for exactly this (4010 Restaurant Food; 4020
-// Restaurant Beverage and its 4022/4024/4026/4028 children) — scoped to
-// core restaurant sales only, mirroring the COGS side's primary 5010/5100
-// grouping; catering's own Food/Beverage-ish revenue and COGS accounts are
-// deliberately left untagged for now (catering COGS only tags "Food" on
-// one account today, and every catering figure in this budget is $0, so
-// there's nothing to lose by leaving that edge case for later).
-//
-// This prefers real per-account actuals (daily_line_items, via
-// actuals-by-account) for any trailing month that's actually closed, and
-// only falls back to that month's budget_targets figure when no synced
-// actuals exist yet (a future/unsynced month). Originally this used
-// budget_targets for every trailing month on the theory that this
-// restaurant keeps its QBO "budget" updated with real numbers as each
-// month closes (see CLAUDE.md) — but that's just a stand-in for the real
-// thing, and a real bug: the user caught July's *budgeted* Food COGS %
-// (~28%, from a budget row that was never revised down after the fact)
-// diverging sharply from July's real *actual* Food COGS % (~15.6%, from
-// daily_line_items) once July was closed and synced. A trailing average
-// meant to project a future month should read the truest number available
-// for a month that's already happened.
-const COGS_TRAILING_WINDOW = 3
-
-// A month qualifies either because it has its own budget_targets rows (the
-// original check) or because it's already closed, in which case real
-// daily_line_items actuals exist for it regardless of budget_targets —
-// cogsGroupPctOverMonths/subgroupPctOverMonths already prefer actuals for
-// any closed month once it's included here. Before this fix, a closed month
-// with zero budget_targets rows (e.g. June 2026, never formally budgeted)
-// was invisible to this gate, so the "3-month trailing average" silently
-// degraded to whatever earlier months happened to have budget rows — in
-// production this meant Aug–Dec's COGS budgets were effectively built from
-// July alone.
-//
-// Revised 2026-10-05 after Aug/Sep actuals showed three ways this window
-// misled the recompute (see CLAUDE.md, "Oct–Dec 2026 budget recalibration"):
-//  1. Only CLOSED months qualify now — never a still-future month's budget.
-//     The old "has budget rows" rule let Nov's window average Oct's *budgeted*
-//     %, so each recompute fed its own output into the next month's average
-//     and drifted (Nov/Dec food cost crept up ~2pts).
-//  2. Months before COGS_BASELINE_START_MONTH are excluded. COGS here is
-//     purchase-based (no inventory accounting), and the new location's opening
-//     pantry/cellar stock-up (June purchases, 37% of food sales) is consumed in
-//     July (15.6%), so any window containing June/July understates steady state.
-//  3. Catering/event-heavy months stay in the average but are flagged — see
-//     cogsTrailingMixedMonths below.
-// First fully "steady" month at the new location (opened 2026-06-20). Months
-// before this are excluded from the COGS trailing average. Revisit (or make a
-// setting) if the business moves again or the restaurant adds inventory
-// accounting.
-const COGS_BASELINE_START_MONTH = 8
-
-function trailingMonthsWithData(targetMonth: number, count = COGS_TRAILING_WINDOW): number[] {
-  const months: number[] = []
-  for (let m = targetMonth - 1; m >= COGS_BASELINE_START_MONTH && months.length < count; m--) {
-    if (isMonthClosed(YEAR, m)) months.push(m)
-  }
-  return months.reverse()
-}
-
-// Per-account actuals for whichever months land in the trailing window,
-// fetched lazily as the window changes — mirrors selectedMonthAccountActuals
-// above but keyed by month, since the trailing window can span several
-// months at once rather than just the one being edited. Only fetched for
-// closed months: a still-in-progress month's actuals are a partial,
-// to-date figure that would understate both COGS and revenue together in a
-// way that doesn't obviously cancel out, so it's simpler and safer to keep
-// using that month's budget figure until it's actually closed.
-const trailingAccountActuals = ref<Record<number, Record<number, number>>>({})
-const trailingActualsHasData = ref<Record<number, boolean>>({})
-
-async function ensureTrailingActuals(months: number[]) {
-  for (const m of months) {
-    if (m in trailingAccountActuals.value || !isMonthClosed(YEAR, m)) continue
-    try {
-      const result = await $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: m } })
-      const map: Record<number, number> = {}
-      for (const a of result.accounts) map[a.accountId] = a.amount
-      trailingAccountActuals.value = { ...trailingAccountActuals.value, [m]: map }
-      trailingActualsHasData.value = { ...trailingActualsHasData.value, [m]: result.accounts.length > 0 }
-    } catch {
-      // Leave unfetched so cogsGroupPctOverMonths falls back to budget for this month.
-    }
-  }
-}
-
-// Restricted to leaf accounts, same as the Revenue-from-Capacity recompute
-// below — budget entry is leaf-only (see server/utils/accounts.ts), and
-// summing a parent alongside its own children here double-counts it, the
-// same bug that produced Beverage COGS's stray parent-level budget rows
-// (see CLAUDE.md's Budget tab section).
-function cogsGroupPctOverMonths(monthNumbers: number[], group: 'Food' | 'Beverage'): number | null {
-  let groupCogsTotal = 0
-  let groupRevenueTotal = 0
-  for (const m of monthNumbers) {
-    const data = monthlyData.value[m - 1]
-    if (!data) continue
-    const actualsForMonth = trailingActualsHasData.value[m] ? trailingAccountActuals.value[m] : null
-    for (const acc of data.accounts) {
-      if (!isLeafAccountIn(data, acc)) continue
-      const amount = actualsForMonth ? (actualsForMonth[acc.accountId] ?? 0) : acc.amount
-      if (amount === null) continue
-      if (acc.category === 'revenue' && acc.subcategory === group) groupRevenueTotal += amount
-      if (acc.category === 'cogs' && acc.subcategory === group) groupCogsTotal += amount
-    }
-  }
-  return groupRevenueTotal > 0 ? groupCogsTotal / groupRevenueTotal : null
-}
-
-function groupRevenueBudget(data: MonthData, group: 'Food' | 'Beverage'): number {
-  return data.accounts
-    .filter(a => a.category === 'revenue' && a.subcategory === group && a.amount !== null && isLeafAccountIn(data, a))
-    .reduce((sum, a) => sum + (a.amount || 0), 0)
-}
-
-// ---- Beverage COGS sub-splits (Beer/Liquor/Wine/Non-Alcoholic) ----------
-// A single blended Beverage % assumes a stable Beer/Liquor/Wine/
-// Non-Alcoholic sales mix — the same approximation the Food/Beverage split
-// above was built to avoid at the whole-COGS level, and wine's real cost %
-// typically runs well above liquor's, so that assumption doesn't hold well
-// in practice. This pairs each COGS account directly with its own matching
-// revenue account by account_number instead of relying on
-// accounts.subcategory, which only carries a blanket 'Beverage' tag on
-// both sides today and is also read by the Capacity revenue-mix/recompute
-// features — redefining what it means there wasn't worth the risk for
-// this. "5115 Draft Beverage Supplies" (keg/tap-line supplies, not a
-// beverage type of its own) has no natural revenue account to pair
-// against and is deliberately left out of the split, same "leave the edge
-// case alone" treatment Catering Food Costs already gets in the Food
-// group above.
-type BeverageSubgroup = { key: string, label: string, cogsAccountNumber: string, revenueAccountNumber: string }
-const BEVERAGE_COGS_SUBGROUPS: BeverageSubgroup[] = [
-  { key: 'beer', label: 'Beer', cogsAccountNumber: '5110', revenueAccountNumber: '4022' },
-  { key: 'liquor', label: 'Liquor', cogsAccountNumber: '5120', revenueAccountNumber: '4024' },
-  { key: 'wine', label: 'Wine', cogsAccountNumber: '5125', revenueAccountNumber: '4026' },
-  { key: 'nonalcoholic', label: 'Non-Alcoholic', cogsAccountNumber: '5130', revenueAccountNumber: '4028' },
-]
-
-function findAccountByNumber(data: MonthData, accountNumber: string): BudgetAccount | undefined {
-  return data.accounts.find(a => a.accountNumber === accountNumber)
-}
-
-// Same actuals-preferred/budget-fallback logic as cogsGroupPctOverMonths
-// above, but against one COGS/revenue account pair instead of a whole
-// subcategory group.
-function subgroupPctOverMonths(monthNumbers: number[], subgroup: BeverageSubgroup): number | null {
-  let cogsTotal = 0
-  let revenueTotal = 0
-  for (const m of monthNumbers) {
-    const data = monthlyData.value[m - 1]
-    if (!data) continue
-    const actualsForMonth = trailingActualsHasData.value[m] ? trailingAccountActuals.value[m] : null
-    const cogsAcc = findAccountByNumber(data, subgroup.cogsAccountNumber)
-    const revAcc = findAccountByNumber(data, subgroup.revenueAccountNumber)
-    if (cogsAcc) {
-      const amount = actualsForMonth ? (actualsForMonth[cogsAcc.accountId] ?? 0) : cogsAcc.amount
-      if (amount !== null) cogsTotal += amount
-    }
-    if (revAcc) {
-      const amount = actualsForMonth ? (actualsForMonth[revAcc.accountId] ?? 0) : revAcc.amount
-      if (amount !== null) revenueTotal += amount
-    }
-  }
-  return revenueTotal > 0 ? cogsTotal / revenueTotal : null
-}
-
-// Current % actually budgeted for one subgroup, for the same
-// button-visibility comparison currentGroupPct does for Food.
-function currentSubgroupPct(data: MonthData, subgroup: BeverageSubgroup): number | null {
-  const revAcc = findAccountByNumber(data, subgroup.revenueAccountNumber)
-  const revenue = revAcc?.amount ?? 0
-  if (revenue <= 0) return null
-  const cogsAcc = findAccountByNumber(data, subgroup.cogsAccountNumber)
-  return (cogsAcc?.amount ?? 0) / revenue
-}
-
-const cogsTrailingMonths = computed(() => trailingMonthsWithData(editMonth.value))
-watch(cogsTrailingMonths, (months) => { ensureTrailingActuals(months) }, { immediate: true })
-const cogsTrailingLabel = computed(() => cogsTrailingMonths.value.map(m => MONTH_NAMES[m - 1]).join('–'))
-const cogsTrailingFoodPct = computed(() => cogsGroupPctOverMonths(cogsTrailingMonths.value, 'Food'))
-const cogsTrailingBeverageSubgroups = computed(() =>
-  BEVERAGE_COGS_SUBGROUPS.map(sg => ({ ...sg, pct: subgroupPctOverMonths(cogsTrailingMonths.value, sg) }))
-)
-// Whether every month in the window contributed real actuals rather than a
-// budget figure — shown on the page so "28%" vs "15.6%" isn't a silent
-// discrepancy the next time a budgeted month drifts from what really happened.
-const cogsTrailingAllActuals = computed(() =>
-  cogsTrailingMonths.value.length > 0 && cogsTrailingMonths.value.every(m => trailingActualsHasData.value[m])
-)
-const cogsTrailingSomeActuals = computed(() => cogsTrailingMonths.value.some(m => trailingActualsHasData.value[m]))
-
-// Catering/event revenue (accounts 41xx/42xx) as a share of core dining
-// revenue (the Food/Beverage-tagged revenue accounts) for one closed month.
-// Catering purchases are intermingled with regular ones in Food Costs (5010) —
-// 5220 Catering Food Costs is essentially never used — but catering *revenue*
-// is outside the Food % denominator, so a month with a lot of catering reads
-// high. Buyout revenue is NOT counted here: it rings into core accounts, so
-// its cost and revenue already land in the same buckets. Returns 0 when the
-// month has no synced actuals (nothing to measure).
-const COGS_CATERING_MIX_THRESHOLD = 0.05
-function cateringEventShare(m: number): number {
-  const data = monthlyData.value[m - 1]
-  const actuals = trailingActualsHasData.value[m] ? trailingAccountActuals.value[m] : null
-  if (!data || !actuals) return 0
-  let core = 0
-  let mix = 0
-  for (const acc of data.accounts) {
-    if (acc.category !== 'revenue' || !isLeafAccountIn(data, acc)) continue
-    const amount = actuals[acc.accountId] ?? 0
-    const num = acc.accountNumber ?? ''
-    if (acc.subcategory === 'Food' || acc.subcategory === 'Beverage') core += amount
-    else if (num.startsWith('41') || num.startsWith('42')) mix += amount
-  }
-  return core > 0 ? mix / core : 0
-}
-// Months in the window whose Food % likely includes catering purchases that
-// can't be separated out — shown as a note so the number isn't read as pure
-// restaurant food cost. They stay in the average (excluding them would leave
-// one thin month); as clean months close they roll the window forward.
-const cogsTrailingMixedMonths = computed(() =>
-  cogsTrailingMonths.value
-    .map(m => ({ month: m, share: cateringEventShare(m) }))
-    .filter(x => x.share > COGS_CATERING_MIX_THRESHOLD)
-)
-
-// Current group % actually budgeted for the month being edited, so it can be
-// compared against the trailing average below — this is derived from the
-// already-saved budget_targets figures (same source the recompute action
-// itself reads via groupRevenueBudget), not the in-progress unsaved inputs,
-// so switching a leaf account's textbox doesn't flip the button's visibility
-// on every keystroke.
-function currentGroupPct(data: MonthData, group: 'Food' | 'Beverage'): number | null {
-  const revenue = groupRevenueBudget(data, group)
-  if (revenue <= 0) return null
-  const cogs = data.accounts
-    .filter(a => a.category === 'cogs' && a.subcategory === group && a.amount !== null && isLeafAccountIn(data, a))
-    .reduce((sum, a) => sum + (a.amount || 0), 0)
-  return cogs / revenue
-}
-
-// The button only makes sense to show when it would actually change
-// something — i.e. the month's currently budgeted Food/Beverage COGS % has
-// drifted from the trailing average, or there's a revenue budget but no
-// COGS budget at all yet. A tenth-of-a-point difference isn't worth
-// surfacing (rounding in the recompute's own per-account weighting means an
-// exact match is rare), so this only flags a real divergence.
-const COGS_RECOMPUTE_THRESHOLD = 0.01
-function cogsComparisons() {
-  const data = editMonthData.value
-  if (!data || viewingAnnualTotal.value) return []
-  const out: { trailingPct: number, currentPct: number | null }[] = []
-  if (cogsTrailingFoodPct.value !== null) {
-    out.push({ trailingPct: cogsTrailingFoodPct.value, currentPct: currentGroupPct(data, 'Food') })
-  }
-  for (const sg of cogsTrailingBeverageSubgroups.value) {
-    if (sg.pct === null) continue
-    out.push({ trailingPct: sg.pct, currentPct: currentSubgroupPct(data, sg) })
-  }
-  return out
-}
-// Whether there's even a trailing average to compare against yet (e.g. Jan
-// has no prior months), separate from whether it already matches — the
-// template uses this to avoid claiming a month is "already on pace" when
-// there's really just nothing to compare.
-const cogsHasComparableData = computed(() => cogsComparisons().length > 0)
-const cogsNeedsRecompute = computed(() =>
-  cogsComparisons().some(c => c.currentPct !== null && Math.abs(c.currentPct - c.trailingPct) > COGS_RECOMPUTE_THRESHOLD)
-)
-
-const cogsRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
-const cogsRecomputeMessage = ref('')
-
-async function recomputeCogsFromTrailingAverage() {
-  cogsRecomputeStatus.value = 'running'
+// ---- Food & drink cost: automatic for months that haven't started ---------
+// Replaced the "Recompute food & drink cost from this average" button (2026-11-11).
+// The server writes each cost line (5010 food; 5110/5120/5125/5130 beer, liquor,
+// wine, N-A) as its real % of the paired sales line over the last (up to) three
+// closed months from August 2026 on × that month's budgeted sales — see
+// server/utils/budget-forecast.ts for the rules (closed months only, no opening
+// stock-up months, catering-heavy months flagged). A line typed over is pinned.
+type CostForecast = { months: string[], pctByCost: Record<string, number | null>, mixedMonths: { month: string, share: number }[] }
+const costForecast = ref<CostForecast | null>(null)
+onMounted(async () => {
   try {
-    const data = editMonthData.value
-    if (!data) throw new Error('Budget data not loaded yet')
-    const revenueBudget = data.accounts
-      .filter(a => a.category === 'revenue' && a.amount !== null && isLeafAccountIn(data, a))
-      .reduce((sum, a) => sum + (a.amount || 0), 0)
-    if (!revenueBudget) throw new Error(`Set a Revenue budget for ${MONTH_NAMES[editMonth.value - 1]} first`)
-
-    const months = cogsTrailingMonths.value
-    if (months.length === 0) throw new Error('No prior months with revenue and food & drink cost data to average from')
-
-    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-
-    // Food stays a single blended group — see the comment above
-    // cogsGroupPctOverMonths for why redistributing across its (today,
-    // effectively one real) leaf account by existing weight is still right.
-    if (cogsTrailingFoodPct.value !== null) {
-      const pct = cogsTrailingFoodPct.value
-      // Group-specific revenue budget, not the whole month's revenue — see
-      // the comment above cogsGroupPctOverMonths for why.
-      const groupBudget = pct * groupRevenueBudget(data, 'Food')
-      const accounts = data.accounts.filter(a => a.category === 'cogs' && a.subcategory === 'Food' && isLeafAccountIn(data, a))
-      if (accounts.length > 0) {
-        const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
-        for (const a of accounts) {
-          const weight = oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length
-          targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(groupBudget * weight * 100) / 100 })
-        }
-      }
-    }
-
-    // Beverage: each subgroup is a direct 1:1 COGS-account/revenue-account
-    // pair (see BEVERAGE_COGS_SUBGROUPS above), so there's no weighted
-    // redistribution to do — the subgroup's own % applies straight to its
-    // own revenue account's budget and writes straight to its own COGS
-    // account.
-    for (const sg of cogsTrailingBeverageSubgroups.value) {
-      if (sg.pct === null) continue
-      const cogsAcc = findAccountByNumber(data, sg.cogsAccountNumber)
-      const revAcc = findAccountByNumber(data, sg.revenueAccountNumber)
-      if (!cogsAcc || !revAcc) continue
-      const subgroupBudget = sg.pct * (revAcc.amount || 0)
-      targets.push({ year: YEAR, month: editMonth.value, accountId: cogsAcc.accountId, amount: Math.round(subgroupBudget * 100) / 100 })
-    }
-
-    if (targets.length === 0) throw new Error('No Food/Beverage cost accounts found to recompute')
-
+    costForecast.value = await $fetch<CostForecast>('/api/budget/cost-forecast')
+  } catch {
+    costForecast.value = null
+  }
+})
+const COST_LABELS: Record<string, string> = { 5010: 'Food', 5110: 'Beer', 5120: 'Liquor', 5125: 'Wine', 5130: 'Non-alcoholic' }
+function ymLabel(ym: string): string {
+  return `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`
+}
+const costWindowLabel = computed(() => {
+  const m = costForecast.value?.months ?? []
+  if (m.length === 0) return null
+  return m.length === 1 ? ymLabel(m[0]!) : `${ymLabel(m[0]!)}–${ymLabel(m[m.length - 1]!)}`
+})
+const selectedMonthIsAuto = computed(() => !!editMonthData.value?.accounts.some(a => a.autoManaged))
+const pinnedCostLines = computed(() => (editMonthData.value?.accounts ?? []).filter(a => a.autoManaged && a.pinned && a.category === 'cogs'))
+const unpinStatus = ref<'idle' | 'running' | 'error'>('idle')
+async function unpinLines(accs: BudgetAccount[]) {
+  if (accs.length === 0) return
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
+  unpinStatus.value = 'running'
+  try {
+    const targets = accs.map(a => ({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: a.autoAmount ?? a.amount ?? 0, pinned: false }))
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
     await loadYear()
-    cogsRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} food & drink cost from trailing average.`
-    cogsRecomputeStatus.value = 'done'
-  } catch (err: any) {
-    cogsRecomputeStatus.value = 'error'
-    cogsRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
+    unpinStatus.value = 'idle'
+  } catch {
+    unpinStatus.value = 'error'
   }
 }
+function pinTitle(acc: BudgetAccount): string {
+  return `Typed by hand, so the forecast leaves it alone. Click to go back to automatic${acc.autoAmount != null ? ` ($${Math.round(acc.autoAmount).toLocaleString()})` : ''}.`
+}
 
-// Revenue's own editable UI (including its "Recompute from Capacity" sync,
-// née the block that used to live here) moved to app/pages/budget/revenue.vue
-// — see CLAUDE.md. groupRevenueBudget below still reads real revenue
-// budget_targets figures (whichever page saved them) for the COGS trailing
-// average, unaffected by where revenue itself is edited.
+// Revenue is edited on the Sales Plan (app/pages/budget/revenue.vue) and shown
+// read-only here.
 
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const saveMessage = ref('')
@@ -1368,12 +1059,13 @@ const saveMessage = ref('')
 // real stored amount has cents (e.g. Jan-May's exact-cent actuals) must
 // not register as "changed" just because its display dropped the cents.
 function changedTargets(data: MonthData) {
-  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+  const targets: { year: number, month: number, accountId: number, amount: number, pinned?: boolean }[] = []
   for (const acc of data.accounts) {
     if (!isLeafAccount(acc)) continue
     const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
     if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
-      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
+      // Typing over an automatic line pins it (server/utils/budget-forecast.ts).
+      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount, ...(acc.autoManaged ? { pinned: true } : {}) })
     }
   }
   return targets
@@ -1469,8 +1161,6 @@ const actionMessage = ref('')
 // and then clicking over to October would still show September's green
 // confirmation banner there).
 watch(editMonth, () => {
-  cogsRecomputeStatus.value = 'idle'
-  cogsRecomputeMessage.value = ''
   actionStatus.value = 'idle'
   actionMessage.value = ''
   saveStatus.value = 'idle'
@@ -1776,8 +1466,11 @@ function exportForQuickBooks() {
                       <span class="account-label">{{ acc.accountNumber ? `${acc.accountNumber} ` : '' }}{{ acc.name }}</span>
                     </th>
                     <td>
+                      <button v-if="acc.autoManaged && acc.pinned && acc.category !== 'revenue'" type="button" class="unpin-btn" :title="pinTitle(acc)" :aria-label="`Unpin ${acc.name}`" @click="unpinLines([acc])">↺</button>
                       <input
-                        v-if="isLeafAccount(acc) && !acc.laborManaged && acc.category !== 'revenue'" type="text" inputmode="numeric" class="amount-input"
+                        v-if="isLeafAccount(acc) && !acc.laborManaged && acc.category !== 'revenue'" type="text" inputmode="numeric"
+                        :class="['amount-input', acc.autoManaged && (acc.pinned ? 'pinned' : 'auto-value')]"
+                        :title="acc.autoManaged && !acc.pinned ? 'Automatic: follows the forecast. Type over it to pin it.' : undefined"
                         v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
                       />
                       <span v-else class="amount-input readonly">
@@ -1806,37 +1499,31 @@ function exportForQuickBooks() {
                 <tr v-if="cat === 'revenue'" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
                     <div class="section-note">
-                      Revenue is now projected on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink> — including its "Recompute from Capacity" sync — and shown here read-only.
+                      Revenue is planned on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink> and shown here read-only.<template v-if="selectedMonthIsAuto"> Food and beverage sales for {{ MONTH_NAMES[editMonth - 1] }} follow the Capacity forecast automatically.</template>
                     </div>
                   </td>
                 </tr>
                 <tr v-if="cat === 'cogs'" class="cogs-avg-row">
                   <td :colspan="selectedMonthIsCurrent ? 4 : 2">
-                    <div class="section-note">
-                      Food & drink cost is variable — it scales with revenue, not a fixed dollar guess. Trailing
-                      {{ cogsTrailingMonths.length || 0 }}-mo avg<template v-if="cogsTrailingLabel"> ({{ cogsTrailingLabel }}, from {{ cogsTrailingAllActuals ? 'actuals' : cogsTrailingSomeActuals ? 'actuals + budget' : 'budget' }})</template>:
-                      Food <strong>{{ cogsTrailingFoodPct !== null ? (cogsTrailingFoodPct * 100).toFixed(1) + '%' : 'n/a' }}</strong> of Food revenue.
-                      Beverage, by type:
-                      <template v-for="(sg, i) in cogsTrailingBeverageSubgroups" :key="sg.key"><template v-if="i > 0">, </template>{{ sg.label }} <strong>{{ sg.pct !== null ? (sg.pct * 100).toFixed(1) + '%' : 'n/a' }}</strong></template>.
-                      <button v-if="cogsNeedsRecompute" class="mini-btn" :disabled="cogsRecomputeStatus === 'running'" @click="recomputeCogsFromTrailingAverage">
-                        Recompute {{ MONTH_NAMES[editMonth - 1] }} food & drink cost from this average
-                      </button>
-                      <span v-else-if="cogsRecomputeStatus !== 'done' && cogsHasComparableData" class="chip neutral">Already tracking the trailing average</span>
-                      <span v-if="cogsRecomputeStatus === 'done'" class="chip good">{{ cogsRecomputeMessage }}</span>
-                      <span v-if="cogsRecomputeStatus === 'error'" class="chip warning">{{ cogsRecomputeMessage }}</span>
-                    </div>
-                    <div v-if="cogsTrailingMonths.length === 0" class="section-note">
-                      No steady-state closed months to average from yet — only closed months from {{ MONTH_NAMES[COGS_BASELINE_START_MONTH - 1] }} on count
-                      (earlier months reflect the new location's opening stock-up, not normal purchasing).
-                    </div>
-                    <div v-else class="section-note">
-                      Only closed months from {{ MONTH_NAMES[COGS_BASELINE_START_MONTH - 1] }} on are averaged; earlier months reflect opening stock-up.
-                      <template v-if="cogsTrailingMixedMonths.length">
-                        <strong>{{ cogsTrailingMixedMonths.map(x => MONTH_NAMES[x.month - 1]).join(', ') }}</strong>
-                        had catering/event revenue worth
-                        {{ cogsTrailingMixedMonths.map(x => Math.round(x.share * 100) + '%').join(', ') }}
-                        of dining sales, and catering purchases can't be separated from Food Costs — so Food % probably reads a little high for a month with no catering.
+                    <div v-if="selectedMonthIsAuto" class="section-note">
+                      <strong>Automatic:</strong> {{ MONTH_NAMES[editMonth - 1] }} hasn't started, so food &amp; drink cost follows its sales at recent cost %s<template v-if="costWindowLabel"> ({{ costWindowLabel }} actuals)</template>:
+                      <template v-for="(pct, num, i) in (costForecast?.pctByCost ?? {})" :key="num"><template v-if="i > 0">, </template>{{ COST_LABELS[num] ?? num }} <strong>{{ pct != null ? (pct * 100).toFixed(1) + '%' : 'n/a' }}</strong></template>.
+                      Type over a line to pin it; ↺ sends it back to automatic.
+                      <template v-if="pinnedCostLines.length > 0">
+                        <button class="mini-btn" :disabled="unpinStatus === 'running'" @click="unpinLines(pinnedCostLines)">Unpin all ({{ pinnedCostLines.length }})</button>
                       </template>
+                      <span v-if="unpinStatus === 'error'" class="chip warning">Couldn't unpin</span>
+                    </div>
+                    <div v-if="selectedMonthIsAuto && costForecast && costForecast.months.length === 0" class="section-note">
+                      No closed month from August 2026 on has fully synced actuals yet, so food &amp; drink cost lines are left as entered.
+                    </div>
+                    <div v-if="selectedMonthIsAuto && costForecast?.mixedMonths.length" class="section-note">
+                      <strong>{{ costForecast.mixedMonths.map(x => ymLabel(x.month)).join(', ') }}</strong>
+                      had catering/event sales worth {{ costForecast.mixedMonths.map(x => Math.round(x.share * 100) + '%').join(', ') }}
+                      of dining sales, and catering purchases can't be separated from Food Costs, so the food % probably reads a little high.
+                    </div>
+                    <div v-if="!selectedMonthIsAuto && !selectedMonthClosed" class="section-note">
+                      {{ MONTH_NAMES[editMonth - 1] }}'s plan froze when the month started; food &amp; drink cost is kept as entered.
                     </div>
                   </td>
                 </tr>
@@ -2081,6 +1768,17 @@ table.edit-table { width: 100%; border-collapse: separate; border-spacing: 0; fo
   color: var(--ink);
 }
 .amount-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* Automatic vs. pinned budget lines (2026-11-11), same treatment as the Sales Plan. */
+.amount-input.auto-value { background: transparent; border-color: transparent; color: var(--ink-2); }
+.amount-input.auto-value:hover { border-color: var(--hair); }
+.amount-input.pinned { border: 1.5px solid var(--accent); font-weight: 700; }
+.unpin-btn {
+  width: 20px; height: 20px; padding: 0; margin-right: 6px; vertical-align: middle;
+  font-size: 12px; line-height: 18px; font-weight: 700;
+  border-radius: 999px; border: 1px solid var(--accent); background: var(--surface);
+  color: var(--accent-text); cursor: pointer;
+}
+.unpin-btn:hover { background: var(--accent); color: white; }
 .amount-input.readonly {
   display: inline-block;
   border-color: transparent;

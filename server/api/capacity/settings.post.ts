@@ -1,3 +1,5 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
+
 // Saves edits from the Edit Capacity page (app/pages/capacity/index.vue (Edit tab)) —
 // per the user's explicit 2026-08-07 request to be able to revise
 // capacity/turns/per-cover-revenue, holiday closures, and (same day, after
@@ -15,6 +17,8 @@ type AreaInput = {
   id: number, seats?: number, maxTurnsPerNight?: number,
   capacityNovApr?: number | null, capacityMayOct?: number,
   perCoverRevenueFood?: number, perCoverRevenueBeverage?: number,
+  // true = spend per guest is automatic (the stored automatic value wins over
+  // perCoverRevenue* when one exists); false = pinned at perCoverRevenue*.
   followActuals?: boolean,
   // Weekly closure (see capacity_areas in schema.sql). Omit all three to leave
   // the area's closure untouched; closedDows [] clears it.
@@ -22,7 +26,9 @@ type AreaInput = {
   closureRecaptureWeights?: Record<string, number> | null
 }
 type SeasonalityInput = { month: number, holidayClosures: number }
-type AreaSeasonalityInput = { areaId: number, month: number, expectedCovers: number }
+// pinned (2026-11-11): true = typed by hand, kept as entered; false = automatic,
+// so the stored automatic value is used instead of expectedCovers. Omitted = pinned.
+type AreaSeasonalityInput = { areaId: number, month: number, expectedCovers: number, pinned?: boolean }
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ areas: AreaInput[], seasonality: SeasonalityInput[], areaSeasonality: AreaSeasonalityInput[] }>(event)
@@ -78,12 +84,11 @@ export default defineEventHandler(async (event) => {
     SET seats = COALESCE(@seats, seats), max_turns_per_night = COALESCE(@maxTurnsPerNight, max_turns_per_night),
         capacity_nov_apr = CASE WHEN @setNovApr = 1 THEN @capacityNovApr ELSE capacity_nov_apr END,
         capacity_may_oct = COALESCE(@capacityMayOct, capacity_may_oct),
-        per_cover_revenue_food = COALESCE(@perCoverRevenueFood, per_cover_revenue_food),
-        per_cover_revenue_beverage = COALESCE(@perCoverRevenueBeverage, per_cover_revenue_beverage),
+        per_cover_revenue_food = CASE WHEN @followActuals = 1 AND auto_per_cover_food IS NOT NULL THEN auto_per_cover_food
+          ELSE COALESCE(@perCoverRevenueFood, per_cover_revenue_food) END,
+        per_cover_revenue_beverage = CASE WHEN @followActuals = 1 AND auto_per_cover_beverage IS NOT NULL THEN auto_per_cover_beverage
+          ELSE COALESCE(@perCoverRevenueBeverage, per_cover_revenue_beverage) END,
         follow_actuals = COALESCE(@followActuals, follow_actuals),
-        -- turning it off clears the marker so a later re-enable catches up on
-        -- the latest closed month at the next sync
-        follow_actuals_through = CASE WHEN @followActuals = 0 THEN NULL ELSE follow_actuals_through END,
         closed_dows = CASE WHEN @setClosure = 1 THEN @closedDows ELSE closed_dows END,
         closed_from = CASE WHEN @setClosure = 1 THEN @closedFrom ELSE closed_from END,
         closure_recapture_pct = CASE WHEN @setClosure = 1 THEN @closureRecapturePct ELSE closure_recapture_pct END,
@@ -96,9 +101,12 @@ export default defineEventHandler(async (event) => {
     ON CONFLICT(month) DO UPDATE SET holiday_closures = excluded.holiday_closures
   `)
   const upsertAreaMonth = db.prepare(`
-    INSERT INTO capacity_area_seasonality (area_id, month, expected_covers)
-    VALUES (@areaId, @month, @expectedCovers)
-    ON CONFLICT(area_id, month) DO UPDATE SET expected_covers = excluded.expected_covers
+    INSERT INTO capacity_area_seasonality (area_id, month, expected_covers, pinned)
+    VALUES (@areaId, @month, @expectedCovers, @pinned)
+    ON CONFLICT(area_id, month) DO UPDATE SET
+      pinned = excluded.pinned,
+      expected_covers = CASE WHEN excluded.pinned = 0 AND capacity_area_seasonality.auto_covers IS NOT NULL
+        THEN capacity_area_seasonality.auto_covers ELSE excluded.expected_covers END
   `)
   const run = db.transaction(() => {
     for (const a of areas) {
@@ -122,9 +130,12 @@ export default defineEventHandler(async (event) => {
       })
     }
     for (const s of seasonality) upsertMonth.run(s)
-    for (const s of areaSeasonality) upsertAreaMonth.run(s)
+    for (const s of areaSeasonality) upsertAreaMonth.run({ areaId: s.areaId, month: s.month, expectedCovers: s.expectedCovers, pinned: s.pinned === false ? 0 : 1 })
   })
   run()
+  // Seats/turns/closures or a pin change can move the automatic forecast (and the
+  // budget lines built from it): recompute now.
+  refreshForecastsAfterChange(db, useRuntimeConfig().qbo?.syncTimeZone)
 
   return { updatedAreas: areas.length, updatedMonths: seasonality.length, updatedAreaMonths: areaSeasonality.length }
 })

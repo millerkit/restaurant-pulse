@@ -1,3 +1,4 @@
+import { ensureForecastsFresh } from '../utils/capacity-forecast'
 // Backs the Cash Flow tab (see CLAUDE.md's Debt Service / Cash Flow tab
 // section) — the second of the "Two Parallel Views" the source brief
 // recommended: the P&L view (QBO budget, interest only, from the existing
@@ -180,6 +181,7 @@ export default defineEventHandler((event) => {
   }
 
   const db = useDb()
+  ensureForecastsFresh(db, useRuntimeConfig().qbo?.syncTimeZone)
   const today = new Date().toISOString().slice(0, 10)
   const yearStart = `${year}-01-01`
   const yearEndFull = `${year}-12-31`

@@ -1,3 +1,4 @@
+import { ensureForecastsFresh } from '../utils/capacity-forecast'
 // Real data for the Dashboard page (app/pages/index.vue): last-night/
 // last-week/last-year revenue, month-to-date and year-to-date actuals by
 // category, the matching full-period budget targets (null if none set —
@@ -50,6 +51,7 @@ function operatingDaysInMonth(year: number, month: number): number {
 
 export default defineEventHandler((event) => {
   const db = useDb()
+  ensureForecastsFresh(db, useRuntimeConfig().qbo?.syncTimeZone)
 
   const { date: asOfDate } = db.prepare('SELECT MAX(date) AS date FROM daily_line_items').get() as { date: string | null }
   if (!asOfDate) {

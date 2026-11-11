@@ -117,14 +117,15 @@ type AreaRow = {
   capacity_nov_apr: number | null, capacity_may_oct: number,
   per_cover_revenue_food: number, per_cover_revenue_beverage: number, notes: string | null,
   follow_actuals: number, follow_actuals_through: string | null,
+  auto_per_cover_food: number | null, auto_per_cover_beverage: number | null,
   closed_dows: string | null, closed_from: string | null, closure_recapture_pct: number,
   closure_recapture_weights: string | null
 }
 type SeasonalityRow = { month: number, holiday_closures: number }
-type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number }
+type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number, pinned: number, auto_covers: number | null, auto_basis: string | null }
 
 type ReplacedNight = { date: string, kind: string, expectedRevenue: number, name: string | null }
-const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[], replacedNights: ReplacedNight[] }>('/api/capacity/settings', { query: { year: YEAR } })
+const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[], replacedNights: ReplacedNight[], forecast: { currentMonth: number, refreshedOn: string | null } }>('/api/capacity/settings', { query: { year: YEAR } })
 // Holidays + special nights other than buyouts in YEAR, by date (2026-11-08):
 // those nights have no regular covers and are worth their own expected revenue.
 const replacedByDate = computed(() => new Map((editData.value?.replacedNights ?? []).map(n => [n.date, n])))
@@ -136,41 +137,15 @@ function replacedTitle(month: number): string {
   return replacedInMonth(month).map(n => `${n.date.slice(5)} ${n.name ?? n.kind}`).join(', ') || 'None'
 }
 
-type MonthlyIndexRow = { month: number, indexPct: number | null, years: number[] }
-type AreaFillIndexRow = { areaId: number, indexValue: number | null }
-const { data: historyData } = await useFetch<{ monthlyIndex: MonthlyIndexRow[], historicalYears: number[], areaFillIndex: AreaFillIndexRow[] | null, areaFillIndexSince: string | null, dataAnnualFillPct: number | null }>('/api/capacity/history')
-// Real per-area fill-rate index, since the Cambridge St move — see
-// areaFillIndex's own comment in server/api/capacity/history.get.ts for
-// why this is a flat (non-seasonal) index rather than a month-by-month
-// one (the user's own explicit call, 2026-08-13: ~8 weeks of real
-// per-area data isn't enough to trust a seasonal shape, and Bar/Salon have
-// no prior-location history at all). Falls back to 1 (equal weighting,
-// today's pre-existing behavior) for any area with no real index value
-// yet, rather than leaving that area at 0.
-function areaFillIndexFor(areaId: number): number {
-  return historyData.value?.areaFillIndex?.find(r => r.areaId === areaId)?.indexValue ?? 1
-}
-// Built from the API's own historicalYears rather than hardcoded, so this
-// label can't go stale as years roll forward — e.g. reads "2025" today,
-// "2026" once 2027 rolls around. See history.get.ts: normally just one
-// year (simplified 2026-08-10, at the user's request, from an earlier
-// multi-year average) but this stays correct if that ever changes.
-const historyYearsLabel = computed(() => (historyData.value?.historicalYears ?? []).join('/') || 'prior years')
-
 // Real per-area actuals (this month / last month), added 2026-08-13 once
 // Toast Configuration API scope unblocked resolving table.guid to an area
 // (see server/utils/toast-table-map.ts). Shown next to the aspirational
 // Per-Cover Revenue (Total) column so it reads as "assumed vs. actually
-// happening" rather than a separate table — display only by default
-// (unlike Set by History's covers, a $/cover actual has no natural place
-// in the covers-based draft shape) except via the explicit "Set from
-// Actuals" button below, the same one-shot-action-not-ambient-binding
-// posture Set by History itself uses for the same reason.
+// happening" rather than a separate table. Display only: the automatic
+// spend per guest (server/utils/capacity-forecast.ts) uses closed months.
 type AreaActualsRow = { areaId: number, covers: number, revenue: number, foodRevenue: number | null, beverageRevenue: number | null, perCover: number | null }
 type AreaActualsPeriod = { start: string, end: string, cappedAt: string, perArea: AreaActualsRow[] }
-type TrailingTwoMonthRow = { areaId: number, covers: number, revenue: number, perCover: number | null, perCoverFood: number | null, perCoverBeverage: number | null }
-type TrailingTwoMonth = { start: string, end: string, perArea: TrailingTwoMonthRow[], foodBeveragePct: { food: number, beverage: number } | null }
-const { data: areaActualsData } = await useFetch<{ asOfDate: string | null, thisMonth: AreaActualsPeriod | null, lastMonth: AreaActualsPeriod | null, trailingTwoMonth: TrailingTwoMonth | null }>('/api/capacity/area-actuals')
+const { data: areaActualsData } = await useFetch<{ asOfDate: string | null, thisMonth: AreaActualsPeriod | null, lastMonth: AreaActualsPeriod | null }>('/api/capacity/area-actuals')
 function areaActualPerCover(areaId: number, period: 'thisMonth' | 'lastMonth'): number | null {
   const p = areaActualsData.value?.[period]
   return p?.perArea.find(r => r.areaId === areaId)?.perCover ?? null
@@ -184,48 +159,41 @@ function fmtMoneyOrDash(n: number | null): string {
   return n == null ? '—' : `$${Math.round(n)}`
 }
 
-// "Set from Actuals" — writes that area's real trailing two-month (this +
-// last month combined) per-cover $ into the Food/Beverage draft inputs, an
-// explicit button rather than a live binding for the same reason Set by
-// History's covers aren't live-bound either (see its own comment above):
-// overwriting a hand-tuned per-area assumption should be something the
-// user chooses, not a side effect of a derived figure existing.
-//
-// Chef's Counter gets a real per-area Food/Beverage split
-// (perCoverFood/perCoverBeverage, from daily_toast_area_metrics'
-// food_revenue/beverage_revenue) instead of the restaurant-wide mix below
-// — its real food revenue isn't reliably in Toast at all (prepaid tickets
-// go through Stripe), so it's assumed flat at $190/cover and only the
-// beverage side comes from real Toast data; see
-// CHEFS_COUNTER_FOOD_PRICE_PER_COVER's comment in
-// server/utils/toast-metrics-sync.ts. Every other area has no real
-// per-area food/beverage signal (Toast's check totals aren't split that
-// way), so it falls back to dividing the blended actual using this
-// restaurant's real, whole-restaurant Food/Beverage revenue mix (see
-// area-actuals.get.ts's own comment on that approximation).
-function trailingTwoMonthRow(areaId: number): TrailingTwoMonthRow | null {
-  return areaActualsData.value?.trailingTwoMonth?.perArea.find(r => r.areaId === areaId) ?? null
+// Automatic spend per guest (2026-11-11, server/utils/capacity-forecast.ts):
+// each area follows its real blend over the two most recently closed months,
+// updated when a month closes, unless it's pinned (typed by hand).
+function autoPerCover(areaId: number): { food: number, beverage: number } | null {
+  const row = editData.value?.areas.find(r => r.id === areaId)
+  if (row?.auto_per_cover_food == null || row.auto_per_cover_beverage == null) return null
+  return { food: row.auto_per_cover_food, beverage: row.auto_per_cover_beverage }
 }
-function trailingTwoMonthPerCover(areaId: number): number | null {
-  return trailingTwoMonthRow(areaId)?.perCover ?? null
+// "Sep–Oct actuals": the two closed months the automatic value is built from.
+function perCoverBasisLabel(areaId: number): string | null {
+  const through = editData.value?.areas.find(r => r.id === areaId)?.follow_actuals_through
+  if (!through) return null
+  const m = Number(through.slice(5, 7))
+  return `${MONTH_NAMES[(m + 10) % 12]}–${MONTH_NAMES[m - 1]} actuals`
 }
-function canSetFromActuals(a: AreaDraft): boolean {
-  const row = trailingTwoMonthRow(a.id)
-  if (!row || row.perCover == null) return false
-  return row.perCoverFood != null || areaActualsData.value?.trailingTwoMonth?.foodBeveragePct != null
+function autoPerCoverTotal(areaId: number): number | null {
+  const auto = autoPerCover(areaId)
+  return auto ? auto.food + auto.beverage : null
 }
-function setFromActuals(a: AreaDraft) {
-  const row = trailingTwoMonthRow(a.id)
-  if (!row || row.perCover == null) return
-  if (row.perCoverFood != null && row.perCoverBeverage != null) {
-    a.perCoverRevenueFood = row.perCoverFood.toFixed(2)
-    a.perCoverRevenueBeverage = row.perCoverBeverage.toFixed(2)
-    return
+function useAutoTitle(areaId: number): string {
+  const total = autoPerCoverTotal(areaId)
+  return total != null
+    ? `Follow ${perCoverBasisLabel(areaId)}: $${total.toFixed(2)} per guest`
+    : 'No automatic figure yet: needs 30+ covers in this area over the last two closed months'
+}
+function pinPerCover(a: AreaDraft) {
+  a.perCoverPinned = true
+}
+function usePerCoverAuto(a: AreaDraft) {
+  const auto = autoPerCover(a.id)
+  a.perCoverPinned = false
+  if (auto) {
+    a.perCoverRevenueFood = String(auto.food)
+    a.perCoverRevenueBeverage = String(auto.beverage)
   }
-  const pct = areaActualsData.value?.trailingTwoMonth?.foodBeveragePct
-  if (!pct) return
-  a.perCoverRevenueFood = (row.perCover * pct.food).toFixed(2)
-  a.perCoverRevenueBeverage = (row.perCover * pct.beverage).toFixed(2)
 }
 
 // Colors the two Actual columns against that area's own assumed Per-Cover
@@ -261,14 +229,6 @@ const lastMonthLabel = computed(() => {
   return d ? MONTH_NAMES[Number(d.start.slice(5, 7)) - 1] : 'Last Month'
 })
 
-// "Updated after Sep close" — shown only for an area that's following
-// actuals and has had at least one automatic update applied.
-function followThroughLabel(areaId: number): string | null {
-  const row = editData.value?.areas.find(r => r.id === areaId)
-  if (!row?.follow_actuals || !row.follow_actuals_through) return null
-  return `Updated after ${MONTH_NAMES[Number(row.follow_actuals_through.slice(5, 7)) - 1]} close`
-}
-
 function isMayThroughOct(month: number): boolean {
   return month >= 5 && month <= 10
 }
@@ -291,7 +251,9 @@ function roundCovers(n: number): number {
 // draft shape at all; see computedCapacity() below.
 type AreaDraft = {
   id: number, name: string, seats: string, maxTurnsPerNight: string,
-  perCoverRevenueFood: string, perCoverRevenueBeverage: string, followActuals: boolean,
+  perCoverRevenueFood: string, perCoverRevenueBeverage: string,
+  // Typed by hand (kept as entered) vs. automatic (follows closed-month actuals)
+  perCoverPinned: boolean,
   // Weekly closure (capacity_areas.closed_dows/closed_from/closure_recapture_pct)
   closedDows: number[], closedFrom: string, recapturePct: string,
   // Relative share of the recaptured covers landing on each open weekday (keyed by weekday number)
@@ -302,7 +264,9 @@ type AreaDraft = {
 // input as of 2026-08-07 (replacing a single blended Expected Fill %),
 // per the user's own request after $86.12/cover looked low blended across
 // very different areas.
-type MonthlyDraft = { month: number, holidayClosuresInput: string, areaCoversInput: Record<number, string> }
+// areaPinned (2026-11-11): a typed covers value is pinned and kept; anything
+// else is automatic and follows the nightly forecast (server/utils/capacity-forecast.ts).
+type MonthlyDraft = { month: number, holidayClosuresInput: string, areaCoversInput: Record<number, string>, areaPinned: Record<number, boolean> }
 
 const areaDrafts = ref<AreaDraft[]>([])
 const monthlyDrafts = ref<MonthlyDraft[]>([])
@@ -315,17 +279,18 @@ function loadDrafts() {
     maxTurnsPerNight: String(a.max_turns_per_night),
     perCoverRevenueFood: String(a.per_cover_revenue_food),
     perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
-    followActuals: !!a.follow_actuals,
+    perCoverPinned: !a.follow_actuals,
     closedDows: parseClosedDows(a.closed_dows),
     closedFrom: a.closed_from ?? '',
     recapturePct: String(a.closure_recapture_pct ?? 0),
     recaptureWeights: parseRecaptureWeights(a.closure_recapture_weights)
   }))
-  const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
+  const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r]))
   monthlyDrafts.value = (editData.value?.seasonality ?? []).map(s => ({
     month: s.month,
     holidayClosuresInput: String(replacedInMonth(s.month).length),
-    areaCoversInput: Object.fromEntries(areaDrafts.value.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`) ?? 0))]))
+    areaCoversInput: Object.fromEntries(areaDrafts.value.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`)?.expected_covers ?? 0))])),
+    areaPinned: Object.fromEntries(areaDrafts.value.map(a => [a.id, !!areaMonthMap.get(`${a.id}:${s.month}`)?.pinned]))
   }))
 }
 watch(editData, loadDrafts, { immediate: true })
@@ -338,17 +303,18 @@ const cleanDraftSnapshot = computed(() => {
   const areas = (editData.value?.areas ?? []).map(a => ({
     id: a.id, name: a.name, seats: String(Math.round(a.seats)), maxTurnsPerNight: String(a.max_turns_per_night),
     perCoverRevenueFood: String(a.per_cover_revenue_food), perCoverRevenueBeverage: String(a.per_cover_revenue_beverage),
-    followActuals: !!a.follow_actuals,
+    perCoverPinned: !a.follow_actuals,
     closedDows: parseClosedDows(a.closed_dows),
     closedFrom: a.closed_from ?? '',
     recapturePct: String(a.closure_recapture_pct ?? 0),
     recaptureWeights: parseRecaptureWeights(a.closure_recapture_weights)
   }))
-  const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r.expected_covers]))
+  const areaMonthMap = new Map((editData.value?.areaSeasonality ?? []).map(r => [`${r.area_id}:${r.month}`, r]))
   const monthly = (editData.value?.seasonality ?? []).map(s => ({
     month: s.month,
     holidayClosuresInput: String(replacedInMonth(s.month).length),
-    areaCoversInput: Object.fromEntries(areas.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`) ?? 0))]))
+    areaCoversInput: Object.fromEntries(areas.map(a => [a.id, String(roundCovers(areaMonthMap.get(`${a.id}:${s.month}`)?.expected_covers ?? 0))])),
+    areaPinned: Object.fromEntries(areas.map(a => [a.id, !!areaMonthMap.get(`${a.id}:${s.month}`)?.pinned]))
   }))
   return JSON.stringify({ areaDrafts: areas, monthlyDrafts: monthly })
 })
@@ -515,206 +481,53 @@ const yearlyTotals = computed(() => {
   }
 })
 
-function historyIndexFor(month: number): number | null {
-  return historyData.value?.monthlyIndex?.find(m => m.month === month)?.indexPct ?? null
+// ---- Automatic expected covers (2026-11-11) -----------------------------
+// Months that haven't started follow the forecast (history shape × a baseline
+// from real covers since the move, split by each area's real fill rate). The
+// current month is frozen at what the forecast said when it began.
+const forecastCurrentMonth = computed(() => editData.value?.forecast?.currentMonth ?? null)
+function areaMonthRow(areaId: number, month: number): AreaSeasonalityRow | undefined {
+  return editData.value?.areaSeasonality.find(r => r.area_id === areaId && r.month === month)
 }
-// The fraction "Set by History" would apply to a given month: this month's
-// historical index (its covers per open day as a % of that year's own
-// average, from the most recent prior year's Toast history — see
-// server/api/capacity/history.get.ts; switched from a revenue-based proxy
-// to real covers 2026-08-12) scaled against a fully data-driven annual
-// baseline (`dataAnnualFillPct`, server-computed) rather than whatever
-// happened to already be typed into the covers grid — replaced 2026-08-13
-// at the user's own request, after they pointed out that anchoring to
-// on-page numbers meant a stale or optimistic guess would silently distort
-// "Set by History"'s output. `dataAnnualFillPct` de-seasonalizes the real
-// ~8 weeks of Cambridge St data using this same historical shape, so it's
-// not just "raw summer fill %" either — see its own comment in
-// history.get.ts. Null (and the button disabled) when either input is
-// missing — no historical reading for that month, or not enough real
-// Cambridge St data yet to compute a baseline from.
-function historyTargetFraction(s: MonthlyDraft): number | null {
-  const indexPct = historyIndexFor(s.month)
-  const baseline = historyData.value?.dataAnnualFillPct ?? null
-  if (indexPct == null || baseline == null) return null
-  return baseline * (indexPct / 100)
+function autoCovers(areaId: number, month: number): number | null {
+  const v = areaMonthRow(areaId, month)?.auto_covers
+  return v == null ? null : roundCovers(v)
 }
-function historyTooltip(s: MonthlyDraft): string {
-  const indexPct = historyIndexFor(s.month)
-  const baseline = historyData.value?.dataAnnualFillPct ?? null
-  if (indexPct == null) return 'No historical Toast covers data available for this month yet.'
-  if (baseline == null) return 'Not enough real Cambridge St Toast data yet to compute a data-driven baseline.'
-  return `${MONTH_NAMES[s.month - 1]} historically runs ${indexPct.toFixed(0)}% of the year's average covers per night (${historyYearsLabel.value} Toast) — applied to a real, data-driven ${fmtPctWhole(baseline)} annual baseline (real Cambridge St covers since the move, de-seasonalized using this same historical shape).`
+// The month's restaurant-wide fill % the automatic forecast used (from auto_basis 'history:45.3').
+function autoFillPct(month: number): number | null {
+  const basis = editData.value?.areaSeasonality.find(r => r.month === month && r.auto_basis)?.auto_basis
+  const m = basis?.match(/^history:([\d.]+)$/)
+  return m ? Number(m[1]) / 100 : null
 }
-// "Set by History" (replaced the manually-typed "Set %" 2026-08-10) applies
-// one blended fill % — derived from real historical seasonality rather than
-// typed in by hand — across every area's own capacity for that month,
-// weighted by each area's real relative fill-rate index (areaFillIndexFor,
-// added 2026-08-13 — see its own comment above; falls back to equal
-// weighting, the original behavior, for any area with no real index yet).
-// Still a one-shot action (a button), not a live two-way-bound field, for
-// the same reason the old Set % was: continuous syncing would fight direct
-// per-area edits. A closed-season area (areaCapacityForMonth already
-// returns 0 for that case, e.g. Outdoor Nov-Apr) naturally stays at 0
-// covers regardless of its index — 0 capacity × any index is still 0.
-//
-// Uses largest-remainder rounding, same technique the old equal-weighted
-// version already used (see git history) — computes the exact (unrounded)
-// target per area, floors every one, then hands out the leftover whole
-// covers (the total's own rounding, computed once from the *unweighted*
-// total so the overall total stays anchored to the seasonal figure
-// regardless of the per-area weighting) to the areas with the largest
-// fractional remainder. Each area's exact target is clamped to its own
-// capacity first — a real possibility once weighting is uneven (e.g. an
-// area with a >1 index in an already-high-fill month could otherwise be
-// asked for more covers than it physically seats) — with the leftover
-// then distributed only among areas still below their own cap, so the
-// total still lands on the seasonal target without asking any one area to
-// overbook itself.
-// "Set by Actuals" — for the current (in-progress) month only, overwrites
-// each area's expected covers with that area's real actual covers/night
-// so far this month, from daily_toast_area_metrics — the same
-// actualCoversPerNight figure already shown on the Capacity Pace tab's "By
-// Area" cards (areaBreakdownForMonth in server/api/capacity.get.ts), reused
-// here rather than adding a new endpoint. Lets the assumption tighten as
-// real data comes in mid-month, the same "readjust as data arrives" role
-// Set by History plays for a month with no real data yet — a one-shot
-// button, not a live binding, for the same reason every other "Set..."
-// action on this tab is (see Set by History's own comment above).
-// Early in a month the month-to-date average is one or two nights (often a
-// single weekday, e.g. a lone Sunday), which swings the assumption wildly.
-// Until the month has MIN_NIGHTS_MONTH_TO_DATE real nights, use the trailing
-// 28 days instead (spans the month boundary; closed-season areas are clamped
-// to the target month's capacity when applied).
-const MIN_NIGHTS_MONTH_TO_DATE = 7
-function monthToDateBreakdown(): AreaBreakdownRow[] | null {
-  const asOfMonth = paceData.value?.asOfMonth
-  if (asOfMonth == null) return null
-  return months.value.find(m => m.month === asOfMonth)?.areaBreakdown ?? null
+function monthBasisLabel(s: MonthlyDraft): string {
+  if (s.month === forecastCurrentMonth.value) return 'Frozen this month'
+  const pct = autoFillPct(s.month)
+  return pct == null ? 'No history yet' : `History ≈${fmtPctWhole(pct)}`
 }
-function usingTrailingWindow(): boolean {
-  const bd = monthToDateBreakdown()
-  const nights = Math.max(0, ...(bd ?? []).map(a => a.actualNights ?? 0))
-  return nights < MIN_NIGHTS_MONTH_TO_DATE && !!paceData.value?.trailing28
+function monthBasisTitle(s: MonthlyDraft): string {
+  if (s.month === forecastCurrentMonth.value) return `${MONTH_NAMES[s.month - 1]} has started, so its forecast is frozen at what it was on the 1st and actuals are judged against it. It starts following the forecast again (for next year) when the month ends.`
+  const pct = autoFillPct(s.month)
+  if (pct == null) return 'Not enough Toast history yet to forecast this month automatically; the saved numbers are used.'
+  return `Last year's covers pattern says ${MONTH_NAMES[s.month - 1]} runs at about ${fmtPctWhole(pct)} of seats, scaled to how full Cambridge St has actually been since the move, then split by how full each area really runs. Updated nightly.`
 }
-function currentMonthAreaBreakdown(): AreaBreakdownRow[] | null {
-  if (usingTrailingWindow()) return paceData.value?.trailing28?.areaBreakdown ?? null
-  return monthToDateBreakdown()
+function onCoversInput(s: MonthlyDraft, areaId: number) {
+  s.areaPinned[areaId] = true
 }
-function canSetByActuals(s: MonthlyDraft): boolean {
-  if (paceData.value?.asOfMonth !== s.month) return false
-  const bd = currentMonthAreaBreakdown()
-  return !!bd && bd.some(a => a.actualCoversPerNight != null)
+function unpinCovers(s: MonthlyDraft, areaId: number) {
+  s.areaPinned[areaId] = false
+  const auto = autoCovers(areaId, s.month)
+  if (auto != null) s.areaCoversInput[areaId] = String(auto)
 }
-function actualsPreviewTotal(s: MonthlyDraft): number | null {
-  const bd = currentMonthAreaBreakdown()
-  if (!bd) return null
-  const known = bd.filter(a => a.actualCoversPerNight != null)
-  if (known.length === 0) return null
-  return known.reduce((sum, a) => sum + cappedActual(s, a), 0)
+function coverAriaLabel(s: MonthlyDraft, a: AreaDraft): string {
+  return `${a.name} covers per night, ${MONTH_NAMES[s.month - 1]}${s.areaPinned[a.id] ? ' (pinned)' : ''}`
 }
-// True once every area's covers input already equals its real average
-// (rounded the way applySetByActuals writes it), so the button can say
-// "applied" and disable itself instead of looking like a silent no-op.
-function actualsAlreadyApplied(s: MonthlyDraft): boolean {
-  const bd = currentMonthAreaBreakdown()
-  if (!bd) return false
-  return bd
-    .filter(row => row.actualCoversPerNight != null)
-    .every(row => s.areaCoversInput[row.areaId] === String(roundCovers(cappedActual(s, row))))
+function pinTitle(s: MonthlyDraft, areaId: number): string {
+  const auto = autoCovers(areaId, s.month)
+  return `Typed by hand, so it stays put. Click to go back to automatic${auto != null ? ` (${auto})` : ''}.`
 }
-function setByActualsTooltip(s: MonthlyDraft): string {
-  if (canSetByActuals(s) && actualsAlreadyApplied(s)) return `Already applied — every area's covers match its real average so far this month (through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
-  if (paceData.value?.asOfMonth !== s.month) return `Only available for the current month (${paceData.value?.asOfMonth != null ? MONTH_NAMES[paceData.value.asOfMonth - 1] : '—'}).`
-  if (!canSetByActuals(s)) return `No real Toast covers data synced yet for ${MONTH_NAMES[s.month - 1]}.`
-  if (usingTrailingWindow()) return `Fewer than ${MIN_NIGHTS_MONTH_TO_DATE} nights so far this month, so this uses the trailing 28 days (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
-  return `Set each area's covers to its real average covers/night so far this month, weighted by weekday (Toast, through ${paceData.value?.asOfDate ?? 'the latest sync'}).`
-}
-// Weekday-weighted covers/night: each weekday's own average, weighted by how
-// many of that weekday the target month operates (Tue-Sun; Monday is the
-// standing closure). A window that happens to over-sample Sundays or Fridays
-// no longer skews the assumption. Weekdays with no observation in the window
-// are skipped and the rest renormalized.
-function weekdayWeightedCovers(s: MonthlyDraft, row: AreaBreakdownRow): number {
-  const byDow = row.byWeekday
-  if (!byDow) return row.actualCoversPerNight as number
-  const year = paceData.value?.asOfYear ?? new Date().getFullYear()
-  const daysInMonth = new Date(year, s.month, 0).getDate()
-  let weighted = 0
-  let weight = 0
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(year, s.month - 1, d).getDay()
-    if (dow === 1) continue
-    const obs = byDow[dow]
-    if (!obs || obs.nights === 0) continue
-    weighted += obs.covers / obs.nights
-    weight += 1
-  }
-  const observed = weight > 0 ? weighted / weight : (row.actualCoversPerNight as number)
-  // The grid holds the PRE-closure baseline. If this area's closure already covers
-  // the whole target month and the window has no nights on a closed weekday, the
-  // observed average is per open night (recapture included), so convert it back.
-  const area = areaDrafts.value.find(a => a.id === row.areaId)
-  if (area && area.closedDows.length > 0 && area.closedFrom && area.closedFrom <= `${year}-${String(s.month).padStart(2, '0')}-01`) {
-    const sawClosedDay = area.closedDows.some(dow => (byDow[dow]?.nights ?? 0) > 0)
-    if (!sawClosedDay) return observed / closureUplift(area)
-  }
-  return observed
-}
-function cappedActual(s: MonthlyDraft, row: AreaBreakdownRow): number {
-  const area = areaDrafts.value.find(a => a.id === row.areaId)
-  const cap = area ? areaCapacityForMonth(area, s.month) : Infinity
-  return Math.min(weekdayWeightedCovers(s, row), cap)
-}
-function applySetByActuals(s: MonthlyDraft) {
-  const bd = currentMonthAreaBreakdown()
-  if (!bd) return
-  for (const row of bd) {
-    if (row.actualCoversPerNight != null) {
-      s.areaCoversInput[row.areaId] = String(roundCovers(cappedActual(s, row)))
-    }
-  }
-}
-
-function applySetByHistory(s: MonthlyDraft) {
-  const fraction = historyTargetFraction(s)
-  if (fraction == null) return
-  const areas = areaDrafts.value
-  const caps = areas.map(a => areaCapacityForMonth(a, s.month))
-  const exact = areas.map((a, i) => Math.min(fraction * caps[i] * areaFillIndexFor(a.id), caps[i]))
-  const totalCapacity = caps.reduce((sum, c) => sum + c, 0)
-  const totalTarget = Math.round(fraction * totalCapacity)
-  const floors = exact.map(Math.floor)
-  const floorSum = floors.reduce((sum, v) => sum + v, 0)
-  const order = floors
-    .map((_, i) => i)
-    .sort((x, y) => (exact[y] - floors[y]) - (exact[x] - floors[x]))
-  const result = [...floors]
-  let leftover = Math.max(0, totalTarget - floorSum)
-  for (let k = 0; k < order.length && leftover > 0; k++) {
-    if (result[order[k]] >= caps[order[k]]) continue
-    result[order[k]] += 1
-    leftover--
-  }
-  areas.forEach((a, i) => {
-    const goal = isChefsCounter(a.name) ? CHEFS_COUNTER_2027_GOAL[s.month - 1] : undefined
-    s.areaCoversInput[a.id] = String(goal != null ? Math.min(Math.round(goal), caps[i] ?? Infinity) : result[i])
-  })
-}
-// Chef's Counter is the one area "Set by History" does NOT derive from the
-// seasonal index (2026-11-02): it gets a fixed, pushed-marketing goal per
-// month instead (avg covers per operating night, Tue-Sun, the same unit as
-// the covers inputs). Built from Aug-Oct 2026 actuals (~7.9/night blended;
-// Fri/Sat ~10 of a 12 cap, Tue/Sun ~4.6) plus the restaurant-wide seasonal
-// shape; the growth is meant to come from Tue-Thu and Sun. Other areas are
-// unchanged, so the total rises by the difference. Winter months are a guess
-// (no winter data at this location yet). Revisit once a full year exists.
-// Whole numbers because the covers inputs are integer-only (avg 9.1).
-// These are PRE-closure baselines (per Tue-Sun night), which is what the grid stores:
-// a Tuesday closure plus recapture (Weekly Area Closures) is applied on top of them.
-const CHEFS_COUNTER_2027_GOAL = [8, 8, 8, 9, 10, 10, 9, 9, 8, 10, 10, 10]
-function isChefsCounter(name: string): boolean {
-  return /chef/i.test(name)
+const pinnedCount = computed(() => monthlyDrafts.value.reduce((n, s) => n + Object.values(s.areaPinned).filter(Boolean).length, 0))
+function unpinAllCovers() {
+  for (const s of monthlyDrafts.value) for (const a of areaDrafts.value) if (s.areaPinned[a.id]) unpinCovers(s, a.id)
 }
 
 // What the leave prompts warn about: real edits to the drafts. The message names what differs so a false alarm
@@ -773,13 +586,14 @@ async function save() {
       id: a.id,
       perCoverRevenueFood: num(a.perCoverRevenueFood),
       perCoverRevenueBeverage: num(a.perCoverRevenueBeverage),
-      followActuals: a.followActuals
+      followActuals: !a.perCoverPinned
     }))
     const areaSeasonality = monthlyDrafts.value.flatMap(s =>
       areaDrafts.value.map(a => ({
         areaId: a.id,
         month: s.month,
-        expectedCovers: intNum(s.areaCoversInput[a.id])
+        expectedCovers: intNum(s.areaCoversInput[a.id]),
+        pinned: !!s.areaPinned[a.id]
       }))
     )
     for (const a of areas) {
@@ -988,9 +802,8 @@ async function save() {
             <div class="section-label">Per-Area Capacity &amp; Revenue</div>
             <ul class="section-note note-list">
               <li>Seats, turns per night and closures are set in <NuxtLink to="/settings">Settings › Restaurant Setup</NuxtLink>; capacity is seats × turns, and Outdoor is closed Nov–Apr.</li>
-              <li>Per-Cover Revenue (Total) is an assumed target. Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Covers &amp; Spend page for the blended (non-area) version.</li>
-              <li>"Set from Actuals" overwrites Food/Beverage with that area's real this + last month blended per-cover $, split using the restaurant-wide real Food/Beverage revenue mix (Toast's own totals have no food/beverage split to draw from directly).</li>
-              <li>"Auto-update monthly" does the same thing for you: on the first nightly sync after a month closes, Food/Beverage are replaced with that area's real per-cover over the two most recently closed months. Off by default — leave it off for areas where you want a deliberate target to compare actuals against. Turning it on takes effect at the next sync.</li>
+              <li>Spend per guest is <strong>automatic</strong>: each area follows its real Toast spend over the last two closed months, updated when a month closes. Type over a figure to <strong>pin</strong> it (for a price you set on purpose); pinned figures stay until you click "Use automatic".</li>
+              <li>Actual This/Last Month is real Toast covers/revenue by area, for comparison — see the Covers &amp; Spend page for the blended (non-area) version.</li>
             </ul>
           </div>
           <div class="pl-table-card">
@@ -1003,7 +816,7 @@ async function save() {
                   <th scope="col">Max Turns/Night</th>
                   <th scope="col">Capacity Nov–Apr</th>
                   <th scope="col">Capacity May–Oct</th>
-                  <th scope="col">Set from Actuals</th>
+                  <th scope="col">Spend per Guest</th>
                   <th scope="col">Per-Cover Revenue (Food)</th>
                   <th scope="col">Per-Cover Revenue (Beverage)</th>
                   <th scope="col">Per-Cover Revenue (Total)</th>
@@ -1019,25 +832,24 @@ async function save() {
                   <td class="derived">{{ fmtCapacity(computedCapacity(a, 'novApr')) }}</td>
                   <td class="derived">{{ fmtCapacity(computedCapacity(a, 'mayOct')) }}</td>
                   <td class="setpct-cell">
-                    <div class="setpct-row">
+                    <template v-if="a.perCoverPinned">
+                      <span class="source-tag pinned">Pinned</span>
                       <button
                         type="button"
                         class="apply-pct-btn"
-                        :disabled="!canSetFromActuals(a)"
-                        :title="canSetFromActuals(a) ? `Set Food/Beverage from ${fmtMoneyOrDash(trailingTwoMonthPerCover(a.id))}/cover, this + last month combined` : 'No real per-area actuals available yet for this area'"
-                        @click="setFromActuals(a)"
-                      >Set from Actuals</button>
-                      <span class="setpct-arrow" aria-hidden="true">→</span>
-                    </div>
-                    <span v-if="canSetFromActuals(a)" class="setpct-result">≈{{ fmtMoneyOrDash(trailingTwoMonthPerCover(a.id)) }}/cover</span>
-                    <label class="follow-toggle" :title="'On the first sync after each month closes, replace Food/Beverage with this area\'s real per-cover from the last two closed months'">
-                      <input v-model="a.followActuals" type="checkbox" />
-                      Auto-update monthly
-                    </label>
-                    <span v-if="followThroughLabel(a.id)" class="setpct-result">{{ followThroughLabel(a.id) }}</span>
+                        :disabled="!autoPerCover(a.id)"
+                        :title="useAutoTitle(a.id)"
+                        @click="usePerCoverAuto(a)"
+                      >Use automatic</button>
+                      <span v-if="autoPerCoverTotal(a.id) != null" class="setpct-result">auto ≈{{ fmtMoneyOrDash(autoPerCoverTotal(a.id)) }}/guest</span>
+                    </template>
+                    <template v-else>
+                      <span class="source-tag auto">Automatic</span>
+                      <span class="setpct-result">{{ perCoverBasisLabel(a.id) ?? 'Waiting for a closed month' }}</span>
+                    </template>
                   </td>
-                  <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" class="cell-input decimal" inputmode="decimal" /></span></td>
-                  <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" class="cell-input decimal" inputmode="decimal" /></span></td>
+                  <td><span class="money-cell">$<input v-model="a.perCoverRevenueFood" :class="['cell-input', 'decimal', !a.perCoverPinned && 'auto-value']" inputmode="decimal" @input="pinPerCover(a)" /></span></td>
+                  <td><span class="money-cell">$<input v-model="a.perCoverRevenueBeverage" :class="['cell-input', 'decimal', !a.perCoverPinned && 'auto-value']" inputmode="decimal" @input="pinPerCover(a)" /></span></td>
                   <td class="derived">${{ Math.round(perCoverTotal(a)) }}</td>
                   <td class="derived">
                     <span v-if="areaActualVariance(a, 'thisMonth')" :class="['variance-text', `v-${areaActualVariance(a, 'thisMonth')!.status}`]">
@@ -1075,9 +887,9 @@ async function save() {
           <div class="section-head">
             <div class="section-label">Expected Nightly Covers by Area &amp; Closures</div>
             <ul class="section-note note-list">
-              <li>Average nightly covers per area, by month — edit these directly.</li>
-              <li>Or use "Set by History" to apply that month's real historical seasonality ({{ historyYearsLabel }} Toast covers, scaled to this page's current year-round average) equally across every area's own capacity for that month — overwrites that row's per-area covers to the right.</li>
-              <li>For the current month, "Set by Actuals" instead overwrites each area's covers with its real average covers/night so far this month (Toast) — use this to tighten the assumption as real data comes in.</li>
+              <li><strong>Automatic</strong> (plain numbers): every month that hasn't started follows the forecast, updated nightly — last year's seasonal pattern, scaled to how full Cambridge St has really been since the move, split by how full each area actually runs.</li>
+              <li><strong>Pinned</strong> (outlined, with ↺): a number you typed stays put. Click ↺ to send it back to automatic.</li>
+              <li>The current month is frozen at what the forecast said on the 1st, so this month's actuals are judged against a fixed number. Each month's row is reused for next year once the month ends.</li>
               <li>Total, Fill %, and Per-Cover $ are derived from these baselines; Projected Revenue also applies any weekly area closure from its start date.</li>
               <li>Closed nights counts holidays (set in <NuxtLink to="/settings">Settings</NuxtLink>) plus closures, off-site and event nights on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>; hover for the dates. Each is worth its own expected revenue instead of a normal night. Buyouts stay normal nights here; the Sales Plan adds their extra.</li>
             </ul>
@@ -1088,8 +900,7 @@ async function save() {
               <thead>
                 <tr>
                   <th scope="col" class="sticky-col">Month</th>
-                  <th scope="col">Set by History</th>
-                  <th scope="col">Set by Actuals</th>
+                  <th scope="col">Basis</th>
                   <th v-for="a in areaDrafts" :key="a.id" scope="col" style="text-transform: capitalize;">{{ a.name }}</th>
                   <th scope="col">Total</th>
                   <th scope="col">Fill %</th>
@@ -1101,37 +912,13 @@ async function save() {
               <tbody>
                 <tr v-for="s in monthlyDrafts" :key="s.month">
                   <th scope="row" class="sticky-col">{{ MONTH_NAMES[s.month - 1] }}</th>
-                  <td>
-                    <span class="setpct-cell">
-                      <span class="setpct-row">
-                        <button
-                          type="button"
-                          class="apply-pct-btn"
-                          :disabled="historyTargetFraction(s) == null"
-                          :title="historyTooltip(s)"
-                          @click="applySetByHistory(s)"
-                        >Set by History</button>
-                        <span class="setpct-arrow" aria-hidden="true">→</span>
-                      </span>
-                      <span v-if="historyTargetFraction(s) != null" class="setpct-result">≈{{ fmtPctWhole(historyTargetFraction(s)) }}</span>
+                  <td :class="['basis-cell', s.month === forecastCurrentMonth && 'frozen']" :title="monthBasisTitle(s)">{{ monthBasisLabel(s) }}</td>
+                  <td v-for="a in areaDrafts" :key="a.id">
+                    <span :class="['cover-cell', s.areaPinned[a.id] && 'pinned']">
+                      <input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" :aria-label="coverAriaLabel(s, a)" @input="onCoversInput(s, a.id)" />
+                      <button v-if="s.areaPinned[a.id]" type="button" class="unpin-btn" :title="pinTitle(s, a.id)" :aria-label="'Unpin ' + coverAriaLabel(s, a)" @click="unpinCovers(s, a.id)">↺</button>
                     </span>
                   </td>
-                  <td>
-                    <span class="setpct-cell">
-                      <span class="setpct-row">
-                        <button
-                          type="button"
-                          class="apply-pct-btn"
-                          :disabled="!canSetByActuals(s) || actualsAlreadyApplied(s)"
-                          :title="setByActualsTooltip(s)"
-                          @click="applySetByActuals(s)"
-                        >Set by Actuals</button>
-                        <span class="setpct-arrow" aria-hidden="true">→</span>
-                      </span>
-                      <span v-if="canSetByActuals(s)" class="setpct-result">{{ actualsAlreadyApplied(s) ? '✓ Applied · ' : '' }}≈{{ fmtCoversPerNight(actualsPreviewTotal(s)) }}/night</span>
-                    </span>
-                  </td>
-                  <td v-for="a in areaDrafts" :key="a.id"><input v-model="s.areaCoversInput[a.id]" class="cell-input narrow" inputmode="numeric" /></td>
                   <td class="derived">{{ monthDerived(s).totalCovers }}</td>
                   <td class="derived">{{ fmtPctWhole(monthDerived(s).fillPct) }}</td>
                   <td class="derived">${{ fmtMoney2(monthDerived(s).avgCheck) }}</td>
@@ -1142,7 +929,6 @@ async function save() {
               <tfoot>
                 <tr>
                   <th scope="row" class="sticky-col">Total</th>
-                  <td class="derived">—</td>
                   <td class="derived">—</td>
                   <td v-for="a in areaDrafts" :key="a.id" class="derived">{{ Math.round(yearlyTotals.areaCoversAvg.get(a.id) ?? 0) }}</td>
                   <td class="derived">{{ Math.round(yearlyTotals.totalCoversAvg) }}</td>
@@ -1157,6 +943,7 @@ async function save() {
         </section>
 
         <div class="save-bar">
+          <button v-if="pinnedCount > 0" type="button" class="apply-pct-btn" title="Send every pinned covers figure back to the automatic forecast" @click="unpinAllCovers">Unpin all covers ({{ pinnedCount }})</button>
           <button class="save-btn" :disabled="saveStatus === 'saving' || !hasUnsavedChanges" @click="save">
             {{ saveStatus === 'saving' ? 'Saving…' : 'Save changes' }}
           </button>
@@ -1376,9 +1163,27 @@ table.pl-table { width: 100%; border-collapse: collapse; font-size: 13px; min-wi
 .dow-toggle input { accent-color: var(--accent); margin: 0; }
 .dow-toggle.on { color: var(--ink); background: var(--surface-alt); border-color: var(--ink-3); }
 .cell-input.date { width: 140px; }
-.follow-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); cursor: pointer; margin-top: 2px; }
-.setpct-row { display: flex; align-items: center; justify-content: center; gap: 5px; }
-.setpct-arrow { color: var(--ink-3); font-size: 14px; }
+/* Automatic vs. pinned (2026-11-11): automatic figures read as plain text that
+   can still be typed over; a typed (pinned) figure gets an accent outline and a
+   small ↺ badge to send it back to automatic. The outline + badge carry the
+   distinction, not color alone. */
+.cover-cell { position: relative; display: inline-flex; }
+.cover-cell .cell-input, .cell-input.auto-value { background: transparent; border-color: transparent; color: var(--ink-2); }
+.cover-cell .cell-input:hover, .cell-input.auto-value:hover { border-color: var(--hair); }
+.cover-cell.pinned .cell-input { background: var(--surface); border: 1.5px solid var(--accent); color: var(--ink); font-weight: 700; }
+.unpin-btn {
+  position: absolute; top: -7px; right: -9px;
+  width: 16px; height: 16px; padding: 0;
+  font-size: 11px; line-height: 14px; font-weight: 700;
+  border-radius: 999px; border: 1px solid var(--accent);
+  background: var(--surface); color: var(--accent-text); cursor: pointer;
+}
+.unpin-btn:hover { background: var(--accent); color: white; }
+.source-tag { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.source-tag.auto { background: var(--surface-alt); color: var(--ink-2); }
+.source-tag.pinned { border: 1px solid var(--accent); color: var(--accent-text); }
+.basis-cell { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.basis-cell.frozen { color: var(--ink-2); font-weight: 700; }
 .setpct-result { font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .apply-pct-btn {
   font-size: 11px;

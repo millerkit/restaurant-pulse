@@ -1,9 +1,14 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 // Bulk upsert of budget_targets rows. Used both by the Budget tab's macro
 // "edit a category total" flow (which computes a per-account redistribution
 // client-side, since the page already has every account's current amount
 // loaded) and any direct account-level edit — this route doesn't care which,
 // it just persists whatever (year, month, accountId, amount) rows it's given.
-type TargetInput = { year: number, month: number, accountId: number, amount: number }
+// pinned (2026-11-11, automatic budget lines): true = typed by hand, kept as entered;
+// false = back to automatic (the stored automatic figure replaces amount when there is
+// one); omitted = leave the line's pin as it is. Only meaningful for lines the
+// automatic forecast manages (server/utils/budget-forecast.ts).
+type TargetInput = { year: number, month: number, accountId: number, amount: number, pinned?: boolean }
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ targets: TargetInput[] }>(event)
@@ -44,14 +49,20 @@ export default defineEventHandler(async (event) => {
   }
 
   const upsert = db.prepare(`
-    INSERT INTO budget_targets (year, month, account_id, amount)
-    VALUES (@year, @month, @accountId, @amount)
-    ON CONFLICT(year, month, account_id) DO UPDATE SET amount = excluded.amount
+    INSERT INTO budget_targets (year, month, account_id, amount, pinned)
+    VALUES (@year, @month, @accountId, @amount, COALESCE(@pinned, 0))
+    ON CONFLICT(year, month, account_id) DO UPDATE SET
+      pinned = COALESCE(@pinned, budget_targets.pinned),
+      amount = CASE WHEN @pinned = 0 AND budget_targets.auto_amount IS NOT NULL
+        THEN budget_targets.auto_amount ELSE excluded.amount END
   `)
   const upsertAll = db.transaction((rows: TargetInput[]) => {
-    for (const t of rows) upsert.run(t)
+    for (const t of rows) upsert.run({ ...t, pinned: t.pinned == null ? null : (t.pinned ? 1 : 0) })
   })
   upsertAll(targets)
+  // A pin change moves the forecast: unpinning hands a line back to it, and pinning a
+  // sales line changes the food & drink cost built on it. Recompute so both are current.
+  if (targets.some(t => t.pinned != null)) refreshForecastsAfterChange(db, useRuntimeConfig().qbo?.syncTimeZone)
 
   return { updated: targets.length }
 })

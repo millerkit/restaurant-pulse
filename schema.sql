@@ -83,6 +83,11 @@ CREATE TABLE budget_targets (
   month       INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
   account_id  INTEGER NOT NULL REFERENCES accounts(id),
   amount      REAL NOT NULL,
+  -- Automatic budget lines (2026-11-11, server/utils/budget-forecast.ts): for the
+  -- lines the forecast manages, in months that haven't started, pinned = 1 means
+  -- typed by hand and kept; otherwise amount follows auto_amount, the forecast's figure.
+  pinned      INTEGER NOT NULL DEFAULT 0,
+  auto_amount REAL,
   UNIQUE (year, month, account_id)
 );
 
@@ -341,6 +346,13 @@ CREATE TABLE capacity_areas (
   -- which makes the update idempotent across nightly runs and restarts.
   follow_actuals              INTEGER NOT NULL DEFAULT 0,
   follow_actuals_through      TEXT,
+  -- Automatic forecast (2026-11-11, server/utils/capacity-forecast.ts):
+  -- follow_actuals = 1 now means "automatic", 0 means "pinned" (typed by hand).
+  -- auto_per_cover_* hold the automatic value (two most recently closed, fully
+  -- synced months) even when pinned, so the page can show it beside the pin;
+  -- follow_actuals_through is the later of those two months ('YYYY-MM').
+  auto_per_cover_food         REAL,
+  auto_per_cover_beverage     REAL,
   -- Weekly closure of this area (added 2026-11-02; first use: Chef's Counter
   -- closed Tuesdays from 2026-12-01). closed_dows is a comma list of weekday
   -- numbers (0=Sun..6=Sat; Monday is the restaurant's standing closure and
@@ -440,7 +452,24 @@ CREATE TABLE capacity_area_seasonality (
   area_id          INTEGER NOT NULL REFERENCES capacity_areas(id),
   month            INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
   expected_covers  REAL NOT NULL,
+  -- Automatic forecast (2026-11-11): expected_covers is the value everything
+  -- reads. pinned = 1 means it was typed by hand and is left alone; otherwise
+  -- the nightly refresh sets it to auto_covers (history shape × data-driven
+  -- baseline) for every month that hasn't started. The current month is never
+  -- recomputed (frozen at what the forecast said when it began).
+  pinned           INTEGER NOT NULL DEFAULT 0,
+  auto_covers      REAL,
+  auto_basis       TEXT,   -- e.g. 'history:45.3' (the month's fill %)
+  auto_updated_at  TEXT,
   PRIMARY KEY (area_id, month)
+);
+
+-- When the automatic capacity forecast last ran, so page loads only refresh it
+-- once a day or when newer Toast data arrives.
+CREATE TABLE capacity_forecast_refresh (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  refreshed_on   TEXT NOT NULL,
+  toast_through  TEXT NOT NULL
 );
 
 -- Buyout revenue (a private event that buys out an entire dining area or

@@ -506,12 +506,7 @@ function capacityTargetForMonth(month: number): CapacityAssumedMonth | null {
   return capacityMonths.value?.find(m => m.month === month)?.assumed ?? null
 }
 
-function leafRevenueAccountsForGroup(group: 'Food' | 'Beverage'): BudgetAccount[] {
-  return revenueAccounts.value.filter(a => a.subcategory === group && isLeafAccount(a))
-}
-function currentGroupRevenueBudget(group: 'Food' | 'Beverage'): number {
-  return leafRevenueAccountsForGroup(group).reduce((sum, a) => sum + (a.amount || 0), 0)
-}
+const revenueHasCapacityData = computed(() => capacityTargetForMonth(editMonth.value) !== null)
 
 type BeverageMixAccount = { accountId: number, accountNumber: string | null, name: string, pct: number | null }
 const beverageRevenueMix = ref<BeverageMixAccount[] | null>(null)
@@ -531,99 +526,28 @@ const beverageMixLabel = computed(() => {
   return mix.map(m => `${m.name.replace(/^Restaurant /, '')} ${Math.round((m.pct ?? 0) * 100)}%`).join(', ')
 })
 
-const REVENUE_RECOMPUTE_THRESHOLD = 1
-function revenueComparisons() {
-  const target = capacityTargetForMonth(editMonth.value)
-  if (!target) return []
-  return (['Food', 'Beverage'] as const).map(group => ({
-    group,
-    targetAmount: group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage,
-    currentAmount: currentGroupRevenueBudget(group)
-  }))
-}
-const revenueHasCapacityData = computed(() => capacityTargetForMonth(editMonth.value) !== null)
-const revenueNeedsRecompute = computed(() =>
-  revenueComparisons().some(c => Math.abs(c.currentAmount - c.targetAmount) > REVENUE_RECOMPUTE_THRESHOLD)
-)
-
-const revenueRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
-const revenueRecomputeMessage = ref('')
-
-// Builds the Food/Beverage leaf-account targets for one month from its Capacity projection.
-// Beverage splits by the real sales mix when every account has one, else by that month's
-// own existing budget weight (equal split if the group was all zero).
-function buildCapacityTargets(month: number) {
-  const target = capacityTargetForMonth(month)
-  if (!target) return null
-  const accountsForMonth = (monthlyData.value[month - 1]?.accounts || []).filter(a => a.category === 'revenue')
-  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-  const summary: string[] = []
-  for (const group of ['Food', 'Beverage'] as const) {
-    const groupTarget = group === 'Food' ? target.expectedRevenueFood : target.expectedRevenueBeverage
-    const accounts = accountsForMonth.filter(a => a.subcategory === group && isLeafAccount(a))
-    if (accounts.length === 0) continue
-    const mixByAccountId = group === 'Beverage'
-      ? new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
-      : null
-    const usingRealMix = !!mixByAccountId && accounts.every(a => mixByAccountId.get(a.accountId) != null)
-    const oldTotal = accounts.reduce((sum, a) => sum + (a.amount || 0), 0)
-    for (const a of accounts) {
-      const weight = usingRealMix
-        ? (mixByAccountId!.get(a.accountId) ?? 0)
-        : (oldTotal > 0 ? (a.amount || 0) / oldTotal : 1 / accounts.length)
-      targets.push({ year: YEAR, month, accountId: a.accountId, amount: Math.round(groupTarget * weight * 100) / 100 })
-    }
-    summary.push(`${group} $${Math.round(groupTarget).toLocaleString()}${group === 'Beverage' ? (usingRealMix ? ' (real Beer/Liquor/Wine/N-A mix)' : ' (no sales mix data yet — used existing budget weight)') : ''}`)
-  }
-  return { targets, summary }
-}
-
-async function recomputeRevenueFromCapacity() {
-  revenueRecomputeStatus.value = 'running'
+// Automatic budget lines (2026-11-11, server/utils/budget-forecast.ts): for months that
+// haven't started, Food/Beverage sales follow the Capacity forecast plus planned buyouts,
+// written by the server every night and after any input changes. The current month froze
+// on the 1st. A line typed over is pinned; ↺ hands it back to the forecast.
+const selectedMonthIsAuto = computed(() => revenueAccounts.value.some(a => a.autoManaged))
+const pinnedLines = computed(() => revenueAccounts.value.filter(a => a.autoManaged && a.pinned))
+const unpinStatus = ref<'idle' | 'running' | 'error'>('idle')
+async function unpinLines(accs: BudgetAccount[]) {
+  if (accs.length === 0) return
+  if (hasUnsavedChanges.value && !window.confirm(UNSAVED_CHANGES_MESSAGE)) return
+  unpinStatus.value = 'running'
   try {
-    const built = buildCapacityTargets(editMonth.value)
-    if (!built) throw new Error(`No Capacity assumptions found for ${MONTH_NAMES[editMonth.value - 1]} — check the Capacity planning page`)
-    if (built.targets.length === 0) throw new Error('No Food/Beverage revenue accounts found to recompute')
-
-    await $fetch('/api/budget/targets', { method: 'POST', body: { targets: built.targets } })
-    await loadYear()
-    revenueRecomputeMessage.value = `Recomputed ${MONTH_NAMES[editMonth.value - 1]} Revenue from Capacity assumptions: ${built.summary.join(', ')}.`
-    revenueRecomputeStatus.value = 'done'
-  } catch (err: any) {
-    revenueRecomputeStatus.value = 'error'
-    revenueRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
-  }
-}
-
-// Same recompute for every month on this page (current month through Dec, or all 12 for a
-// planning year) in one write — built for setting up next year before it starts. Months with
-// no Capacity projection are skipped and named in the result.
-const yearRecomputeStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
-const yearRecomputeMessage = ref('')
-const yearRecomputeLabel = computed(() => `${MONTH_NAMES[targetMonths.value[0] - 1]}–Dec`)
-
-async function recomputeYearRevenueFromCapacity() {
-  if (hasUnsavedChanges.value && !window.confirm('You have unsaved edits on this page; recomputing the year will overwrite them. Continue?')) return
-  if (!window.confirm(`Overwrite ${yearRecomputeLabel.value} ${YEAR} Food and Beverage revenue budgets with the Capacity projection?`)) return
-  yearRecomputeStatus.value = 'running'
-  try {
-    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-    const skipped: string[] = []
-    for (const month of targetMonths.value) {
-      const built = buildCapacityTargets(month)
-      if (!built || built.targets.length === 0) { skipped.push(MONTH_NAMES[month - 1]); continue }
-      targets.push(...built.targets)
-    }
-    if (targets.length === 0) throw new Error('No Capacity assumptions found for any month — check the Capacity planning page')
+    const targets = accs.map(a => ({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: a.autoAmount ?? a.amount ?? 0, pinned: false }))
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
     await loadYear()
-    const done = targetMonths.value.length - skipped.length
-    yearRecomputeMessage.value = `Recomputed ${done} month(s) of ${YEAR} Revenue from Capacity assumptions${skipped.length ? ` (skipped ${skipped.join(', ')}: no Capacity projection)` : ''}.`
-    yearRecomputeStatus.value = 'done'
-  } catch (err: any) {
-    yearRecomputeStatus.value = 'error'
-    yearRecomputeMessage.value = err?.data?.statusMessage || err?.message || 'Recompute failed'
+    unpinStatus.value = 'idle'
+  } catch {
+    unpinStatus.value = 'error'
   }
+}
+function pinTitle(acc: BudgetAccount): string {
+  return `Typed by hand, so the forecast leaves it alone. Click to go back to automatic${acc.autoAmount != null ? ` ($${Math.round(acc.autoAmount).toLocaleString()})` : ''}.`
 }
 
 // ---- Buyout revenue planning -------------------------------------------
@@ -636,7 +560,7 @@ async function recomputeYearRevenueFromCapacity() {
 type BuyoutWeekday = { dow: number, label: string, short: string, dollarTarget: number | null, rate: number }
 const buyoutRates = ref<{ weekdayRate: number, weekendRate: number } | null>(null)
 const buyoutWeekdays = ref<BuyoutWeekday[]>([])
-const buyoutAppliedByAccountId = ref<Record<number, number>>({})
+const buyoutSavedCounts = ref<Record<number, number>>({})
 const buyoutFoodBeverageMix = ref<{ foodPct: number | null, beveragePct: number | null, hasData: boolean }>({ foodPct: null, beveragePct: null, hasData: false })
 const buyoutCountInputs = ref<Record<number, string>>({})
 
@@ -651,7 +575,7 @@ async function loadBuyoutPlan() {
     }>('/api/budget/buyout-plan', { query: { year: YEAR, month: editMonth.value } })
     buyoutRates.value = result.rates
     buyoutWeekdays.value = result.weekdays
-    buyoutAppliedByAccountId.value = result.appliedByAccountId
+    buyoutSavedCounts.value = Object.fromEntries(result.weekdays.map(w => [w.dow, result.countByDow[w.dow] ?? 0]))
     buyoutFoodBeverageMix.value = result.foodBeverageMix
     const inputs: Record<number, string> = {}
     for (const w of result.weekdays) inputs[w.dow] = String(result.countByDow[w.dow] ?? 0)
@@ -659,7 +583,7 @@ async function loadBuyoutPlan() {
   } catch {
     buyoutRates.value = null
     buyoutWeekdays.value = []
-    buyoutAppliedByAccountId.value = {}
+    buyoutSavedCounts.value = {}
     buyoutCountInputs.value = {}
   }
 }
@@ -738,84 +662,46 @@ const buyoutIncrementFood = computed(() => buyoutIncrementTotal.value * (buyoutF
 const buyoutIncrementBeverage = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.beveragePct ?? (1 - FOOD_PCT_FALLBACK)))
 
 const buyoutHasAnyCount = computed(() => datedBuyouts.value.length > 0 || buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) > 0))
-// Disabled once a fresh Apply would be a no-op — same "nothing changed"
-// disable pattern as the Capacity recompute button.
-const buyoutNeedsApply = computed(() => {
-  const totalApplied = Object.values(buyoutAppliedByAccountId.value).reduce((s, v) => s + v, 0)
-  return Math.abs(buyoutIncrementTotal.value - totalApplied) > 1
-})
-
-const buyoutApplyStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
-const buyoutApplyMessage = ref('')
-
-async function applyBuyoutRevenue() {
-  buyoutApplyStatus.value = 'running'
+// Planned buyouts reach the budget automatically for months that haven't started
+// (server/utils/budget-forecast.ts); this only saves the undated counts.
+const buyoutCountsChanged = computed(() => buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) !== (buyoutSavedCounts.value[w.dow] ?? 0)))
+const buyoutSaveStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
+const buyoutSaveMessage = ref('')
+async function saveBuyoutCounts() {
+  buyoutSaveStatus.value = 'running'
   try {
-    const foodAccount = revenueAccounts.value.find(a => a.accountNumber === '4010')
-    const beverageAccounts = leafRevenueAccountsForGroup('Beverage')
-    if (!foodAccount || beverageAccounts.length === 0) throw new Error('Could not find Food/Beverage accounts to apply to')
-
-    const mixByAccountId = new Map((beverageRevenueMix.value ?? []).map(m => [m.accountId, m.pct]))
-    const usingRealMix = beverageAccounts.every(a => mixByAccountId.get(a.accountId) != null)
-    const oldBeverageTotal = beverageAccounts.reduce((sum, a) => sum + (a.amount || 0), 0)
-
-    const targets: { year: number, month: number, accountId: number, amount: number }[] = []
-    const applied: { accountId: number, amount: number }[] = []
-
-    const foodPreviouslyApplied = buyoutAppliedByAccountId.value[foodAccount.accountId] ?? 0
-    const foodIncrement = Math.round(buyoutIncrementFood.value * 100) / 100
-    const newFoodAmount = (foodAccount.amount || 0) - foodPreviouslyApplied + foodIncrement
-    targets.push({ year: YEAR, month: editMonth.value, accountId: foodAccount.accountId, amount: Math.round(newFoodAmount * 100) / 100 })
-    applied.push({ accountId: foodAccount.accountId, amount: foodIncrement })
-
-    for (const a of beverageAccounts) {
-      const weight = usingRealMix
-        ? (mixByAccountId.get(a.accountId) ?? 0)
-        : (oldBeverageTotal > 0 ? (a.amount || 0) / oldBeverageTotal : 1 / beverageAccounts.length)
-      const leafIncrement = Math.round(buyoutIncrementBeverage.value * weight * 100) / 100
-      const previouslyApplied = buyoutAppliedByAccountId.value[a.accountId] ?? 0
-      const newAmount = (a.amount || 0) - previouslyApplied + leafIncrement
-      targets.push({ year: YEAR, month: editMonth.value, accountId: a.accountId, amount: Math.round(newAmount * 100) / 100 })
-      applied.push({ accountId: a.accountId, amount: leafIncrement })
-    }
-
     const counts: Record<number, number> = {}
     for (const w of buyoutWeekdays.value) counts[w.dow] = parseCount(buyoutCountInputs.value[w.dow])
-
-    await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
-    await $fetch('/api/budget/buyout-plan', { method: 'POST', body: { year: YEAR, month: editMonth.value, counts, applied } })
+    await $fetch('/api/budget/buyout-plan', { method: 'POST', body: { year: YEAR, month: editMonth.value, counts } })
     await Promise.all([loadYear(), loadBuyoutPlan()])
-
-    buyoutApplyMessage.value = `Applied ${MONTH_NAMES[editMonth.value - 1]}'s planned buyout revenue: +$${Math.round(buyoutIncrementFood.value + buyoutIncrementBeverage.value).toLocaleString()} (Food $${Math.round(buyoutIncrementFood.value).toLocaleString()} / Beverage $${Math.round(buyoutIncrementBeverage.value).toLocaleString()}).`
-    buyoutApplyStatus.value = 'done'
+    buyoutSaveMessage.value = selectedMonthIsAuto.value ? 'Saved; the budget below now includes them.' : 'Saved.'
+    buyoutSaveStatus.value = 'done'
   } catch (err: any) {
-    buyoutApplyStatus.value = 'error'
-    buyoutApplyMessage.value = err?.data?.statusMessage || err?.message || 'Apply failed'
+    buyoutSaveStatus.value = 'error'
+    buyoutSaveMessage.value = err?.data?.statusMessage || err?.message || 'Save failed'
   }
 }
 
 watch(editMonth, () => {
-  revenueRecomputeStatus.value = 'idle'
-  revenueRecomputeMessage.value = ''
   actionStatus.value = 'idle'
   actionMessage.value = ''
   saveStatus.value = 'idle'
   saveMessage.value = ''
-  buyoutApplyStatus.value = 'idle'
-  buyoutApplyMessage.value = ''
+  buyoutSaveStatus.value = 'idle'
+  buyoutSaveMessage.value = ''
 })
 
 // ---- Save / unsaved-changes guard -------------------------------------------
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'nochange' | 'error'>('idle')
 const saveMessage = ref('')
 
-function changedTargets(): { year: number, month: number, accountId: number, amount: number }[] {
-  const targets: { year: number, month: number, accountId: number, amount: number }[] = []
+function changedTargets(): { year: number, month: number, accountId: number, amount: number, pinned?: boolean }[] {
+  const targets: { year: number, month: number, accountId: number, amount: number, pinned?: boolean }[] = []
   for (const acc of revenueAccounts.value) {
     if (!isLeafAccount(acc)) continue
     const newAmount = parseEditableAmount(editableAccountAmounts.value[acc.accountId])
     if (Math.round(newAmount) !== Math.round(acc.amount ?? 0)) {
-      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount })
+      targets.push({ year: YEAR, month: editMonth.value, accountId: acc.accountId, amount: newAmount, ...(acc.autoManaged ? { pinned: true } : {}) })
     }
   }
   return targets
@@ -850,8 +736,8 @@ async function saveRevenue() {
   try {
     const targets = changedTargets()
     if (targets.length === 0) {
-      // Real, reachable state — clicking Save after "Recompute from Capacity" or "Fill in
-      // missing" already persisted everything (both save directly, then reload), or just
+      // Real, reachable state — clicking Save after "Fill in missing" already persisted
+      // everything (it saves directly, then reloads), or just
       // clicking Save twice in a row. Previously this silently reset to 'idle' with no
       // visible change at all, which read as "the button doesn't do anything" (reported
       // directly by the user against a real screenshot) — it was working, just mute.
@@ -1051,33 +937,23 @@ function formatNightDate(iso: string) {
 
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
-            <span class="chip accent">Fed from Capacity</span>
-            <span class="quiet-note">The Capacity planning page's per-area expected-covers assumptions already project Food/Beverage revenue for this month — pull that projection in instead of typing a figure in twice.</span>
+            <span class="chip accent">{{ selectedMonthIsAuto ? 'Automatic' : 'Frozen plan' }}</span>
+            <span v-if="selectedMonthIsAuto" class="quiet-note">
+              {{ MONTH_NAMES[editMonth - 1] }} hasn't started, so its food and beverage sales follow the forecast and update by themselves: the
+              <NuxtLink to="/capacity?tab=edit">Capacity</NuxtLink> projection
+              <template v-if="revenueHasCapacityData">(Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>, Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>)</template>
+              plus planned buyouts below<template v-if="beverageMixLabel">, with beverage split {{ beverageMixLabel }} from real sales since the move</template>.
+              Food &amp; drink cost follows on the <NuxtLink to="/budget/edit">Budget</NuxtLink> page. Type over a line to pin it; ↺ sends it back to automatic.
+            </span>
+            <span v-else class="quiet-note">
+              {{ MONTH_NAMES[editMonth - 1] }}'s plan froze when the month started, so actuals are judged against a fixed number. The Projected column is the live forecast for this month. Edits here are kept as typed.
+            </span>
           </div>
-          <div v-if="revenueHasCapacityData" class="section-note">
-            From the <NuxtLink to="/capacity?tab=edit">Capacity planning page's</NuxtLink> projection for {{ MONTH_NAMES[editMonth - 1] }}:
-            Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>,
-            Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>
-            <template v-if="beverageMixLabel">(split {{ beverageMixLabel }}, from real sales since the location move)</template>
-            <template v-else>(no real Beer/Liquor/Wine/Non-Alcoholic sales mix yet — will split by whatever's already budgeted)</template>.
-            <button
-              class="mini-btn" :disabled="revenueRecomputeStatus === 'running' || (!revenueNeedsRecompute && revenueRecomputeStatus !== 'done')"
-              :title="!revenueNeedsRecompute && revenueRecomputeStatus !== 'done' ? 'Already matches the Capacity projection — nothing to change' : ''"
-              @click="recomputeRevenueFromCapacity"
-            >
-              Recompute {{ MONTH_NAMES[editMonth - 1] }} Revenue from Capacity
-            </button>
-            <span v-if="revenueRecomputeStatus === 'done'" class="chip good">{{ revenueRecomputeMessage }}</span>
-            <span v-if="revenueRecomputeStatus === 'error'" class="chip warning">{{ revenueRecomputeMessage }}</span>
+          <div v-if="pinnedLines.length > 0" class="section-note">
+            {{ pinnedLines.length }} line{{ pinnedLines.length === 1 ? ' is' : 's are' }} pinned for {{ MONTH_NAMES[editMonth - 1] }}.
+            <button class="mini-btn" :disabled="unpinStatus === 'running'" @click="unpinLines(pinnedLines)">Unpin all</button>
+            <span v-if="unpinStatus === 'error'" class="chip warning">Couldn't unpin</span>
           </div>
-          <div v-if="revenueHasCapacityData" class="section-note">
-            <button class="mini-btn" :disabled="yearRecomputeStatus === 'running'" @click="recomputeYearRevenueFromCapacity">
-              Recompute all of {{ yearRecomputeLabel }} {{ YEAR }} from Capacity
-            </button>
-            <span v-if="yearRecomputeStatus === 'done'" class="chip good">{{ yearRecomputeMessage }}</span>
-            <span v-if="yearRecomputeStatus === 'error'" class="chip warning">{{ yearRecomputeMessage }}</span>
-          </div>
-          <div v-else class="quiet-note small">No Capacity assumptions found for {{ MONTH_NAMES[editMonth - 1] }} yet — set expected covers by area on the <NuxtLink to="/capacity?tab=edit">Capacity planning page</NuxtLink>.</div>
         </div>
 
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
@@ -1121,19 +997,20 @@ function formatNightDate(iso: string) {
             </template>
             <template v-else>No buyouts planned for {{ MONTH_NAMES[editMonth - 1] }} yet.</template>
             <button
-              class="mini-btn" :disabled="buyoutApplyStatus === 'running' || !buyoutNeedsApply"
-              :title="!buyoutNeedsApply ? 'Already matches the current plan — nothing to change' : ''"
-              @click="applyBuyoutRevenue"
-            >Apply to {{ MONTH_NAMES[editMonth - 1] }}'s budget</button>
-            <span v-if="buyoutApplyStatus === 'done'" class="chip good">{{ buyoutApplyMessage }}</span>
-            <span v-if="buyoutApplyStatus === 'error'" class="chip warning">{{ buyoutApplyMessage }}</span>
+              class="mini-btn" :disabled="buyoutSaveStatus === 'running' || !buyoutCountsChanged"
+              :title="!buyoutCountsChanged ? 'No changes to save' : ''"
+              @click="saveBuyoutCounts"
+            >Save planned buyouts</button>
+            <span v-if="buyoutSaveStatus === 'done'" class="chip good">{{ buyoutSaveMessage }}</span>
+            <span v-if="buyoutSaveStatus === 'error'" class="chip warning">{{ buyoutSaveMessage }}</span>
+            <span v-if="!selectedMonthIsAuto" class="quiet-note small">{{ MONTH_NAMES[editMonth - 1] }}'s plan is frozen, so these feed the Projected column, not the budget.</span>
           </div>
         </div>
 
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Special Nights</span>
-            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. Each replaces a normal night: in the current month's Projected figure, in This Week's Next 7 Nights, and in the budget, where closures, off-site and event nights are taken out of the Capacity projection (click Recompute Revenue from Capacity above to update the budget) and buyouts are added through the Buyout panel. Expected revenue is dine-in sales only: a buyout's price, $0 for a closure or off-site night, and for an event only dine-in sales on top of tickets (tickets belong in Event Sales). No holiday closure is needed for any of these; holidays are set in <NuxtLink to="/settings">Settings</NuxtLink>.</span>
+            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. Each replaces a normal night: in the current month's Projected figure, in This Week's Next 7 Nights, and, for months that haven't started, in the budget automatically: closures, off-site and event nights are taken out of the Capacity projection and buyouts are added on top. Expected revenue is dine-in sales only: a buyout's price, $0 for a closure or off-site night, and for an event only dine-in sales on top of tickets (tickets belong in Event Sales). No holiday closure is needed for any of these; holidays are set in <NuxtLink to="/settings">Settings</NuxtLink>.</span>
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>
@@ -1168,7 +1045,7 @@ function formatNightDate(iso: string) {
           </form>
           <div class="quiet-note small">Adding a date that's already listed replaces it.</div>
           <div class="quiet-note small">
-            A buyout here also adds (its revenue − a normal night) to the budget once you click Apply in the Buyout Revenue panel above. Removing one does not restore a planner count.
+            A buyout here also adds (its revenue − a normal night) to the budget automatically for months that haven't started. Removing one does not restore a planner count.
           </div>
 
           <details v-if="selectedMonthIsCurrent && nightlyProjection" class="nightly-detail">
@@ -1300,8 +1177,11 @@ function formatNightDate(iso: string) {
                 </th>
                 <td>
                   <span class="amount-cell">
+                    <button v-if="acc.autoManaged && acc.pinned" type="button" class="unpin-btn" :title="pinTitle(acc)" :aria-label="`Unpin ${acc.name}`" @click="unpinLines([acc])">↺</button>
                     <input
-                      v-if="isLeafAccount(acc)" type="text" inputmode="numeric" class="amount-input"
+                      v-if="isLeafAccount(acc)" type="text" inputmode="numeric"
+                      :class="['amount-input', acc.autoManaged && (acc.pinned ? 'pinned' : 'auto-value')]"
+                      :title="acc.autoManaged && !acc.pinned ? 'Automatic: follows the forecast. Type over it to pin it.' : undefined"
                       v-model="editableAccountAmounts[acc.accountId]" @blur="onAmountBlur(acc.accountId)" placeholder="0"
                     />
                     <span v-else class="amount-input readonly">${{ Math.round(computedAccountAmount(acc)).toLocaleString() }}</span>
@@ -1488,7 +1368,18 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
    `<td>` itself so multiple adjacent amount columns (Budget/Actual/
    Projected) never fold into one anonymous cell the way two adjacent
    flex-`<td>`s did there. */
-.amount-cell { display: flex; justify-content: flex-end; }
+.amount-cell { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+/* Automatic vs. pinned budget lines (2026-11-11): automatic reads as plain text you
+   can still type over; pinned gets an accent outline plus a ↺ button to unpin. */
+.amount-input.auto-value { background: transparent; border-color: transparent; color: var(--ink-2); }
+.amount-input.auto-value:hover { border-color: var(--hair); }
+.amount-input.pinned { border: 1.5px solid var(--accent); font-weight: 700; }
+.unpin-btn {
+  width: 20px; height: 20px; padding: 0; font-size: 12px; line-height: 18px; font-weight: 700;
+  border-radius: 999px; border: 1px solid var(--accent); background: var(--surface);
+  color: var(--accent-text); cursor: pointer;
+}
+.unpin-btn:hover { background: var(--accent); color: white; }
 .amount-input {
   width: 120px;
   font-variant-numeric: tabular-nums;

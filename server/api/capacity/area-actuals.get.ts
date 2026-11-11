@@ -51,20 +51,9 @@ export default defineEventHandler(() => {
   const thisMonth = { ...thisMonthRange, cappedAt: thisMonthRange.end > asOfDate ? asOfDate : thisMonthRange.end, perArea: sumForRange(thisMonthRange.start, thisMonthRange.end) }
   const lastMonth = { ...lastMonthRange, cappedAt: lastMonthRange.end > asOfDate ? asOfDate : lastMonthRange.end, perArea: sumForRange(lastMonthRange.start, lastMonthRange.end) }
 
-  // Two-month trailing blend (this + last month combined, "Set from
-  // Actuals" button on the Edit Capacity page). The math lives in
-  // server/utils/capacity-actuals.ts so the nightly month-close auto-update
-  // for areas with follow_actuals = 1 uses exactly the same definition.
-  const mixStart = lastMonth.start
-  const mixEnd = thisMonth.cappedAt
-  const blend = blendForRange(db, mixStart, mixEnd)
-  const trailingTwoMonth = blend.perArea
-  const foodBeveragePct = blend.foodBeveragePct
-
   return {
     asOfDate,
     thisMonth,
-    lastMonth,
-    trailingTwoMonth: { start: mixStart, end: mixEnd, perArea: trailingTwoMonth, foodBeveragePct }
+    lastMonth
   }
 })

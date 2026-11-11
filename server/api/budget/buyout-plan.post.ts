@@ -1,3 +1,4 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 // Saves this month's planned buyout counts and, when the client just ran
 // the "Apply to budget" action, the resulting per-account applied amounts
 // (see schema.sql's revenue_buyout_applied comment for why the latter is
@@ -61,5 +62,7 @@ export default defineEventHandler(async (event) => {
   })
   run()
 
+  // A forecast input changed: recompute the automatic forecast and budget lines.
+  refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
   return { savedCounts: countEntries.length, savedApplied: appliedEntries.length }
 })

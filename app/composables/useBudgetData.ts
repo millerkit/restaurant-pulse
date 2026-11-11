@@ -18,6 +18,11 @@ export type BudgetAccount = {
   // laborManaged-gated <input>.
   laborManaged: boolean
   amount: number | null
+  // Automatic budget lines (server/utils/budget-forecast.ts): the forecast writes this
+  // line for a month that hasn't started unless it's pinned; autoAmount is its figure.
+  autoManaged?: boolean
+  pinned?: boolean
+  autoAmount?: number | null
 }
 export type MonthData = { year: number, month: number, accounts: BudgetAccount[] }
 
