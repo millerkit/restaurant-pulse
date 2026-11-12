@@ -8,6 +8,7 @@
 // gets no value, and the page keeps whatever it had.
 import type Database from 'better-sqlite3'
 import { loadLaborAccounts } from './labor-accounts'
+import { loadStaffOverrides } from './staff-overrides'
 
 type Db = Database.Database
 
@@ -165,6 +166,19 @@ export function computeAutoHours(db: Db): AutoHours | null {
     if (a && r.first < a.firstShift) a.firstShift = r.first
   }
   const lastTwoWeeks = considered.slice(0, 2)
+  // Shared station logins (Settings › Staff & Pay Rules, "not a person") are never a person's
+  // hours: their clock-ins run all night and read as heavy overtime ("Service Bar" showed 17 OT
+  // hrs/wk on FOH OT). Same name match as the benefits report.
+  const names = new Map((db.prepare('SELECT guid, first_name, last_name, chosen_name FROM toast_employees').all() as any[]).map(e => [e.guid as string, e]))
+  const excludedNames = loadStaffOverrides(db).excluded
+  const isSharedLogin = (guid: string) => {
+    const e = names.get(guid)
+    if (!e) return false
+    const given = (e.chosen_name || e.first_name || '').trim()
+    const display = [given, (e.last_name ?? '').trim()].filter(Boolean).join(' ').toLowerCase()
+    return excludedNames.has(display) || excludedNames.has(`${(e.first_name ?? '').trim()} ${(e.last_name ?? '').trim()}`.trim().toLowerCase())
+  }
+  for (const byEmp of agg.values()) for (const guid of [...byEmp.keys()]) if (isSharedLogin(guid)) byEmp.delete(guid)
 
   // ---- Per-slot averages ----------------------------------------------------------------
   const slots = new Map<number, { value: number | null, basis: SlotBasis }>()
@@ -215,7 +229,6 @@ export function computeAutoHours(db: Db): AutoHours | null {
 
   // ---- Unplanned hours: people working an account's mapped jobs who aren't a slot there ------
   const unplanned = new Map<number, UnplannedHours[]>()
-  const names = new Map((db.prepare('SELECT guid, first_name, last_name, chosen_name FROM toast_employees').all() as any[]).map(e => [e.guid as string, e]))
   for (const [accountId, mapped] of mappedByAccount) {
     const list: UnplannedHours[] = []
     for (const [guid, a] of agg.get(accountId) ?? []) {

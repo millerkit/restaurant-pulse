@@ -6074,3 +6074,13 @@ Spec: `docs/specs/staffing-auto-hours.md`. Decisions made with Kit before buildi
   scaling (and a hand-edited Budget-page value that was never pinned would be replaced). Compare against
   `budget_targets_labor_pre_auto` after the first run. Staffing Plan Save still overwrites a pinned labor line's amount
   (it never sent `pinned`), as before.
+
+## 2026-11-12 (later) — shared logins excluded from staffing hours averages
+
+After deploy, FOH OT's automatic average read 17.5 hrs/wk with no real FOH overtime. Cause: the "Service Bar" shared
+station login (job Service Bartender, mapped to the Bartender role) clocks in all night and carried 102 OT hours in the
+window. It was already an `excluded` staff override (Settings › Staff & Pay Rules, used by the benefits report), but
+`computeAutoHours` ignored overrides. It now drops excluded employees (same display-name match as staff-hours) before
+averaging slots, OT and unplanned hours. Also relabeled the job mapping's "Not budgeted" as "Salaried / fixed pay".
+Production's BOH OT average (28.5 hrs/wk, real individual overtime incl. the Sous Chef) is left as the data says.
+
