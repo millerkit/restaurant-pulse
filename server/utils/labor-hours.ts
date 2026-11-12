@@ -166,6 +166,8 @@ export function computeAutoHours(db: Db): AutoHours | null {
     if (a && r.first < a.firstShift) a.firstShift = r.first
   }
   const lastTwoWeeks = considered.slice(0, 2)
+  const historyStart = (db.prepare('SELECT MIN(date) AS d FROM daily_toast_job_hours').get() as { d: string }).d
+  const firstDataSunday = addDays(mondayOf(historyStart), 6)
   // Shared station logins (Settings › Staff & Pay Rules, "not a person") are never a person's
   // hours: their clock-ins run all night and read as heavy overtime ("Service Bar" showed 17 OT
   // hrs/wk on FOH OT). Same name match as the benefits report.
@@ -200,7 +202,9 @@ export function computeAutoHours(db: Db): AutoHours | null {
       usable.forEach((w, i) => {
         // A week counts as the person's own once their first shift is on or before that week's
         // Tuesday (Monday is closed). Earlier weeks are left out silently: a new hire.
-        if (!mine || mine.firstShift > addDays(w, 1)) {
+        // (History starts on historyStart, so anyone first seen during that first data week is
+        // treated as already working here: their real start date is unknown, not recent.)
+        if (!mine || (mine.firstShift > addDays(w, 1) && mine.firstShift > firstDataSunday)) {
           if (mine) sawNewHire = true
           used.push(false)
           return

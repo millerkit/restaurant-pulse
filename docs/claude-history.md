@@ -6130,3 +6130,12 @@ plus `pay_change_year`; GET/POST take `year`; the forecast prices each year with
 longer writes next-year targets itself (the server refresh does). Editing an earlier year while a later change
 exists only moves the years before the change. Not covered: weekly hours, OT hours, and adding/removing a person
 are still one shared set (use first paycheck date for hires).
+
+## 2026-11-12 (late) — "new hire" flag was firing on existing staff
+
+Production's Toast job-hours history starts 2026-09-28, the same day the 6-week window starts, and "first shift" is read
+from that history. Anyone whose first shift on a role's jobs was after Tuesday of that first week (servers who work
+Thu–Sun, people who picked up a second job) was flagged ✚ new hire and their first week was left out of the average.
+Now anyone first seen during the first data week counts as already working there (their real start is unknown, not
+recent); a genuine new hire (Elijah, first shift mid-October) is still flagged. Flags clear as the window slides.
+
