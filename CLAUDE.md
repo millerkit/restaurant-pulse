@@ -268,8 +268,14 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
   confirm production `capacity_areas` capacities match seats × turns (Settings › Restaurant Setup saves fix
   this).
 - A truly measured historical fill % needs Mass Ave's old seating, which was never recorded.
-- Labor: an effective-dated salary change (mid-month raises) isn't modeled; payroll tax rates reset each
-  January (SUTA is the reduced 2026 rate).
+- Labor: payroll tax rates reset each January (SUTA is the reduced 2026 rate).
+- **Possible feature (not needed now, Kit 2026-11-12): mid-month raises.** Not modeled. Design if wanted: two
+  optional columns on `labor_position_slots`, `raise_effective_date` (a paycheck date, like
+  `first_paycheck_date`) and `raise_new_amount` (new hourly rate, or new weekly salary). Only
+  `slotMonthlyDollars` / `slotSalaryMonthlyDollars` in `shared/utils/labor-model.ts` split a month's Fridays
+  before/after; slots without a raise must stay byte-identical (compare all accounts and months). OT's blended
+  base rate would keep current rates unless made month-aware. Needs a migration, `schema.sql`, and two inputs
+  on the Staffing Plan slot.
 - Toast's per-area revenue uses check totals, which can't exclude a private event at a table.
 
 ## Cash & Loans Year-End Outlook
