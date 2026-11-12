@@ -1,3 +1,4 @@
+import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 // Persists the Labor tab's assumptions — labor_position_settings, labor_position_slots,
 // and labor_tax_rates. Never touches budget_targets; the client computes the resulting
 // monthly $ figures itself and writes them via the existing /api/budget/targets route in
@@ -7,10 +8,16 @@
 // (slot_index 1..N) — simplest way to represent "a person was removed" without a
 // separate delete list: any stored slot_index beyond what's sent for that account is
 // deleted, then every sent slot is upserted by (account_id, slot_index).
+//
+// Because removing a person renumbers everyone after them, a slot's Toast mapping
+// (toastEmployeeGuid) and pin (hoursPinned) are sent with EVERY slot and overwrite the row at
+// that index; the stored automatic hours belong to whoever was in that slot before, so they're
+// cleared whenever the guid at an index changes (the refresh below recomputes them). hoursPinned
+// false restores the automatic hours (step 4, 2026-11-12: server/utils/labor-hours.ts).
 type RoleClass = 'direct' | 'supervision' | 'overhead' | 'growth'
 const ROLE_CLASSES: RoleClass[] = ['direct', 'supervision', 'overhead', 'growth']
-type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number, isHidden: boolean, roleClass?: RoleClass | null }
-type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate?: string | null }
+type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number, isHidden: boolean, roleClass?: RoleClass | null, otHoursPinned?: boolean }
+type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate?: string | null, toastEmployeeGuid?: string | null, hoursPinned?: boolean }
 type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number, taxableTipsPerPayroll?: number }
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -44,15 +51,23 @@ export default defineEventHandler(async (event) => {
   }
 
   const updateSettings = db.prepare(`
-    UPDATE labor_position_settings SET scales_with_seasonality = @scalesWithSeasonality, ot_hours = @otHours, flat_amount = @flatAmount, is_hidden = @isHidden, role_class = @roleClass, updated_at = @updatedAt
+    UPDATE labor_position_settings SET scales_with_seasonality = @scalesWithSeasonality, flat_amount = @flatAmount, is_hidden = @isHidden, role_class = @roleClass, updated_at = @updatedAt,
+      ot_hours_pinned = COALESCE(@otHoursPinned, ot_hours_pinned),
+      ot_hours = CASE WHEN @otHoursPinned = 0 AND auto_ot_hours IS NOT NULL THEN auto_ot_hours ELSE @otHours END
     WHERE account_id = @accountId
   `)
   const upsertSlot = db.prepare(`
-    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, first_paycheck_date, updated_at)
-    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @firstPaycheckDate, @updatedAt)
+    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, first_paycheck_date, toast_employee_guid, hours_pinned, updated_at)
+    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @firstPaycheckDate, @toastEmployeeGuid, @hoursPinned, @updatedAt)
     ON CONFLICT(account_id, slot_index) DO UPDATE SET
       employee_name = excluded.employee_name, hourly_rate = excluded.hourly_rate,
-      weekly_hours = excluded.weekly_hours, weekly_salary = excluded.weekly_salary, first_paycheck_date = excluded.first_paycheck_date, updated_at = excluded.updated_at
+      weekly_hours = CASE WHEN excluded.hours_pinned = 0 AND labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid AND labor_position_slots.auto_weekly_hours IS NOT NULL
+        THEN labor_position_slots.auto_weekly_hours ELSE excluded.weekly_hours END,
+      weekly_salary = excluded.weekly_salary, first_paycheck_date = excluded.first_paycheck_date,
+      auto_weekly_hours = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_weekly_hours ELSE NULL END,
+      auto_hours_basis = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_hours_basis ELSE NULL END,
+      auto_updated_at = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_updated_at ELSE NULL END,
+      toast_employee_guid = excluded.toast_employee_guid, hours_pinned = excluded.hours_pinned, updated_at = excluded.updated_at
   `)
   const trimSlots = db.prepare(`DELETE FROM labor_position_slots WHERE account_id = ? AND slot_index > ?`)
   const upsertTaxRates = db.prepare(`
@@ -66,7 +81,7 @@ export default defineEventHandler(async (event) => {
 
   const run = db.transaction(() => {
     for (const s of settings) {
-      updateSettings.run({ accountId: s.accountId, scalesWithSeasonality: s.scalesWithSeasonality ? 1 : 0, otHours: s.otHours ?? 0, flatAmount: s.flatAmount ?? 0, isHidden: s.isHidden ? 1 : 0, roleClass: s.roleClass ?? null, updatedAt: now })
+      updateSettings.run({ accountId: s.accountId, scalesWithSeasonality: s.scalesWithSeasonality ? 1 : 0, otHours: s.otHours ?? 0, flatAmount: s.flatAmount ?? 0, isHidden: s.isHidden ? 1 : 0, roleClass: s.roleClass ?? null, otHoursPinned: s.otHoursPinned == null ? null : (s.otHoursPinned ? 1 : 0), updatedAt: now })
     }
 
     const maxSlotIndexByAccount = new Map<number, number>()
@@ -74,7 +89,8 @@ export default defineEventHandler(async (event) => {
       maxSlotIndexByAccount.set(slot.accountId, Math.max(maxSlotIndexByAccount.get(slot.accountId) ?? 0, slot.slotIndex))
       upsertSlot.run({
         accountId: slot.accountId, slotIndex: slot.slotIndex, employeeName: slot.employeeName || null,
-        hourlyRate: slot.hourlyRate ?? 0, weeklyHours: slot.weeklyHours ?? 0, weeklySalary: slot.weeklySalary ?? 0, firstPaycheckDate: slot.firstPaycheckDate || null, updatedAt: now
+        hourlyRate: slot.hourlyRate ?? 0, weeklyHours: slot.weeklyHours ?? 0, weeklySalary: slot.weeklySalary ?? 0, firstPaycheckDate: slot.firstPaycheckDate || null,
+        toastEmployeeGuid: slot.toastEmployeeGuid || null, hoursPinned: slot.hoursPinned === false ? 0 : 1, updatedAt: now
       })
     }
     for (const [accountId, maxIndex] of maxSlotIndexByAccount) {
@@ -91,6 +107,8 @@ export default defineEventHandler(async (event) => {
     if (taxRates) upsertTaxRates.run({ ...taxRates, taxableTipsPerPayroll: taxRates.taxableTipsPerPayroll ?? 0, updatedAt: now })
   })
   run()
+  // Mapping, pins and hours all move the automatic labor lines and OT: recompute now (never fails the save).
+  refreshForecastsAfterChange(db, useRuntimeConfig().qbo?.syncTimeZone)
 
   return { updatedSettings: settings.length, updatedSlots: slots.length, taxRatesUpdated: !!taxRates }
 })

@@ -185,12 +185,25 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 - **Weekly goal**: `weekly_revenue_benchmark` (Settings) × each weekday's real share of a week since the
   move (`server/utils/weekly-targets.ts`, with weekly-closure adjustments) drives This Week's targets and
   the Revenue Calendar.
-- **Staffing Plan** (`app/utils/laborModel.ts`): weekly rates/hours/salaries × that month's Fridays,
+- **Staffing Plan** (`shared/utils/labor-model.ts`, re-exported from `app/utils/laborModel.ts`): weekly rates/hours/salaries × that month's Fridays,
   first-paycheck dates, taxable tips per payroll for SS/Medicare (rates locked at 6.2%/1.45%), role
   classes (direct/supervision/overhead/growth). Saving writes the labor budget, and saving the current
   year also rewrites all 12 months of next year's labor from the same inputs (overwriting hand-entered
   next-year labor; current-year-only inputs like a reduced salary or SUTA rate carry over as-is). A raise
   effective mid-month isn't modeled.
+- **Staffing hours follow Toast** (dynamic budgeting step 4, built 2026-11-12, migration 0019; not yet deployed).
+  A slot linked to a Toast employee (Staffing Plan picker; Settings › Staff & Pay Rules maps Toast jobs →
+  roles, `toast_job_labor_accounts`) gets `auto_weekly_hours` = mean of that person's regular hours on the
+  role's jobs over the last **6** usable Mon–Sun weeks (`AUTO_HOURS_WINDOW_WEEKS`, `server/utils/labor-hours.ts`;
+  a week with a holiday closure, < 5 open nights or no synced hours is skipped, reach back ≤ 10 weeks, need ≥ 3
+  or nothing changes), to the nearest 0.5, median stored beside it. Flags: vacation?, new hire, no shifts 2
+  wks, auto clock-outs. OT accounts get the group's average weekly OT hours. `hours_pinned` / `ot_hours_pinned`
+  = typed by hand (every existing slot started pinned; ↺ / "use it?" unpins). `refreshLaborForecast`
+  (`labor-forecast.ts`, inside `refreshForecasts()` in its own try/catch) reprices every labor line for months
+  after the current one through next December with the shared model; a pinned `budget_targets` line is kept.
+  Direct roles that scale multiply hours by clamp(forecast covers per open night ÷ actual per open night over
+  the same window, ±`SEASONALITY_CAP_PCT`), replacing last year's seasonal index (Staffing Plan and Build next
+  year's budget); migration 0019 turned scaling off for non-direct hourly/OT roles (the Sous Chef).
 - **Next year**: the Budget, Sales Plan and Staffing Plan have a 2026/2027 toggle. "Build next year's
   budget" seeds an empty year (fixed costs from December, revenue, labor); revenue and food & drink cost
   now follow the forecast regardless.
@@ -244,9 +257,10 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Not yet done
 
-- **Dynamic budgeting step 4 — Staffing Plan hours from a rolling 3-week Toast average**: spec in
-  [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md) (not built; migration 0019;
-  assumes direct roles scale with forecast covers — confirm with Kit before building).
+- **Step 4 after deploy** (spec: [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md)):
+  check `fly logs` after the next sync for "labor forecast: …", compare future labor lines with
+  `budget_targets_labor_pre_auto` (the first refresh rewrites unpinned ones), then map jobs in Settings and
+  link people on the Staffing Plan. Delete `budget_targets_labor_pre_auto` once trusted.
 - **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
   With later months following the forecast, Budget and Night-by-night now converge except for the current

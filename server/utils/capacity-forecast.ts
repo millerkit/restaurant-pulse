@@ -30,6 +30,7 @@ import type Database from 'better-sqlite3'
 import { blendForRange } from './capacity-actuals'
 import { loadCapacityHistory } from './capacity-history'
 import { refreshBudgetForecast, type BudgetForecastResult } from './budget-forecast'
+import { refreshLaborForecast, type LaborForecastResult } from './labor-forecast'
 
 type Db = Database.Database
 
@@ -190,11 +191,19 @@ export function refreshCapacityForecast(db: Db, today: string, syncedThrough?: s
 }
 
 // The whole automatic forecast, in order: the capacity inputs first, then the
-// budget lines built from them (server/utils/budget-forecast.ts).
-export function refreshForecasts(db: Db, today: string, syncedThrough?: string): { capacity: ForecastRefreshResult, budget: BudgetForecastResult } {
+// budget lines built from them (server/utils/budget-forecast.ts), then the labor lines
+// (server/utils/labor-forecast.ts, step 4), which run in their own try/catch so a labor
+// failure never blocks the capacity or budget refresh.
+export function refreshForecasts(db: Db, today: string, syncedThrough?: string): { capacity: ForecastRefreshResult, budget: BudgetForecastResult, labor: LaborForecastResult | null } {
   const capacity = refreshCapacityForecast(db, today, syncedThrough)
   const budget = refreshBudgetForecast(db, today)
-  return { capacity, budget }
+  let labor: LaborForecastResult | null = null
+  try {
+    labor = refreshLaborForecast(db, today)
+  } catch (err) {
+    console.warn(`labor forecast failed: ${err instanceof Error ? err.message : err}`)
+  }
+  return { capacity, budget, labor }
 }
 
 // After an input changes (a save on Capacity, Settings, special nights, buyouts):

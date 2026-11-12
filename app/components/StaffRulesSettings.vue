@@ -41,6 +41,34 @@ const toggleOwnerPay = (a: OwnerAcct, value: boolean) => run(async () => {
 const flagged = computed(() => (pay.value?.accounts ?? []).filter(a => a.isOwnerPay))
 const unflagged = computed(() => (pay.value?.accounts ?? []).filter(a => !a.isOwnerPay))
 const addAcct = ref<number | ''>('')
+
+// ---- Toast jobs -> budget roles (dynamic budgeting step 4, 2026-11-12) ----
+// Staffing Plan hours follow each mapped person's real Toast hours on jobs mapped to their role.
+// A suggestion (title matches a role name) is preselected but only saved when "Save job mapping"
+// is pressed; "Not budgeted" is a deliberate no (an owner's job, say).
+type MapAccount = { accountId: number, accountNumber: string | null, name: string, groupKey: string }
+type MapJob = { guid: string, title: string, isBoh: boolean, isSaved: boolean, savedAccountId?: number | null, suggestedAccountId: number | null, recentHours: number, recentPeople: number }
+const { data: mapping, refresh: refreshMapping } = await useFetch<{ accounts: MapAccount[], jobs: MapJob[] }>('/api/budget/labor-mapping')
+const jobChoice = reactive<Record<string, number | 'none' | ''>>({})
+watchEffect(() => {
+  for (const j of mapping.value?.jobs ?? []) {
+    if (j.guid in jobChoice) continue
+    jobChoice[j.guid] = j.isSaved ? (j.savedAccountId ?? 'none') : (j.suggestedAccountId ?? '')
+  }
+})
+const jobRows = computed(() => (mapping.value?.jobs ?? []).filter(j => j.recentHours > 0 || j.isSaved))
+const mapAccountsFor = (isBoh: boolean) => [...(mapping.value?.accounts ?? [])].sort((a, b) => {
+  const rank = (x: MapAccount) => (x.groupKey === (isBoh ? 'boh' : 'foh') ? 0 : 1)
+  return rank(a) - rank(b) || (a.accountNumber ?? '').localeCompare(b.accountNumber ?? '', undefined, { numeric: true })
+})
+const isSuggestionOnly = (j: MapJob) => !j.isSaved && jobChoice[j.guid] !== '' && jobChoice[j.guid] === j.suggestedAccountId
+const saveJobMapping = () => run(async () => {
+  const jobs = jobRows.value
+    .filter(j => jobChoice[j.guid] !== '')
+    .map(j => ({ guid: j.guid, accountId: jobChoice[j.guid] === 'none' ? null : (jobChoice[j.guid] as number) }))
+  await $fetch('/api/budget/labor-mapping', { method: 'POST', body: { jobs } })
+  await refreshMapping()
+}, 'Saved. The Staffing Plan hours will use these jobs.')
 </script>
 
 <template>
@@ -90,6 +118,28 @@ const addAcct = ref<number | ''>('')
       </select>
       <button type="submit" class="sr-btn" :disabled="busy || addAcct === ''">Flag as owner pay</button>
     </form>
+
+    <h3 class="sr-h sr-gap">Toast jobs → budget roles</h3>
+    <p class="sr-note">
+      The Staffing Plan can follow each person's real Toast hours (their average over the last 6 usable weeks). To do that it needs to know which Toast job
+      belongs to which budget role. Pick the role for each job, or "Not budgeted" for jobs that aren't on the hourly plan (an owner's job, say). Then match each person to their
+      Toast name on the Staffing Plan.
+    </p>
+    <ul class="sr-list">
+      <li v-for="j in jobRows" :key="j.guid">
+        <div class="sr-who">
+          <span class="sr-name">{{ j.title }}</span>
+          <span class="sr-sub">{{ j.recentHours }} hrs, {{ j.recentPeople }} {{ j.recentPeople === 1 ? 'person' : 'people' }} in the last 12 weeks<template v-if="isSuggestionOnly(j)"> · ✚ suggested, not saved yet</template></span>
+        </div>
+        <select v-model="jobChoice[j.guid]" class="sr-input" :aria-label="`Budget role for ${j.title}`">
+          <option value="">Not mapped yet</option>
+          <option value="none">Not budgeted</option>
+          <option v-for="a in mapAccountsFor(j.isBoh)" :key="a.accountId" :value="a.accountId">{{ a.accountNumber ? `${a.accountNumber} ` : '' }}{{ a.name }}</option>
+        </select>
+      </li>
+      <li v-if="!jobRows.length" class="sr-empty">No Toast jobs with recent hours yet.</li>
+    </ul>
+    <button type="button" class="sr-btn" :disabled="busy || !jobRows.length" @click="saveJobMapping">Save job mapping</button>
 
     <div v-if="message" :class="['chip', message.kind === 'ok' ? 'good' : 'critical']" class="sr-msg">{{ message.text }}</div>
   </div>

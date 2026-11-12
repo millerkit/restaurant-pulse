@@ -2,8 +2,19 @@
 import site from '~/config/site.json'
 import type { Category } from '~/composables/useBudgetData'
 import { BUDGET_YEARS, MONTH_NAMES, countFridays, currentAsOfDay, currentAsOfMonth, fridaysInMonth, hybridYearTotals, monthCategoryBudget, useActualsYear, useBudgetYear, useBudgetYearSelection } from '~/composables/useBudgetData'
-import { SEASONALITY_CAP_PCT, createLaborModel, seasonalityInfoFrom } from '~/utils/laborModel'
-import type { GroupKey, LaborAccount, LaborSlot as Slot, LaborTaxRates as TaxRates, MonthlyIndexEntry, PayType, RoleClass } from '~/utils/laborModel'
+import { SEASONALITY_CAP_PCT, createLaborModel } from '~/utils/laborModel'
+import type { GroupKey, LaborAccount as ModelAccount, LaborSlot as Slot, LaborTaxRates as TaxRates, PayType, RoleClass } from '~/utils/laborModel'
+
+// Step 4 (2026-11-12): hourly people can be linked to a Toast employee, and their hrs/wk then
+// follows the real average over the last usable weeks unless pinned (typed by hand). See
+// server/utils/labor-hours.ts. Hours state travels with every slot on save (slots are renumbered
+// when someone is removed, so the server overwrites by index).
+type HoursBasis = { guid?: string, weeks: string[], hours: number[], used?: boolean[], mean: number | null, median: number | null, flags?: string[] }
+type PageSlot = Slot & { toastEmployeeGuid: string | null, hoursPinned: boolean, autoWeeklyHours: number | null, autoHoursBasis: HoursBasis | null }
+type LaborAccount = Omit<ModelAccount, 'slots'> & { slots: PageSlot[], otHoursPinned: boolean, autoOtHours: number | null, autoOtBasis: HoursBasis | null }
+type CoversRatioInfo = { month: string, ratio: number, rawRatio: number | null, wasCapped: boolean, forecastPerNight: number | null, actualPerNight: number | null }
+type UnplannedPerson = { guid: string, name: string, hours: number }
+type ToastEmployee = { guid: string, name: string, deleted: boolean }
 
 useHead({ title: `${site.restaurantName} — Staffing Plan` })
 
@@ -36,17 +47,10 @@ const RATE_STEP = 0.25
 const HOURS_STEP = 1
 const SALARY_STEP = 1000
 
-// The real seasonal index (monthlyIndex, from /api/capacity/history) is built from a
-// SINGLE prior year of real Toast covers (see that route's own comment) — no averaging
-// across years to smooth out one unusual month, and today that single year is 2025,
-// entirely at the old Mass Ave location, so it's really "how did the old, smaller space's
-// demand ebb and flow" being borrowed to scale hours at Cambridge St. Raised directly by
-// the user after the redesign: they don't expect big seasonal swings here (not a resort
-// town) and were worried a noisy single-year index could overcorrect a slower month's
-// staffing more than real demand warrants. Rather than trust the raw index outright, its
-// effect on hours is capped to a band around 100% — loosen or remove this once more years
-// of Cambridge St-specific data exist to validate the shape against.
-
+// Seasonal scaling of hours (see coversInfoFor below): forecast covers per open night over the
+// actual in the same Toast weeks, capped to a band around 100% (SEASONALITY_CAP_PCT). It replaced
+// last year's single-year seasonal index (2026-11-12); loosen the cap once there's more
+// Cambridge St history to trust.
 
 const GROUP_LABEL: Record<GroupKey, string> = {
   boh: 'Back of House', foh: 'Front of House', management: 'Management Salaries',
@@ -74,7 +78,11 @@ const loadError = ref<string | null>(null)
 const accounts = ref<LaborAccount[]>([])
 const taxRates = ref<TaxRates>({ medicareRate: 0, socialSecurityRate: 0, futaRate: 0, sutaMaRate: 0, pfmlMaRate: 0, taxableTipsPerPayroll: 0 })
 const impliedTipsPerPayroll = ref<number | null>(null)
-const monthlyIndex = ref<MonthlyIndexEntry[]>([])
+const coversRatioByMonth = ref<Record<string, CoversRatioInfo>>({})
+const hoursWindow = ref<{ weeks: string[], skipped: { week: string, reason: string }[], requestedWeeks: number, coversPerNight: number | null } | null>(null)
+const unplannedHours = ref<Record<number, UnplannedPerson[]>>({})
+const toastEmployees = ref<ToastEmployee[]>([])
+const slotSuggestions = ref<Record<number, string>>({})
 const currentMonthActuals = ref<Record<number, number>>({})
 const hasCurrentMonthActuals = ref(false)
 
@@ -121,18 +129,19 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    const [settingsRes, historyRes, actualsRes] = await Promise.all([
+    const [settingsRes, mappingRes, actualsRes] = await Promise.all([
       $fetch<{
         accounts: any[], taxRates: TaxRates | null,
         trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>,
-        trailingWindow6?: { months: string[] }, trailingActuals6?: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null
+        trailingWindow6?: { months: string[] }, trailingActuals6?: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null,
+        coversRatioByMonth?: Record<string, CoversRatioInfo>, hoursWindow?: typeof hoursWindow.value, unplannedHours?: Record<number, UnplannedPerson[]>
       }>('/api/budget/labor-settings'),
-      $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] })),
+      $fetch<{ employees: ToastEmployee[], slotSuggestions: Record<number, string> }>('/api/budget/labor-mapping').catch(() => ({ employees: [], slotSuggestions: {} })),
       $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } }).catch(() => ({ accounts: [] }))
     ])
     accounts.value = settingsRes.accounts.map(a => ({
       ...a,
-      slots: (a.slots ?? []).map((s: any) => ({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName ?? '', hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate ?? '' }))
+      slots: (a.slots ?? []).map((s: any) => ({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName ?? '', hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate ?? '', toastEmployeeGuid: s.toastEmployeeGuid ?? null, hoursPinned: s.hoursPinned !== false, autoWeeklyHours: s.autoWeeklyHours ?? null, autoHoursBasis: s.autoHoursBasis ?? null }))
     }))
     if (settingsRes.taxRates) taxRates.value = { ...settingsRes.taxRates, taxableTipsPerPayroll: settingsRes.taxRates.taxableTipsPerPayroll ?? 0 }
     impliedTipsPerPayroll.value = settingsRes.impliedTaxableTipsPerPayroll ?? null
@@ -141,8 +150,12 @@ async function loadAll() {
     trailingWindowMonths6.value = settingsRes.trailingWindow6?.months ?? []
     trailingActuals6.value = settingsRes.trailingActuals6 ?? {}
     trailingTaxRates.value = settingsRes.trailingTaxRates ?? { medicare: null, social_security: null, futa: null, suta_ma: null, pfml_ma: null }
-    monthlyIndex.value = historyRes.monthlyIndex ?? []
-    globalScaleSeasonally.value = accounts.value.some(a => (a.payType === 'hourly' || a.payType === 'overtime') && a.scalesWithSeasonality)
+    coversRatioByMonth.value = settingsRes.coversRatioByMonth ?? {}
+    hoursWindow.value = settingsRes.hoursWindow ?? null
+    unplannedHours.value = settingsRes.unplannedHours ?? {}
+    toastEmployees.value = mappingRes.employees ?? []
+    slotSuggestions.value = mappingRes.slotSuggestions ?? {}
+    globalScaleSeasonally.value = accounts.value.some(a => isDirectScaler(a) && a.scalesWithSeasonality)
     const map: Record<number, number> = {}
     for (const a of actualsRes.accounts) map[a.accountId] = a.amount
     currentMonthActuals.value = map
@@ -177,13 +190,18 @@ function toggleHidden(account: LaborAccount) {
   account.isHidden = !account.isHidden
 }
 
-// The real index, the capped-for-use version, whether capping actually kicked in, and
-// which year(s) it's based on — everything the "show the math" note needs to render, in
-// one place, so the page is never applying an adjustment the user can't see the reasoning
-// for. capped defaults to 100 (no adjustment) when there's no real data for that month.
-function seasonalityInfoFor(month: number) {
-  return seasonalityInfoFrom(monthlyIndex.value, month)
+// Direct roles scale their hours with forecast covers: that month's forecast covers per open
+// night over the actual covers per open night in the same Toast weeks the hours averages come
+// from, held within +/-SEASONALITY_CAP_PCT (server/utils/labor-forecast.ts). This replaced last
+// year's seasonal index, which was one prior year of covers at the old Mass Ave location.
+// Other roles (supervision, overhead, growth) stay flat. 100 = no adjustment (no data yet).
+function coversInfoFor(year: number, month: number): CoversRatioInfo | null {
+  return coversRatioByMonth.value[`${year}-${String(month).padStart(2, '0')}`] ?? null
 }
+function coversPct(year: number, month: number): number {
+  return (coversInfoFor(year, month)?.ratio ?? 1) * 100
+}
+const isDirectScaler = (a: { payType: PayType, roleClass: RoleClass | null }) => (a.payType === 'hourly' || a.payType === 'overtime') && a.roleClass === 'direct'
 
 // The payroll math itself (hours x rate x Fridays, OT, payroll taxes) lives in
 // app/utils/laborModel.ts so the Budget tab can price any month of any year with it.
@@ -194,7 +212,7 @@ const {
   year: YEAR,
   accounts: () => accounts.value,
   taxRates: () => taxRates.value,
-  seasonalPct: month => seasonalityInfoFor(month).capped
+  seasonalPct: month => coversPct(YEAR, month)
 })
 
 // Saving the current year also re-prices the NEXT budget year's 12 months from the same saved
@@ -205,22 +223,30 @@ const nextYearModel = createLaborModel({
   year: YEAR + 1,
   accounts: () => accounts.value,
   taxRates: () => taxRates.value,
-  seasonalPct: month => seasonalityInfoFor(month).capped
+  seasonalPct: month => coversPct(YEAR + 1, month)
 })
 
 // One global on/off switch rather than a per-role checkbox — added after the user said
 // they expect to scale every hourly role the same way, making a per-role toggle just
-// visual clutter. Still backed by each account's own scales_with_seasonality column (no
-// schema change), so this just sets every hourly/overtime account's flag together;
-// initialized from whatever's already true on load (the seed default is "on" for all of
-// them) rather than hardcoding true, so a saved all-off state loads as off too.
+// visual clutter. Still backed by each account's own scales_with_seasonality column. Since step 4
+// it only touches direct roles (supervision / overhead / growth stay flat, so a flag set to 0 by
+// migration 0019 can't be flipped back by this switch); initialized from what's saved.
 const globalScaleSeasonally = ref(true)
 function setGlobalSeasonality(value: boolean) {
   globalScaleSeasonally.value = value
   for (const a of accounts.value) {
-    if (a.payType === 'hourly' || a.payType === 'overtime') a.scalesWithSeasonality = value
+    if (isDirectScaler(a)) a.scalesWithSeasonality = value
   }
 }
+// The next few months' ratios for the panel under the switch.
+const ratioRows = computed(() => {
+  const rows: { label: string, info: CoversRatioInfo }[] = []
+  for (let m = asOfMonth; m <= 12 && rows.length < 4; m++) {
+    const info = coversInfoFor(YEAR, m)
+    if (info) rows.push({ label: MONTH_NAMES[m - 1]!, info })
+  }
+  return rows
+})
 
 // Converts the OT trailing-$/week hint (from trailingActuals, keyed by the OT account's
 // own id — it's a labor_position_settings-managed account like any other, so it's already
@@ -437,12 +463,79 @@ function fmt(n: number): string {
 // add-person flow, so they get a small "+ new hire" link instead.
 const showPaycheckDateFor = reactive(new Set<number>())
 
+function blankSlot(slotIndex: number): PageSlot {
+  return { id: null, slotIndex, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '', toastEmployeeGuid: null, hoursPinned: true, autoWeeklyHours: null, autoHoursBasis: null }
+}
 function addPerson(account: LaborAccount) {
-  account.slots.push({ id: null, slotIndex: account.slots.length + 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '' })
+  account.slots.push(blankSlot(account.slots.length + 1))
 }
 function removePerson(account: LaborAccount, index: number) {
   account.slots.splice(index, 1)
   account.slots.forEach((s, i) => { s.slotIndex = i + 1 })
+}
+
+// ---- Automatic hours (Toast) --------------------------------------------------------------
+const FLAG_LABEL: Record<string, string> = {
+  'vacation?': '⚠ vacation?', 'no shifts 2 wks': '⚠ left?', 'auto clock-outs': '⚠ auto clock-outs', 'new hire': '✚ new hire'
+}
+const FLAG_HELP: Record<string, string> = {
+  'vacation?': 'A zero week while colleagues on this role worked: left out of the average.',
+  'no shifts 2 wks': 'No hours in the last 2 complete weeks. The average is kept; remove the person if they left.',
+  'auto clock-outs': 'Some hours came from shifts Toast clocked out automatically (a forgotten clock-out).',
+  'new hire': 'Started inside the window: averaged from their first full week.'
+}
+function setSlotHours(slot: PageSlot, v: number) {
+  slot.weeklyHours = v
+  slot.hoursPinned = true // typing a value pins it
+}
+function useAutoHours(slot: PageSlot) {
+  if (slot.autoWeeklyHours == null) return
+  slot.hoursPinned = false
+  slot.weeklyHours = slot.autoWeeklyHours
+}
+function setOtHours(acc: LaborAccount, v: number) {
+  acc.otHours = v
+  acc.otHoursPinned = true
+}
+function useAutoOt(acc: LaborAccount) {
+  if (acc.autoOtHours == null) return
+  acc.otHoursPinned = false
+  acc.otHours = acc.autoOtHours
+}
+function linkEmployee(slot: PageSlot, guid: string | null) {
+  slot.toastEmployeeGuid = guid || null
+  // The stored average belonged to whoever was linked before; it returns after the next save.
+  slot.autoWeeklyHours = null
+  slot.autoHoursBasis = null
+  slot.hoursPinned = true
+}
+function fmtWeek(iso: string): string {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+function basisLabel(b: HoursBasis | null): string {
+  return `${b?.weeks.length ?? hoursWindow.value?.weeks.length ?? 0}-wk avg`
+}
+function basisTitle(b: HoursBasis | null): string {
+  if (!b) return ''
+  const per = b.weeks.map((w, i) => `wk of ${fmtWeek(w)}: ${b.hours[i]}${b.used && !b.used[i] ? ' (left out)' : ''}`).join('; ')
+  const flags = (b.flags ?? []).map(f => FLAG_LABEL[f]).join(', ')
+  return `${per}. Mean ${b.mean ?? '—'}, median ${b.median ?? '—'} hrs/wk${flags ? `. ${flags}` : ''}`
+}
+// A gap between the mean and the median means one odd week is pulling the average.
+function oddWeek(b: HoursBasis | null): boolean {
+  return !!b && b.mean != null && b.median != null && Math.abs(b.mean - b.median) >= 2
+}
+function unplannedFor(acc: LaborAccount): UnplannedPerson[] {
+  return (unplannedHours.value[acc.accountId] ?? []).filter(u => !acc.slots.some(s => s.toastEmployeeGuid === u.guid))
+}
+function addUnplanned(acc: LaborAccount, u: UnplannedPerson) {
+  const slot = blankSlot(acc.slots.length + 1)
+  slot.employeeName = u.name
+  slot.toastEmployeeGuid = u.guid
+  slot.weeklyHours = u.hours
+  slot.hoursPinned = false
+  slot.autoWeeklyHours = u.hours
+  acc.slots.push(slot)
 }
 
 // Salaried roles are deliberately single-person (no add/remove-person UI, unlike hourly
@@ -450,8 +543,8 @@ function removePerson(account: LaborAccount, index: number) {
 // dropping that UI cuts visual clutter. Still backed by the same labor_position_slots
 // table (a defensive single-element accessor, not a schema difference), so re-adding
 // multi-person salaries later needs no migration.
-function primarySlot(account: LaborAccount): Slot {
-  if (account.slots.length === 0) account.slots.push({ id: null, slotIndex: 1, employeeName: '', hourlyRate: 0, weeklyHours: 0, weeklySalary: 0, firstPaycheckDate: '' })
+function primarySlot(account: LaborAccount): PageSlot {
+  if (account.slots.length === 0) account.slots.push(blankSlot(1))
   return account.slots[0]!
 }
 // Salaries are entered/displayed as an annual figure (how they're actually communicated
@@ -550,14 +643,17 @@ async function save() {
   saveStatus.value = 'saving'
   try {
     const settingsPayload = accounts.value.map(a => ({
-      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden, roleClass: isWageAccount(a) ? a.roleClass : null
+      accountId: a.accountId, scalesWithSeasonality: a.scalesWithSeasonality, otHours: a.otHours, flatAmount: a.flatAmount, isHidden: a.isHidden, roleClass: isWageAccount(a) ? a.roleClass : null,
+      ...(a.payType === 'overtime' ? { otHoursPinned: a.otHoursPinned } : {})
     }))
     const slotAccounts = accounts.value.filter(a => a.payType === 'hourly' || a.payType === 'salary')
     const slotAccountIds = slotAccounts.map(a => a.accountId)
     const slotsPayload = slotAccounts
       .flatMap(a => a.slots.map((s, i) => ({
         accountId: a.accountId, slotIndex: i + 1, employeeName: s.employeeName || null,
-        hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate || null
+        hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate || null,
+        // Sent with every slot: slots are renumbered when someone is removed, so the server overwrites by index.
+        toastEmployeeGuid: s.toastEmployeeGuid, hoursPinned: s.hoursPinned
       })))
 
     await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, slotAccountIds, taxRates: taxRates.value } })
@@ -591,7 +687,7 @@ async function save() {
   <div>
     <PageHeader
       page-name="Staffing Plan"
-      :description="`Edit rates, hours, and salaries — the monthly budget is computed from payroll frequency and real seasonal demand · ${YEAR}`"
+      :description="`Edit rates, hours, and salaries — the monthly budget is computed from payroll frequency and forecast covers · ${YEAR}`"
     />
     <BudgetYearToggle :confirm-leave="confirmLeave" />
 
@@ -726,15 +822,23 @@ async function save() {
       <div class="drill-card seasonality-panel">
         <label class="seasonal-toggle-lg">
           <input type="checkbox" :checked="globalScaleSeasonally" @change="setGlobalSeasonality(($event.target as HTMLInputElement).checked)" />
-          Scale hourly wages &amp; overtime with seasonal demand
+          Scale direct roles with forecast covers
         </label>
         <div class="quiet-note small">
-          <template v-if="!globalScaleSeasonally">Off — every hourly and OT role uses its typical hours flat, every month.</template>
-          <template v-else-if="seasonalityInfoFor(asOfMonth).raw === null">No real historical demand data yet for {{ MONTH_NAMES[asOfMonth - 1] }} — hours stay at 100% of typical this month.</template>
+          <template v-if="!globalScaleSeasonally">Off — every direct role uses its typical hours flat, every month. Supervision, overhead and growth roles are always flat.</template>
+          <template v-else-if="ratioRows.length === 0 || ratioRows.every(r => r.info.rawRatio === null)">Not enough synced Toast weeks yet to compare the forecast with — hours stay at 100% of typical.</template>
           <template v-else>
-            {{ MONTH_NAMES[asOfMonth - 1] }} scales to <strong>{{ Math.round(seasonalityInfoFor(asOfMonth).capped) }}%</strong> of typical hours
-            (real {{ seasonalityInfoFor(asOfMonth).years.join(', ') }} covers data<template v-if="seasonalityInfoFor(asOfMonth).wasCapped">, raw index was {{ Math.round(seasonalityInfoFor(asOfMonth).raw!) }}% — capped to &plusmn;{{ SEASONALITY_CAP_PCT }}%</template>).
+            Each month's direct-role hours = typical hours &times; (forecast covers per open night &divide; actual covers per open night over the {{ hoursWindow?.weeks.length ?? 6 }} weeks the averages use), held within &plusmn;{{ SEASONALITY_CAP_PCT }}%. Supervision, overhead and growth roles stay flat.
           </template>
+        </div>
+        <ul v-if="globalScaleSeasonally && ratioRows.some(r => r.info.rawRatio !== null)" class="ratio-list">
+          <li v-for="r in ratioRows" :key="r.label">
+            <strong>{{ r.label }}</strong> scales to <strong>{{ Math.round(r.info.ratio * 100) }}%</strong> of typical hours
+            <span class="quiet-note small">(forecast {{ r.info.forecastPerNight?.toFixed(1) }} &divide; actual {{ r.info.actualPerNight?.toFixed(1) }} covers per open night<template v-if="r.info.wasCapped">; raw {{ Math.round(r.info.rawRatio! * 100) }}%, capped to &plusmn;{{ SEASONALITY_CAP_PCT }}% ▲</template>)</span>
+          </li>
+        </ul>
+        <div v-if="hoursWindow && hoursWindow.skipped.length > 0" class="quiet-note small">
+          Weeks left out of the Toast averages: <template v-for="(k, i) in hoursWindow.skipped" :key="k.week">{{ i ? '; ' : '' }}wk of {{ fmtWeek(k.week) }} ({{ k.reason }})</template>.
         </div>
       </div>
 
@@ -775,14 +879,37 @@ async function save() {
                 <tr v-for="(slot, i) in acc.slots" :key="i" class="person-row">
                   <td>
                     <input type="text" v-model="slot.employeeName" :placeholder="`Person ${i + 1}`" class="name-input" />
+                    <div class="toast-link">
+                      <select :value="slot.toastEmployeeGuid ?? ''" class="toast-select" :aria-label="`Toast employee for ${slot.employeeName || 'person ' + (i + 1)}`" @change="linkEmployee(slot, ($event.target as HTMLSelectElement).value)">
+                        <option value="">Not linked to Toast</option>
+                        <option v-for="e in toastEmployees" :key="e.guid" :value="e.guid">{{ e.name }}{{ e.deleted ? ' (former)' : '' }}</option>
+                      </select>
+                      <button v-if="!slot.toastEmployeeGuid && slot.id != null && slotSuggestions[slot.id]" type="button" class="add-person" @click="linkEmployee(slot, slotSuggestions[slot.id]!)">
+                        ✚ Toast match: {{ toastEmployees.find(e => e.guid === slotSuggestions[slot.id!])?.name }} — link
+                      </button>
+                    </div>
                     <label v-if="slot.id === null || slot.firstPaycheckDate" class="start-date" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted.">first paycheck <input type="date" v-model="slot.firstPaycheckDate" /></label>
                   </td>
                   <td class="num">
                     <NumberStepper v-model="slot.hourlyRate" :step="RATE_STEP" :min="0" :decimals="2" width="72px" />
                   </td>
                   <td class="num">
-                    <NumberStepper v-model="slot.weeklyHours" :step="HOURS_STEP" :min="0" width="64px" />
-                    <div v-if="acc.slots.length === 1 && impliedWeeklyHours(acc) !== null" class="cell-hint">
+                    <NumberStepper :model-value="slot.weeklyHours" @update:model-value="v => setSlotHours(slot, v)" :step="HOURS_STEP" :min="0" width="64px" />
+                    <template v-if="slot.toastEmployeeGuid">
+                      <div v-if="slot.autoWeeklyHours == null" class="cell-hint">no Toast average yet</div>
+                      <template v-else>
+                        <div v-if="!slot.hoursPinned" class="cell-hint hours-state" :title="basisTitle(slot.autoHoursBasis)">auto · {{ basisLabel(slot.autoHoursBasis) }}</div>
+                        <div v-else-if="slot.autoWeeklyHours === slot.weeklyHours" class="cell-hint hours-state" :title="basisTitle(slot.autoHoursBasis)">pinned <button type="button" class="unpin-link" title="Go back to the Toast average" aria-label="Use the Toast average" @click="useAutoHours(slot)">↺</button></div>
+                        <div v-else class="cell-hint hours-state" :title="basisTitle(slot.autoHoursBasis)">
+                          pinned · {{ basisLabel(slot.autoHoursBasis) }}: {{ slot.autoWeeklyHours }} hrs/wk — <button type="button" class="unpin-link" @click="useAutoHours(slot)">use it? ↺</button>
+                        </div>
+                        <div v-if="oddWeek(slot.autoHoursBasis)" class="cell-hint" :title="basisTitle(slot.autoHoursBasis)">▲ median {{ slot.autoHoursBasis!.median }}: one week is off</div>
+                        <div v-if="(slot.autoHoursBasis?.flags ?? []).length > 0" class="flag-row">
+                          <span v-for="f in slot.autoHoursBasis!.flags" :key="f" class="flag-chip" :title="FLAG_HELP[f]">{{ FLAG_LABEL[f] ?? f }}</span>
+                        </div>
+                      </template>
+                    </template>
+                    <div v-if="acc.slots.length === 1 && impliedWeeklyHours(acc) !== null && slot.autoWeeklyHours == null" class="cell-hint">
                       &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
                     </div>
                   </td>
@@ -797,12 +924,18 @@ async function save() {
                   <td class="trend-col"><span v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</span></td>
                   <td class="actions-col"><button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button></td>
                 </tr>
+                <tr v-if="unplannedFor(acc).length > 0" class="unplanned-row">
+                  <td colspan="7">
+                    Unplanned: <strong>{{ unplannedFor(acc).reduce((s, u) => s + u.hours, 0) }} hrs/wk</strong> on {{ acc.name }} jobs by people not on this list —
+                    <span v-for="(u, k) in unplannedFor(acc)" :key="u.guid">{{ k ? ', ' : '' }}{{ u.name }} ({{ u.hours }}) <button type="button" class="add-person" @click="addUnplanned(acc, u)">add as person</button></span>
+                  </td>
+                </tr>
                 <tr v-if="acc.slots.length > 1" class="total-row">
                   <td>Total</td>
                   <td class="num muted num-inset">—</td>
                   <td class="num num-inset">
                     {{ accountEffectiveHours(acc, asOfMonth).toFixed(1) }}
-                    <div v-if="impliedWeeklyHours(acc) !== null" class="cell-hint">
+                    <div v-if="impliedWeeklyHours(acc) !== null && !acc.slots.some(s => s.autoWeeklyHours != null)" class="cell-hint">
                       &asymp;{{ impliedWeeklyHours(acc)!.toFixed(1) }} hrs/wk trailing
                     </div>
                   </td>
@@ -834,8 +967,13 @@ async function save() {
                   </td>
                   <td class="num muted num-inset">—</td>
                   <td class="num">
-                    <NumberStepper v-model="overtimeAccountIn(group)!.otHours" :step="HOURS_STEP" :min="0" width="64px" />
-                    <div v-if="impliedOtHours(group as 'boh' | 'foh') !== null" class="cell-hint">
+                    <NumberStepper :model-value="overtimeAccountIn(group)!.otHours" @update:model-value="v => setOtHours(overtimeAccountIn(group)!, v)" :step="HOURS_STEP" :min="0" width="64px" />
+                    <template v-if="overtimeAccountIn(group)!.autoOtHours != null">
+                      <div v-if="!overtimeAccountIn(group)!.otHoursPinned" class="cell-hint hours-state" :title="basisTitle(overtimeAccountIn(group)!.autoOtBasis)">auto · {{ basisLabel(overtimeAccountIn(group)!.autoOtBasis) }}</div>
+                      <div v-else-if="overtimeAccountIn(group)!.autoOtHours === overtimeAccountIn(group)!.otHours" class="cell-hint hours-state" :title="basisTitle(overtimeAccountIn(group)!.autoOtBasis)">pinned <button type="button" class="unpin-link" title="Go back to the Toast average" aria-label="Use the Toast average" @click="useAutoOt(overtimeAccountIn(group)!)">↺</button></div>
+                      <div v-else class="cell-hint hours-state" :title="basisTitle(overtimeAccountIn(group)!.autoOtBasis)">pinned · {{ basisLabel(overtimeAccountIn(group)!.autoOtBasis) }}: {{ overtimeAccountIn(group)!.autoOtHours }} hrs/wk — <button type="button" class="unpin-link" @click="useAutoOt(overtimeAccountIn(group)!)">use it? ↺</button></div>
+                    </template>
+                    <div v-if="impliedOtHours(group as 'boh' | 'foh') !== null && overtimeAccountIn(group)!.autoOtHours == null" class="cell-hint">
                       &asymp;{{ impliedOtHours(group as 'boh' | 'foh')!.toFixed(1) }} hrs trailing
                     </div>
                   </td>
@@ -1144,6 +1282,14 @@ td.num-inset { padding-right: 40px; }
 .hidden-toggle-row { margin: -8px 0 18px; }
 
 .seasonality-panel { padding: 12px 16px; margin-bottom: 22px; gap: 4px; }
+.ratio-list { margin: 2px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); }
+.toast-link { margin-top: 3px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.toast-select { font-size: 11px; max-width: 100%; padding: 2px 4px; border: 1px solid var(--hair); border-radius: 5px; background: var(--surface); color: var(--ink-2); }
+.hours-state { white-space: normal; }
+.unpin-link { font-size: 11px; font-weight: 700; color: var(--accent-text); background: none; border: none; cursor: pointer; padding: 0; }
+.flag-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; margin-top: 2px; }
+.flag-chip { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--hair); background: var(--surface-alt); color: var(--ink-2); white-space: nowrap; }
+.unplanned-row td { padding: 2px 12px 8px; font-size: 11.5px; color: var(--ink-2); }
 
 /* Labor by Role Class card. Neutral ink on purpose: the four classes are a cost-behavior
    taxonomy, not good/bad statuses, so no status colors (and no color-keyed legend) — each row

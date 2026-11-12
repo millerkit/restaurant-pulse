@@ -1,5 +1,9 @@
 # Spec: Staffing Plan hours follow a rolling 3-week average (dynamic budgeting step 4)
 
+> **Built 2026-11-12.** Kit changed the window to **6** complete weeks (reach back ≤ 10, need ≥ 3 usable, median
+> stored beside the mean) and confirmed direct roles scale with forecast covers. Read "3-week" below as 6-week.
+> Current state is in CLAUDE.md; the write-up is in `docs/claude-history.md`.
+
 Written 2026-11-11, not built. Meant to be built from directly (possibly by a smaller model). Read
 CLAUDE.md's "The planning model" section first. It describes the automatic-with-pins pattern this step
 copies from Capacity (`server/utils/capacity-forecast.ts`) and budget lines (`server/utils/budget-forecast.ts`).

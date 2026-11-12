@@ -11,12 +11,13 @@
 // window became the basis for the summary cards' trailing-average comparison row (see
 // labor.vue) — 3 months smooths a bit more sampling noise than 2 without going stale.
 // See schema.sql's labor_position_settings comment for the overall design.
-type SlotRow = { id: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate: string | null }
-type GroupKey = 'boh' | 'foh' | 'management' | 'benefits' | 'tax' | 'other'
-
-const GROUP_PARENT_NUMBERS: Record<string, GroupKey> = {
-  '6010': 'boh', '6030': 'foh', '6050': 'management', '6060': 'benefits', '6080': 'tax'
-}
+// Step 4 (2026-11-12): the account/slot loader moved to server/utils/labor-accounts.ts (shared with
+// the automatic labor forecast), and each slot / OT account now also carries its Toast mapping, pin
+// and automatic hours. unplannedHours and coversRatioByMonth feed the page's new panels.
+import { ensureForecastsFresh, restaurantToday } from '../../utils/capacity-forecast'
+import { loadLaborAccounts, loadLaborTaxRates } from '../../utils/labor-accounts'
+import { AUTO_HOURS_WINDOW_WEEKS, computeAutoHours } from '../../utils/labor-hours'
+import { coversRatios } from '../../utils/labor-forecast'
 
 // Local-date Friday counter — server routes can't import app/composables (client-only
 // build context), so this is a small self-contained duplicate of the same definition as
@@ -165,58 +166,13 @@ function impliedTaxableTipsPerPayroll(db: ReturnType<typeof useDb>, months: stri
 
 export default defineEventHandler(() => {
   const db = useDb()
+  const tz = useRuntimeConfig().qbo?.syncTimeZone
+  // Keeps the automatic hours and covers ratios current when the page loads (local dev's nightly
+  // sync never runs), at most once a day or when newer Toast data has arrived.
+  ensureForecastsFresh(db, tz)
 
-  const accountRows = db.prepare(`
-    SELECT
-      a.id AS accountId, a.account_number AS accountNumber, a.name, a.parent_account_id AS parentAccountId,
-      p.account_number AS parentAccountNumber,
-      lps.pay_type AS payType, lps.scales_with_seasonality AS scalesWithSeasonality,
-      lps.ot_hours AS otHours, lps.ot_base_group AS otBaseGroup, lps.flat_amount AS flatAmount, lps.tax_key AS taxKey,
-      lps.is_hidden AS isHidden, lps.role_class AS roleClass
-    FROM accounts a
-    JOIN labor_position_settings lps ON lps.account_id = a.id
-    LEFT JOIN accounts p ON p.id = a.parent_account_id
-    WHERE a.is_active = 1
-    ORDER BY a.account_number
-  `).all() as any[]
-
-  const slotRows = db.prepare(`
-    SELECT account_id AS accountId, id, slot_index AS slotIndex, employee_name AS employeeName,
-           hourly_rate AS hourlyRate, weekly_hours AS weeklyHours, weekly_salary AS weeklySalary,
-           first_paycheck_date AS firstPaycheckDate
-    FROM labor_position_slots ORDER BY account_id, slot_index
-  `).all() as (SlotRow & { accountId: number })[]
-  const slotsByAccount = new Map<number, SlotRow[]>()
-  for (const s of slotRows) {
-    const list = slotsByAccount.get(s.accountId) ?? []
-    list.push({ id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName, hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours, weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate })
-    slotsByAccount.set(s.accountId, list)
-  }
-
-  const accounts = accountRows.map(r => ({
-    accountId: r.accountId,
-    accountNumber: r.accountNumber,
-    name: r.name,
-    parentAccountId: r.parentAccountId,
-    groupKey: (r.otBaseGroup === 'boh' ? 'boh' : r.otBaseGroup === 'foh' ? 'foh'
-      : GROUP_PARENT_NUMBERS[r.parentAccountNumber] ?? 'other') as GroupKey,
-    payType: r.payType as 'hourly' | 'salary' | 'overtime' | 'flat' | 'tax',
-    scalesWithSeasonality: !!r.scalesWithSeasonality,
-    otHours: r.otHours,
-    otBaseGroup: r.otBaseGroup as 'boh' | 'foh' | null,
-    flatAmount: r.flatAmount,
-    taxKey: r.taxKey as 'medicare' | 'social_security' | 'futa' | 'suta_ma' | 'pfml_ma' | null,
-    isHidden: !!r.isHidden,
-    roleClass: (r.roleClass ?? null) as 'direct' | 'supervision' | 'overhead' | 'growth' | null,
-    slots: slotsByAccount.get(r.accountId) ?? []
-  }))
-
-  const taxRow = db.prepare(`
-    SELECT medicare_rate AS medicareRate, social_security_rate AS socialSecurityRate,
-           futa_rate AS futaRate, suta_ma_rate AS sutaMaRate, pfml_ma_rate AS pfmlMaRate,
-           taxable_tips_per_payroll AS taxableTipsPerPayroll
-    FROM labor_tax_rates WHERE id = 1
-  `).get() as any
+  const accounts = loadLaborAccounts(db)
+  const taxRow = loadLaborTaxRates(db)
 
   const trailingMonths = trailingWindowMonths(db)
   // A second, longer window (6 months) for the flat Other Labor accounts, added 2026-10 at
@@ -225,14 +181,22 @@ export default defineEventHandler(() => {
   // Months with $0 count toward the average (total / months in the window), same as the 3-month one.
   const trailingMonths6 = trailingWindowMonths(db, 6)
 
+  const today = restaurantToday(tz)
+  const auto = computeAutoHours(db)
+  const ratios = coversRatios(db, today, auto ? auto.coversPerNight : undefined)
+
   return {
     accounts,
-    taxRates: taxRow ?? null,
+    taxRates: taxRow,
     trailingWindow: { months: trailingMonths },
     trailingActuals: trailingActualsByAccount(db, trailingMonths),
     trailingWindow6: { months: trailingMonths6 },
     trailingActuals6: trailingActualsByAccount(db, trailingMonths6),
     trailingTaxRates: trailingTaxRates(db, trailingMonths),
-    impliedTaxableTipsPerPayroll: impliedTaxableTipsPerPayroll(db, trailingMonths)
+    impliedTaxableTipsPerPayroll: impliedTaxableTipsPerPayroll(db, trailingMonths),
+    // Automatic hours window (null = not enough usable Toast weeks yet).
+    hoursWindow: auto ? { weeks: auto.window.weeks, skipped: auto.window.skipped, requestedWeeks: AUTO_HOURS_WINDOW_WEEKS, coversPerNight: auto.coversPerNight } : null,
+    unplannedHours: auto ? Object.fromEntries(auto.unplanned) : {},
+    coversRatioByMonth: Object.fromEntries(ratios)
   }
 })

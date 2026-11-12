@@ -6024,3 +6024,53 @@ baseline with the editable deltas. Server: the trend query moved from `revenue-m
 `server/api/capacity/area-trends.get.ts` (under `/api/capacity`, so the GM role can load it); the What-If route no
 longer returns `areaTrends`. Sparkline code and CSS moved with it. Windows were left alone (What-If: trailing 3 months;
 Covers & Spend: last two closed months). Typecheck 302 before and after.
+
+## 2026-11-12 — Dynamic budgeting step 4: Staffing Plan hours follow Toast (built, not deployed)
+
+Spec: `docs/specs/staffing-auto-hours.md`. Decisions made with Kit before building override the spec:
+- **6-week window, not 3.** Why: with 3 weeks one odd week (a vacation, a big event) moves a person's mean by a
+  third; 6 weeks halves that, and the covers ratio uses the same window so length doesn't bias it. Single constant
+  `AUTO_HOURS_WINDOW_WEEKS` (`server/utils/labor-hours.ts`). Reach back at most 10 weeks (`AUTO_HOURS_MAX_LOOKBACK_WEEKS`),
+  need ≥ 3 usable weeks (`AUTO_HOURS_MIN_USABLE_WEEKS`) or nothing is computed and current values stay. Skipped weeks:
+  holiday closure, < 5 open nights (≥ 15 covers), or no job hours synced at all (added: otherwise a week before the
+  hours backfill reads as everyone on vacation). `auto_hours_basis` stores weeks, hours, which weeks counted, mean,
+  median and flags; the page flags a mean/median gap of 2+ hrs ("one week is off").
+- **Direct roles scale with forecast covers.** ratio = (forecast covers per open night for the month, from
+  `createCapacityModel().dayByDaySum` expectedCovers ÷ operatingDays) ÷ (actual covers per open night over the same
+  usable weeks), clamped 1 ± `SEASONALITY_CAP_PCT`. Replaces last year's `monthlyIndex` in the Staffing Plan and in
+  "Build next year's budget" (`BuildNextYearBudget.vue`); `labor-settings.get` returns `coversRatioByMonth` (this and
+  next year). If job-hours weeks are too few, the ratio falls back to the same rule on `daily_toast_metrics` alone.
+  Migration 0019 set `scales_with_seasonality = 0` for hourly/OT roles whose class isn't direct (locally only the Sous
+  Chef; production may differ, the migration logs each). The page's checkbox ("Scale direct roles with forecast
+  covers") only touches direct roles.
+- **Pieces.** Migration `0019-staffing-auto-hours.mjs` + `schema.sql` (tables/columns as in the spec; first run copies
+  future-month labor budget lines to `budget_targets_labor_pre_auto`). `shared/utils/labor-model.ts` holds the model
+  plus `countFridays`/`fridaysInMonth` (re-exported from `app/utils/laborModel.ts` and `useBudgetData.ts`; modeled totals
+  for 888 account-month values in 2026 and 2027 were byte-identical before and after the move). `labor-accounts.ts`
+  (shared loader), `labor-hours.ts` (`computeAutoHours`, unplanned hours per account for roles with ≥ 1 linked person),
+  `labor-forecast.ts` (`refreshLaborForecast`, `coversRatios`), wired into `refreshForecasts()` after the budget
+  refresh in its own try/catch (the nightly log line is "labor forecast: …"). Routes: `GET/POST /api/budget/labor-mapping`
+  (jobs + employees with suggestions; POST saves job → role), `labor-settings.get/post` extended. Owner-only by default
+  deny, nothing added to `access.ts`. `targets.get` marks every Staffing Plan account `autoManaged` for future months, so
+  a pinned labor line shows ↺ on the Budget page (labor lines are read-only there, so a pin only arrives via the API).
+- **Slot renumbering wrinkle.** `labor-settings.post` receives the full slot list per account and upserts by
+  (account, slot_index), so the page sends `toastEmployeeGuid` and `hoursPinned` with every slot, and the server clears
+  a slot's stored auto hours whenever the guid at that index changes (the refresh then recomputes). Verified by removing a
+  person: the person after them kept their link and got their own average.
+- **Verification (local, synthetic Toast hours for 7 weeks in a backed-up DB, restored afterwards).** Two roles mapped,
+  holiday on 2026-10-22: that week skipped and the window reached back to 6 usable weeks. Alice 30/32/34/30/32/32 → 31.5
+  (mean 31.67, median 32); Bob with a zero week → 21.0 and "vacation?"; Cara starting mid-week → averaged from her first
+  full week, 29, "new hire"; Eve's auto clock-out flagged; unplanned Dan 10 hrs/wk; BOH OT 9 ÷ 6 = 1.5, FOH OT 0.25 → 0.5.
+  Covers: December 2026 forecast 121.67/night (5 Tuesdays at 115 with Chef's Counter dark, 22 other nights at 123.19) ÷
+  actual 117.67 = 1.0341; Line Cook December = (880+500+285) × 1.0341 × 4 Fridays = $6,886.78 and January 2027 capped at
+  0.85 (raw 0.629) × 5 Fridays = $7,076.25, both exactly what was written. The page's client-side pricing (from the API
+  response) matched the refresh for all 481 labor lines Dec 2026–Dec 2027. A line pinned via `POST /api/budget/targets`
+  survived a refresh (auto_amount kept) and unpinning restored it. With only 2 usable weeks nothing changed. Migration run
+  twice on a copy: second run a no-op. Typecheck 302 before and after. The Staffing Plan and Settings pages were NOT
+  looked at in a browser (local dev is behind Basic Auth); Settings was checked as server-rendered HTML and both pages
+  compile and return 200.
+- **What changes on deploy.** Every slot/OT row starts pinned, so hours don't move. But the first refresh rewrites every
+  unpinned future labor line from the Staffing Plan inputs with the new covers scaling, so lines differ from the old index
+  scaling (and a hand-edited Budget-page value that was never pinned would be replaced). Compare against
+  `budget_targets_labor_pre_auto` after the first run. Staffing Plan Save still overwrites a pinned labor line's amount
+  (it never sent `pinned`), as before.

@@ -12,7 +12,7 @@
 import site from '../../app/config/site.json'
 
 const RESTAURANT_TIME_ZONE = 'America/New_York'
-const BOH_JOB_PATTERN = /^(line cook|prep cook|pastry|sous chef|junior sous|executive chef|chef de partie|garde manger|dishwasher|porter|culinary intern)/i
+export const BOH_JOB_PATTERN = /^(line cook|prep cook|pastry|sous chef|junior sous|executive chef|chef de partie|garde manger|dishwasher|porter|culinary intern)/i
 const PORTER_JOB_PATTERN = /^porter/i
 // Toast starts overtime after 40 hours in the week; "close" is a heads-up band.
 const OVERTIME_LINE_HOURS = 40

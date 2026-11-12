@@ -39,13 +39,14 @@ export default defineEventHandler((event) => {
   for (const r of rows) r.laborManaged = !!r.laborManaged
 
   // Automatic forecast lines (server/utils/budget-forecast.ts): only for months that
-  // haven't started. autoManaged = the forecast writes this line unless it's pinned.
+  // haven't started. autoManaged = the forecast writes this line unless it's pinned. Labor lines
+  // (every Staffing Plan account) are written by server/utils/labor-forecast.ts since step 4.
   const today = restaurantToday(useRuntimeConfig().qbo?.syncTimeZone)
   const [ty, tm] = today.split('-').map(Number) as [number, number]
   const autoMonth = year * 12 + month > ty * 12 + tm
   const managed = new Set(MANAGED_ACCOUNT_NUMBERS)
   for (const r of rows) {
-    r.autoManaged = autoMonth && managed.has(r.accountNumber)
+    r.autoManaged = autoMonth && (managed.has(r.accountNumber) || r.laborManaged)
     r.pinned = r.autoManaged && !!r.pinned
     if (!r.autoManaged) r.autoAmount = null
   }

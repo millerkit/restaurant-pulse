@@ -181,6 +181,9 @@ export async function runNightlySync(dateOverride?: string) {
           console.log(`capacity forecast: spend per guest updated from ${forecastResult.capacity.perCoverBasis} close for ${forecastResult.capacity.perCoverChanged.join(', ')}`)
         }
         console.log(`budget forecast: ${forecastResult.budget.rowsChanged} automatic budget lines changed (${forecastResult.budget.months[0]}–${forecastResult.budget.months.at(-1)})`)
+        if (forecastResult.labor) {
+          console.log(`labor forecast: ${forecastResult.labor.rowsChanged} labor budget lines changed, ${forecastResult.labor.hoursUpdated} hours figures updated (window ${forecastResult.labor.windowWeeks[0] ?? 'none'} – ${forecastResult.labor.windowWeeks.at(-1) ?? ''})`)
+        }
       } catch (err) {
         console.warn(`forecast refresh failed: ${err instanceof Error ? err.message : err}`)
       }

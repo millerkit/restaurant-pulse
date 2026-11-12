@@ -735,6 +735,11 @@ CREATE TABLE labor_position_settings (
   tax_key                  TEXT CHECK (tax_key IN ('medicare', 'social_security', 'futa', 'suta_ma', 'pfml_ma')),
   is_hidden                 INTEGER NOT NULL DEFAULT 0,
   role_class                TEXT CHECK (role_class IN ('direct', 'supervision', 'overhead', 'growth')),
+  -- Overtime accounts (migration 0019): ot_hours_pinned 1 = ot_hours typed by hand; 0 = follows
+  -- auto_ot_hours (the window's average weekly overtime hours on the group's mapped jobs).
+  ot_hours_pinned           INTEGER NOT NULL DEFAULT 1,
+  auto_ot_hours             REAL,
+  auto_ot_basis             TEXT,
   updated_at                TEXT NOT NULL
 );
 
@@ -761,8 +766,28 @@ CREATE TABLE labor_position_slots (
   -- mid-month hire's first month isn't budgeted as a full month. It is a PAYCHECK date, not
   -- a hire date: payroll lags work, e.g. start Oct 12 -> first paycheck Oct 23.
   first_paycheck_date TEXT,
+  -- Dynamic budgeting step 4 (2026-11-12, migration 0019): hours follow Toast. toast_employee_guid
+  -- = which Toast employee this slot is (NULL = not mapped). hours_pinned 1 = weekly_hours typed
+  -- by hand and kept; 0 = weekly_hours follows auto_weekly_hours (the mean over the last 6 usable
+  -- Mon-Sun weeks of that person's hours on jobs mapped to this account, to the nearest 0.5).
+  -- auto_hours_basis is JSON ({guid, weeks, hours, mean, median, flags}); the auto value is stored
+  -- even when pinned so the page can offer it. See server/utils/labor-hours.ts.
+  toast_employee_guid TEXT,
+  hours_pinned   INTEGER NOT NULL DEFAULT 1,
+  auto_weekly_hours REAL,
+  auto_hours_basis TEXT,
+  auto_updated_at TEXT,
   updated_at     TEXT NOT NULL,
   UNIQUE (account_id, slot_index)
+);
+
+-- Toast job -> labor budget account (migration 0019), edited in Settings > Staff & Pay Rules.
+-- account_id NULL = deliberately not budgeted (e.g. an owner's job). Only mapped jobs count
+-- toward a slot's automatic hours.
+CREATE TABLE toast_job_labor_accounts (
+  job_guid    TEXT PRIMARY KEY,
+  account_id  INTEGER REFERENCES accounts(id),
+  updated_at  TEXT NOT NULL
 );
 
 -- The current employer payroll tax rates used to compute the Labor tab's 'tax'-type

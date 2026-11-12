@@ -65,21 +65,8 @@ export function daysInYear(year: number): number {
   return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365
 }
 
-// Payroll runs every Friday (see CLAUDE.md's Labor tab section) — this is the shared
-// definition of "how many payroll cycles land in this month," used by both Edit Budget's
-// labor payroll-cycle projection and the Labor tab's weekly-$-to-monthly-$ conversion.
-export function countFridays(start: Date, end: Date): number {
-  let count = 0
-  const d = new Date(start)
-  while (d <= end) {
-    if (d.getDay() === 5) count++ // Date#getDay(): 5 = Friday
-    d.setDate(d.getDate() + 1)
-  }
-  return count
-}
-export function fridaysInMonth(year: number, month: number): number {
-  return countFridays(new Date(year, month - 1, 1), new Date(year, month, 0))
-}
+// Payroll Friday counters live in shared/utils/labor-model.ts (used by the server's labor forecast too).
+export { countFridays, fridaysInMonth } from '../../shared/utils/labor-model'
 
 export function categoryTotals(monthlyData: MonthData[], monthNumbers: number[]) {
   const totals: Record<Category, number> = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }

@@ -18,8 +18,8 @@
 // exactly what would be.
 import type { BudgetAccount, MonthData } from '~/composables/useBudgetData'
 import { MONTH_NAMES, fridaysInMonth } from '~/composables/useBudgetData'
-import { createLaborModel, seasonalityInfoFrom } from '~/utils/laborModel'
-import type { LaborAccount, LaborTaxRates, MonthlyIndexEntry } from '~/utils/laborModel'
+import { createLaborModel } from '~/utils/laborModel'
+import type { LaborAccount, LaborTaxRates } from '~/utils/laborModel'
 
 const props = defineProps<{ year: number, monthlyData: MonthData[] }>()
 const emit = defineEmits<{ applied: [] }>()
@@ -48,12 +48,11 @@ async function buildPlan() {
   status.value = 'loading'
   message.value = ''
   try {
-    const [decRes, capRes, mixRes, laborRes, historyRes, interestRes] = await Promise.all([
+    const [decRes, capRes, mixRes, laborRes, interestRes] = await Promise.all([
       $fetch<MonthData>('/api/budget/targets', { query: { year: sourceYear.value, month: 12 } }),
       $fetch<{ months: { month: number, assumed: { expectedRevenueFood: number, expectedRevenueBeverage: number } }[] }>('/api/capacity', { query: { year: props.year } }).catch(() => null),
       $fetch<{ hasData: boolean, accounts: { accountId: number, pct: number | null }[] }>('/api/budget/beverage-revenue-mix').catch(() => null),
-      $fetch<{ accounts: any[], taxRates: LaborTaxRates | null }>('/api/budget/labor-settings'),
-      $fetch<{ monthlyIndex: MonthlyIndexEntry[] }>('/api/capacity/history').catch(() => ({ monthlyIndex: [] as MonthlyIndexEntry[] })),
+      $fetch<{ accounts: any[], taxRates: LaborTaxRates | null, coversRatioByMonth?: Record<string, { ratio: number }> }>('/api/budget/labor-settings'),
       $fetch<{ hasSchedule: boolean, months: (number | null)[], accrued?: (number | null)[] }>('/api/budget/loan-interest', { query: { year: props.year } }).catch(() => null)
     ])
 
@@ -116,7 +115,8 @@ async function buildPlan() {
       year: props.year,
       accounts: () => laborAccounts,
       taxRates: () => taxRates,
-      seasonalPct: m => seasonalityInfoFrom(historyRes.monthlyIndex ?? [], m).capped
+      // Direct roles scale with forecast covers (server/utils/labor-forecast.ts), not last year's index.
+      seasonalPct: m => (laborRes.coversRatioByMonth?.[`${props.year}-${String(m).padStart(2, '0')}`]?.ratio ?? 1) * 100
     })
     for (const a of laborAccounts) {
       rows.push({ accountId: a.accountId, accountNumber: a.accountNumber, name: a.name, kind: 'labor', values: months.map(m => round2(model.accountMonthlyDollars(a, m))) })
