@@ -164,14 +164,16 @@ function impliedTaxableTipsPerPayroll(db: ReturnType<typeof useDb>, months: stri
   return Math.max(0, (ss / 0.062 - wageSubject) / fridays)
 }
 
-export default defineEventHandler(() => {
+export default defineEventHandler((event) => {
   const db = useDb()
   const tz = useRuntimeConfig().qbo?.syncTimeZone
   // Keeps the automatic hours and covers ratios current when the page loads (local dev's nightly
   // sync never runs), at most once a day or when newer Toast data has arrived.
   ensureForecastsFresh(db, tz)
 
-  const accounts = loadLaborAccounts(db)
+  // ?year= prices each person at the pay in force that budget year (default: this year).
+  const reqYear = Number(getQuery(event).year)
+  const accounts = loadLaborAccounts(db, Number.isInteger(reqYear) && reqYear > 2000 ? reqYear : Number(restaurantToday(tz).slice(0, 4)))
   const taxRow = loadLaborTaxRates(db)
 
   const trailingMonths = trailingWindowMonths(db)

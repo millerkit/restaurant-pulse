@@ -135,6 +135,12 @@ export function refreshLaborForecast(db: Db, today: string): LaborForecastResult
 
   // ---- 2. Budget lines for every month after the current one ----------------------------------
   const accounts = loadLaborAccounts(db)
+  const accountsByYear = new Map<number, ReturnType<typeof loadLaborAccounts>>()
+  const accountsFor = (year: number) => {
+    let a = accountsByYear.get(year)
+    if (!a) { a = loadLaborAccounts(db, year); accountsByYear.set(year, a) }
+    return a
+  }
   const taxRates = loadLaborTaxRates(db)
   if (!taxRates) return { months: [], rowsChanged: 0, hoursUpdated, windowWeeks: auto?.window.weeks ?? [] }
   const ratios = coversRatios(db, today, auto ? auto.coversPerNight : undefined)
@@ -144,7 +150,7 @@ export function refreshLaborForecast(db: Db, today: string): LaborForecastResult
   const modelFor = (year: number) => {
     let m = models.get(year)
     if (!m) {
-      m = createLaborModel({ year, accounts: () => accounts, taxRates: () => taxRates, seasonalPct: month => (ratios.get(`${year}-${pad(month)}`)?.ratio ?? 1) * 100 })
+      m = createLaborModel({ year, accounts: () => accountsFor(year), taxRates: () => taxRates, seasonalPct: month => (ratios.get(`${year}-${pad(month)}`)?.ratio ?? 1) * 100 })
       models.set(year, m)
     }
     return m
@@ -161,7 +167,7 @@ export function refreshLaborForecast(db: Db, today: string): LaborForecastResult
   db.transaction(() => {
     for (const { year, month } of targetMonths) {
       const model = modelFor(year)
-      for (const acc of accounts) {
+      for (const acc of accountsFor(year)) {
         if (!leaf.has(acc.accountId)) continue
         const amount = Math.round(model.accountMonthlyDollars(acc as any, month) * 100) / 100
         const before = existing.get(year, month, acc.accountId) as { amount: number, pinned: number } | undefined

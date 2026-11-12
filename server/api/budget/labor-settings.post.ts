@@ -1,4 +1,4 @@
-import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
+import { refreshForecastsAfterChange, restaurantToday } from '../../utils/capacity-forecast'
 // Persists the Labor tab's assumptions — labor_position_settings, labor_position_slots,
 // and labor_tax_rates. Never touches budget_targets; the client computes the resulting
 // monthly $ figures itself and writes them via the existing /api/budget/targets route in
@@ -19,14 +19,47 @@ const ROLE_CLASSES: RoleClass[] = ['direct', 'supervision', 'overhead', 'growth'
 type SettingsInput = { accountId: number, scalesWithSeasonality: boolean, otHours: number, flatAmount: number, isHidden: boolean, roleClass?: RoleClass | null, otHoursPinned?: boolean }
 type SlotInput = { accountId: number, slotIndex: number, employeeName: string | null, hourlyRate: number, weeklyHours: number, weeklySalary: number, firstPaycheckDate?: string | null, toastEmployeeGuid?: string | null, hoursPinned?: boolean }
 type TaxRatesInput = { medicareRate: number, socialSecurityRate: number, futaRate: number, sutaMaRate: number, pfmlMaRate: number, taxableTipsPerPayroll?: number }
+// Pay is dated by year (migration 0020). A rate/salary typed while viewing a year that hasn't
+// started becomes that year's pay and carries forward; earlier years keep the pay they had.
+// Editing an earlier year while a later change exists changes only the years before that change.
+type PayRow = { employee_name: string | null, toast_employee_guid: string | null, hourly_rate: number, weekly_salary: number, prior_hourly_rate: number | null, prior_weekly_salary: number | null, pay_change_year: number | null }
+type Pay = { rate: number, salary: number, priorRate: number | null, priorSalary: number | null, changeYear: number | null }
+function resolvePay(existing: PayRow | undefined, slot: SlotInput, year: number | null, currentYear: number): Pay {
+  const rate = slot.hourlyRate ?? 0
+  const salary = slot.weeklySalary ?? 0
+  const fresh: Pay = { rate, salary, priorRate: null, priorSalary: null, changeYear: null }
+  if (year == null || !existing) return fresh
+  const sameWho = (existing.toast_employee_guid ?? null) === (slot.toastEmployeeGuid || null) && (existing.employee_name ?? '') === (slot.employeeName ?? '')
+  if (!sameWho) return fresh // a different person now sits in this slot index
+  const cy = existing.pay_change_year
+  const hasPrior = cy != null && existing.prior_hourly_rate != null && existing.prior_weekly_salary != null
+  const inForce = hasPrior && year < cy! ? { r: existing.prior_hourly_rate!, s: existing.prior_weekly_salary! } : { r: existing.hourly_rate, s: existing.weekly_salary }
+  if (rate === inForce.r && salary === inForce.s) {
+    return { rate: existing.hourly_rate, salary: existing.weekly_salary, priorRate: existing.prior_hourly_rate, priorSalary: existing.prior_weekly_salary, changeYear: existing.pay_change_year }
+  }
+  if (hasPrior) {
+    if (year < cy!) {
+      // Earlier year edited: only years before the change move (collapse if it now equals the later pay).
+      if (rate === existing.hourly_rate && salary === existing.weekly_salary) return { rate, salary, priorRate: null, priorSalary: null, changeYear: null }
+      return { rate: existing.hourly_rate, salary: existing.weekly_salary, priorRate: rate, priorSalary: salary, changeYear: cy }
+    }
+    if (rate === existing.prior_hourly_rate && salary === existing.prior_weekly_salary) return { rate, salary, priorRate: null, priorSalary: null, changeYear: null }
+    return { rate, salary, priorRate: existing.prior_hourly_rate, priorSalary: existing.prior_weekly_salary, changeYear: cy }
+  }
+  // One pay for all years so far. A change in a future year is dated to that year; otherwise it applies everywhere.
+  if (year > currentYear) return { rate, salary, priorRate: existing.hourly_rate, priorSalary: existing.weekly_salary, changeYear: year }
+  return fresh
+}
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ settings?: SettingsInput[], slots?: SlotInput[], slotAccountIds?: number[], taxRates?: TaxRatesInput }>(event)
+  const body = await readBody<{ settings?: SettingsInput[], slots?: SlotInput[], slotAccountIds?: number[], taxRates?: TaxRatesInput, year?: number }>(event)
   const settings = body?.settings ?? []
   const slots = body?.slots ?? []
   const slotAccountIds = body?.slotAccountIds ?? []
   const taxRates = body?.taxRates
+  const payYear = Number.isInteger(body?.year) ? Number(body!.year) : null
+  const currentYear = Number(restaurantToday(useRuntimeConfig().qbo?.syncTimeZone).slice(0, 4))
 
   const db = useDb()
   const now = new Date().toISOString()
@@ -57,18 +90,19 @@ export default defineEventHandler(async (event) => {
     WHERE account_id = @accountId
   `)
   const upsertSlot = db.prepare(`
-    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, first_paycheck_date, toast_employee_guid, hours_pinned, updated_at)
-    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @firstPaycheckDate, @toastEmployeeGuid, @hoursPinned, @updatedAt)
+    INSERT INTO labor_position_slots (account_id, slot_index, employee_name, hourly_rate, weekly_hours, weekly_salary, first_paycheck_date, toast_employee_guid, hours_pinned, prior_hourly_rate, prior_weekly_salary, pay_change_year, updated_at)
+    VALUES (@accountId, @slotIndex, @employeeName, @hourlyRate, @weeklyHours, @weeklySalary, @firstPaycheckDate, @toastEmployeeGuid, @hoursPinned, @priorRate, @priorSalary, @changeYear, @updatedAt)
     ON CONFLICT(account_id, slot_index) DO UPDATE SET
       employee_name = excluded.employee_name, hourly_rate = excluded.hourly_rate,
       weekly_hours = CASE WHEN excluded.hours_pinned = 0 AND labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid AND labor_position_slots.auto_weekly_hours IS NOT NULL
         THEN labor_position_slots.auto_weekly_hours ELSE excluded.weekly_hours END,
-      weekly_salary = excluded.weekly_salary, first_paycheck_date = excluded.first_paycheck_date,
+      weekly_salary = excluded.weekly_salary, prior_hourly_rate = excluded.prior_hourly_rate, prior_weekly_salary = excluded.prior_weekly_salary, pay_change_year = excluded.pay_change_year, first_paycheck_date = excluded.first_paycheck_date,
       auto_weekly_hours = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_weekly_hours ELSE NULL END,
       auto_hours_basis = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_hours_basis ELSE NULL END,
       auto_updated_at = CASE WHEN labor_position_slots.toast_employee_guid IS excluded.toast_employee_guid THEN labor_position_slots.auto_updated_at ELSE NULL END,
       toast_employee_guid = excluded.toast_employee_guid, hours_pinned = excluded.hours_pinned, updated_at = excluded.updated_at
   `)
+  const existingSlot = db.prepare('SELECT employee_name, toast_employee_guid, hourly_rate, weekly_salary, prior_hourly_rate, prior_weekly_salary, pay_change_year FROM labor_position_slots WHERE account_id = ? AND slot_index = ?')
   const trimSlots = db.prepare(`DELETE FROM labor_position_slots WHERE account_id = ? AND slot_index > ?`)
   const upsertTaxRates = db.prepare(`
     INSERT INTO labor_tax_rates (id, medicare_rate, social_security_rate, futa_rate, suta_ma_rate, pfml_ma_rate, taxable_tips_per_payroll, updated_at)
@@ -87,9 +121,11 @@ export default defineEventHandler(async (event) => {
     const maxSlotIndexByAccount = new Map<number, number>()
     for (const slot of slots) {
       maxSlotIndexByAccount.set(slot.accountId, Math.max(maxSlotIndexByAccount.get(slot.accountId) ?? 0, slot.slotIndex))
+      const pay = resolvePay(existingSlot.get(slot.accountId, slot.slotIndex) as PayRow | undefined, slot, payYear, currentYear)
       upsertSlot.run({
         accountId: slot.accountId, slotIndex: slot.slotIndex, employeeName: slot.employeeName || null,
-        hourlyRate: slot.hourlyRate ?? 0, weeklyHours: slot.weeklyHours ?? 0, weeklySalary: slot.weeklySalary ?? 0, firstPaycheckDate: slot.firstPaycheckDate || null,
+        hourlyRate: pay.rate, priorRate: pay.priorRate, priorSalary: pay.priorSalary, changeYear: pay.changeYear,
+        weeklyHours: slot.weeklyHours ?? 0, weeklySalary: pay.salary, firstPaycheckDate: slot.firstPaycheckDate || null,
         toastEmployeeGuid: slot.toastEmployeeGuid || null, hoursPinned: slot.hoursPinned === false ? 0 : 1, updatedAt: now
       })
     }

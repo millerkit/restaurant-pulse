@@ -52,7 +52,7 @@ async function buildPlan() {
       $fetch<MonthData>('/api/budget/targets', { query: { year: sourceYear.value, month: 12 } }),
       $fetch<{ months: { month: number, assumed: { expectedRevenueFood: number, expectedRevenueBeverage: number } }[] }>('/api/capacity', { query: { year: props.year } }).catch(() => null),
       $fetch<{ hasData: boolean, accounts: { accountId: number, pct: number | null }[] }>('/api/budget/beverage-revenue-mix').catch(() => null),
-      $fetch<{ accounts: any[], taxRates: LaborTaxRates | null, coversRatioByMonth?: Record<string, { ratio: number }> }>('/api/budget/labor-settings'),
+      $fetch<{ accounts: any[], taxRates: LaborTaxRates | null, coversRatioByMonth?: Record<string, { ratio: number }> }>('/api/budget/labor-settings', { query: { year: props.year } }),
       $fetch<{ hasSchedule: boolean, months: (number | null)[], accrued?: (number | null)[] }>('/api/budget/loan-interest', { query: { year: props.year } }).catch(() => null)
     ])
 

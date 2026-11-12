@@ -6121,3 +6121,12 @@ the page's old figures if needed). Typecheck 302 before and after; not viewed in
   page serves `acctSub`, typecheck 302 before and after. Not viewed in a browser (Basic Auth; password not put in a URL).
   Synthetic rows went into a backed-up copy of `data/restaurant.sqlite`, restored afterward (0 rows on/after Nov 1).
 - **Mid-month raise (labor model)**: design proposed to Kit, not built; see CLAUDE.md "Not yet done".
+
+## 2026-11-12: Staffing Plan pay is dated by year (migration 0020)
+
+Bug: slot rates/salaries had no year, so a 2027 pay change on the Staffing Plan was the same row 2026 read
+(Dec 2026 got repriced by `refreshLaborForecast`, and the 2026 page showed the new pay). Fix: `prior_*` pay columns
+plus `pay_change_year`; GET/POST take `year`; the forecast prices each year with that year's pay; the page no
+longer writes next-year targets itself (the server refresh does). Editing an earlier year while a later change
+exists only moves the years before the change. Not covered: weekly hours, OT hours, and adding/removing a person
+are still one shared set (use first paycheck date for hires).

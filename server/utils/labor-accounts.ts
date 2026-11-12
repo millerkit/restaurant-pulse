@@ -34,7 +34,9 @@ function parseJson(text: string | null): Record<string, any> | null {
   }
 }
 
-export function loadLaborAccounts(db: Db): LaborAccountFull[] {
+// year = the budget year being priced: each slot's pay is the value in force that year (see
+// labor_position_slots.pay_change_year). Omit it for the latest pay (used only for non-pay fields).
+export function loadLaborAccounts(db: Db, year?: number): LaborAccountFull[] {
   const accountRows = db.prepare(`
     SELECT
       a.id AS accountId, a.account_number AS accountNumber, a.name, a.parent_account_id AS parentAccountId,
@@ -55,15 +57,18 @@ export function loadLaborAccounts(db: Db): LaborAccountFull[] {
            hourly_rate AS hourlyRate, weekly_hours AS weeklyHours, weekly_salary AS weeklySalary,
            first_paycheck_date AS firstPaycheckDate, toast_employee_guid AS toastEmployeeGuid,
            hours_pinned AS hoursPinned, auto_weekly_hours AS autoWeeklyHours,
-           auto_hours_basis AS autoHoursBasis, auto_updated_at AS autoUpdatedAt
+           auto_hours_basis AS autoHoursBasis, auto_updated_at AS autoUpdatedAt,
+           prior_hourly_rate AS priorHourlyRate, prior_weekly_salary AS priorWeeklySalary, pay_change_year AS payChangeYear
     FROM labor_position_slots ORDER BY account_id, slot_index
   `).all() as any[]
   const slotsByAccount = new Map<number, LaborSlotFull[]>()
   for (const s of slotRows) {
     const list = slotsByAccount.get(s.accountId) ?? []
+    const usePrior = year != null && s.payChangeYear != null && year < s.payChangeYear
     list.push({
-      id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName, hourlyRate: s.hourlyRate, weeklyHours: s.weeklyHours,
-      weeklySalary: s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate,
+      id: s.id, slotIndex: s.slotIndex, employeeName: s.employeeName,
+      hourlyRate: usePrior ? (s.priorHourlyRate ?? s.hourlyRate) : s.hourlyRate, weeklyHours: s.weeklyHours,
+      weeklySalary: usePrior ? (s.priorWeeklySalary ?? s.weeklySalary) : s.weeklySalary, firstPaycheckDate: s.firstPaycheckDate,
       toastEmployeeGuid: s.toastEmployeeGuid ?? null, hoursPinned: !!s.hoursPinned,
       autoWeeklyHours: s.autoWeeklyHours ?? null, autoHoursBasis: parseJson(s.autoHoursBasis), autoUpdatedAt: s.autoUpdatedAt ?? null
     })

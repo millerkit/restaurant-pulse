@@ -135,7 +135,7 @@ async function loadAll() {
         trailingWindow: { months: string[] }, trailingActuals: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>,
         trailingWindow6?: { months: string[] }, trailingActuals6?: Record<number, { avgMonthlyDollars: number, weeklyAvg: number | null }>, trailingTaxRates: Record<string, number | null>, impliedTaxableTipsPerPayroll: number | null,
         coversRatioByMonth?: Record<string, CoversRatioInfo>, hoursWindow?: typeof hoursWindow.value, unplannedHours?: Record<number, UnplannedPerson[]>
-      }>('/api/budget/labor-settings'),
+      }>('/api/budget/labor-settings', { query: { year: YEAR } }),
       $fetch<{ employees: ToastEmployee[], slotSuggestions: Record<number, string> }>('/api/budget/labor-mapping').catch(() => ({ employees: [], slotSuggestions: {} })),
       $fetch<{ accounts: { accountId: number, amount: number }[] }>('/api/budget/actuals-by-account', { query: { year: YEAR, month: asOfMonth } }).catch(() => ({ accounts: [] }))
     ])
@@ -215,16 +215,9 @@ const {
   seasonalPct: month => coversPct(YEAR, month)
 })
 
-// Saving the current year also re-prices the NEXT budget year's 12 months from the same saved
-// settings (staff are assumed unchanged in 2027 absent other information). A second model bound
-// to that year; only used by save().
+// Saving the current year also re-prices the NEXT budget year's 12 months (done on the server, with
+// each person's pay for that year); only used for the save message.
 const flowsToNextYear = BUDGET_YEARS.includes(YEAR + 1)
-const nextYearModel = createLaborModel({
-  year: YEAR + 1,
-  accounts: () => accounts.value,
-  taxRates: () => taxRates.value,
-  seasonalPct: month => coversPct(YEAR + 1, month)
-})
 
 // One global on/off switch rather than a per-role checkbox — added after the user said
 // they expect to scale every hourly role the same way, making a per-role toggle just
@@ -656,7 +649,7 @@ async function save() {
         toastEmployeeGuid: s.toastEmployeeGuid, hoursPinned: s.hoursPinned
       })))
 
-    await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, slotAccountIds, taxRates: taxRates.value } })
+    await $fetch('/api/budget/labor-settings', { method: 'POST', body: { settings: settingsPayload, slots: slotsPayload, slotAccountIds, taxRates: taxRates.value, year: YEAR } })
 
     const targets: { year: number, month: number, accountId: number, amount: number }[] = []
     for (const month of targetMonths.value) {
@@ -664,13 +657,8 @@ async function save() {
         targets.push({ year: YEAR, month, accountId: acc.accountId, amount: Math.round(accountMonthlyDollars(acc, month) * 100) / 100 })
       }
     }
-    if (flowsToNextYear) {
-      for (let month = 1; month <= 12; month++) {
-        for (const acc of accounts.value) {
-          targets.push({ year: YEAR + 1, month, accountId: acc.accountId, amount: Math.round(nextYearModel.accountMonthlyDollars(acc, month) * 100) / 100 })
-        }
-      }
-    }
+    // Next year's months are repriced on the server from each person's pay for that year (it runs
+    // as part of the labor-settings save above), so pay typed here carries forward but never back.
     await $fetch('/api/budget/targets', { method: 'POST', body: { targets } })
 
     await loadAll()

@@ -777,6 +777,13 @@ CREATE TABLE labor_position_slots (
   auto_weekly_hours REAL,
   auto_hours_basis TEXT,
   auto_updated_at TEXT,
+  -- Dated pay (migration 0020): hourly_rate / weekly_salary above apply from pay_change_year
+  -- onward; years before it use prior_hourly_rate / prior_weekly_salary. NULL pay_change_year =
+  -- one pay for every year. A change typed on a future year's Staffing Plan sets these, so it
+  -- carries forward but never back (server/utils/labor-accounts.ts, labor-settings.post.ts).
+  prior_hourly_rate REAL,
+  prior_weekly_salary REAL,
+  pay_change_year INTEGER,
   updated_at     TEXT NOT NULL,
   UNIQUE (account_id, slot_index)
 );

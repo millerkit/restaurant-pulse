@@ -205,6 +205,10 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   Direct roles that scale multiply hours by clamp(forecast covers per open night ÷ actual per open night over
   the same window, ±`SEASONALITY_CAP_PCT`), replacing last year's seasonal index (Staffing Plan and Build next
   year's budget); migration 0019 turned scaling off for non-direct hourly/OT roles (the Sous Chef).
+- **Pay is dated by year** (2026-11-12, migration 0020): `labor_position_slots` keeps `prior_hourly_rate` /
+  `prior_weekly_salary` and `pay_change_year`. A rate/salary typed on a future year's Staffing Plan applies from
+  that year on; earlier years keep their pay (`resolvePay` in `labor-settings.post.ts`, `loadLaborAccounts(db, year)`).
+  Hours, OT and new/removed people are still shared across years. See history.
 - **Next year**: the Budget, Sales Plan and Staffing Plan have a 2026/2027 toggle. "Build next year's
   budget" seeds an empty year (fixed costs from December, revenue, labor); revenue and food & drink cost
   now follow the forecast regardless.
