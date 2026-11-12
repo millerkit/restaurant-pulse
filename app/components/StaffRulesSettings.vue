@@ -63,9 +63,10 @@ const mapAccountsFor = (isBoh: boolean) => [...(mapping.value?.accounts ?? [])].
 })
 const isSuggestionOnly = (j: MapJob) => !j.isSaved && jobChoice[j.guid] !== '' && jobChoice[j.guid] === j.suggestedAccountId
 const saveJobMapping = () => run(async () => {
+  // "Not mapped yet" on a job that WAS saved removes its mapping; on a never-saved job it sends nothing.
   const jobs = jobRows.value
-    .filter(j => jobChoice[j.guid] !== '')
-    .map(j => ({ guid: j.guid, accountId: jobChoice[j.guid] === 'none' ? null : (jobChoice[j.guid] as number) }))
+    .filter(j => jobChoice[j.guid] !== '' || j.isSaved)
+    .map(j => jobChoice[j.guid] === '' ? { guid: j.guid, remove: true } : { guid: j.guid, accountId: jobChoice[j.guid] === 'none' ? null : (jobChoice[j.guid] as number) })
   await $fetch('/api/budget/labor-mapping', { method: 'POST', body: { jobs } })
   await refreshMapping()
 }, 'Saved. The Staffing Plan hours will use these jobs.')
