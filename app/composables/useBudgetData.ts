@@ -66,7 +66,7 @@ export function daysInYear(year: number): number {
 }
 
 // Payroll Friday counters live in shared/utils/labor-model.ts (used by the server's labor forecast too).
-export { countFridays, fridaysInMonth } from '../../shared/utils/labor-model'
+export { countFridays, fridaysInMonth } from '#shared/utils/labor-model'
 
 export function categoryTotals(monthlyData: MonthData[], monthNumbers: number[]) {
   const totals: Record<Category, number> = { revenue: 0, cogs: 0, labor: 0, opex: 0, other_income: 0, other_expense: 0 }
