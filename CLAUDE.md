@@ -258,10 +258,6 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Not yet done
 
-- **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
-  the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
-  With later months following the forecast, Budget and Night-by-night now converge except for the current
-  month; the Forecast Accuracy page (step 3) now answers budget accuracy once months close.
 - **Eastern Bank, in writing**: (a) does "all annual principal and interest payments" mean the SBA loan
   only or all 10 loans; (b) is "EBITA" a typo for EBITDA; (c) will the pre-opening reclasses count as
   non-recurring add-backs; (d) does EBITDA count a one-time gain on asset sale. **Accountant**: is
@@ -278,6 +274,14 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 - Labor: an effective-dated salary change (mid-month raises) isn't modeled; payroll tax rates reset each
   January (SUTA is the reduced 2026 rate).
 - Toast's per-area revenue uses check totals, which can't exclude a private event at a table.
+
+## Cash & Loans Year-End Outlook
+
+Two cards (simplified 2026-11-12): **Budget** (real actuals for closed months, budget for this month and later, which
+already follows the live forecast) and **Latest forecast** (same, but this month's revenue from the night-by-night
+projection, food & drink cost scaled with it). Labor, opex and other income/expense stay at budget. The old Recent
+pace card and its ratio were removed as double counting. Math: `app/utils/yearOutlook.ts`. Budget accuracy now lives on
+Forecast Accuracy.
 
 ## Where to look
 

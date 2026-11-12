@@ -86,9 +86,10 @@ const baselineYearTotals = computed(() => {
 const projectedNetIncomeForYear = computed<number | null>(() => baselineYearTotals.value ? netIncome(baselineYearTotals.value) : null)
 
 // ---- Year-end outlook (2026-11-05) -----------------------------------------
-// Three scenarios for full-year Net Income (budget / recent pace / recent pace with this
-// month's night-by-night revenue). The math is in app/utils/yearOutlook.ts. The current
-// month's revenue comes from the same projection the Revenue tab uses.
+// Two scenarios for full-year Net Income: budget, and budget with this month's night-by-night
+// revenue (simplified 2026-11-12; later months' budgets already follow the live forecast). The math
+// is in app/utils/yearOutlook.ts. The current month's revenue comes from the same projection the
+// Sales Plan uses.
 const outlookNightly = ref<NightlyProjectionSummary | null>(null)
 const outlookMonthActuals = ref<Record<number, number>>({})
 async function loadOutlookInputs() {
@@ -120,30 +121,18 @@ const outlook = computed(() => {
   return yearOutlook({
     asOfMonth,
     monthBudget: (m, cat) => monthCategoryBudget(budgetMonthlyData.value[m - 1], cat),
-    monthlyActuals: monthlyActuals.value,
     baselineTotals: baseline,
     currentMonthRevenueProjection
   })
 })
-const OUTLOOK_TITLE: Record<string, string> = { budget: 'Budget', pace: 'Recent pace', paceSpecials: 'Night-by-night' }
-// A one-line "how it's built" under each title, so the cards read as simple vs. detailed at a glance.
+const OUTLOOK_TITLE: Record<string, string> = { budget: 'Budget', forecast: 'Latest forecast' }
 const OUTLOOK_KIND: Record<string, string> = {
   budget: 'The plan: projected profit if the rest of the year hits budget',
-  pace: 'Simple estimate: how revenue ran vs. budget in recent months',
-  paceSpecials: "Detailed forecast: this month built night by night from recent weekday averages, your Special Nights (buyouts, events) and OpenTable bookings"
+  forecast: "This month built night by night from recent weekday averages, your Special Nights (buyouts, events) and OpenTable bookings"
 }
 const OUTLOOK_NOTE: Record<string, string> = {
-  budget: "Real actuals for months already closed; this month's and every later month's budget.",
-  pace: 'Revenue for the rest of the year at that pace (food & drink cost follows it); labor and operating expenses at budget.',
-  paceSpecials: "Same as Recent pace for the rest of the year, but this month's revenue comes from the detailed forecast. OpenTable bookings adjust only the next few nights."
-}
-const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const outlookMonthsLabel = computed(() => {
-  const used = outlook.value?.monthsUsed ?? []
-  return used.length ? used.map(m => MONTH_ABBR[m - 1]).join(', ') : ''
-})
-function pctOfBudget(ratio: number) {
-  return `${Math.round(ratio * 100)}%`
+  budget: "Real actuals for months already closed; this month's and every later month's budget (later months follow the live forecast).",
+  forecast: "Same as Budget, except this month's revenue comes from the detailed forecast (food & drink cost moves with it). OpenTable bookings adjust only the next few nights."
 }
 const projectedFreeCashFlowForYear = computed<number | null>(() => {
   if (projectedNetIncomeForYear.value === null || !data.value) return null
@@ -397,9 +386,9 @@ async function submitPlan() {
         <div v-if="outlook" class="outlook">
           <div class="section-head">
             <div class="section-label">Year-End Outlook</div>
-            <div class="section-note">If the rest of {{ YEAR }} runs like recent months did against budget</div>
+            <div class="section-note">Where {{ YEAR }} is headed, with this month's latest forecast</div>
           </div>
-          <div :class="['hero-row', outlook.scenarios.length === 3 ? 'three-up' : 'two-up']">
+          <div class="hero-row two-up">
             <div v-for="sc in outlook.scenarios" :key="sc.key" :class="['hero-card', sc.key === 'budget' && 'anchor']">
               <div class="hero-top">
                 <span class="period">{{ OUTLOOK_TITLE[sc.key] }}</span>
@@ -425,17 +414,12 @@ async function submitPlan() {
             </div>
           </div>
           <div class="quiet-note small">
-            Pace is based on {{ outlookMonthsLabel }} (closed months since the Cambridge St opening settled; earlier months are left out): revenue ran
-            {{ pctOfBudget(outlook.ratios.revenue) }} of budget. That ratio is applied to revenue for the current month and December, and food & drink cost moves with it.
-            Labor and operating expenses stay at budget on purpose: November and December's budgets were already recalibrated from recent actuals, so applying the closed months' overruns
-            (against their older budgets: food & drink cost {{ pctOfBudget(outlook.ratios.cogs) }}, labor {{ pctOfBudget(outlook.ratios.labor) }}, operating expenses {{ pctOfBudget(outlook.ratios.opex) }}) would count them twice.
-            Other income and other expense (one-time items) stay at budget in every scenario, and so does everything already closed (real actuals).
-            <template v-if="!outlook.scenarios.some(s => s.key === 'paceSpecials')">The night-by-night card needs the current month's revenue projection, which isn't available yet.</template>
-            Three months is a thin sample, so treat the pace cards as a rough guide, not a forecast. Seasonality is in the budget (December's monthly budget already reflects the Capacity planning page's seasonal covers); the pace ratio doesn't add any December-specific lift.
+            Closed months are real actuals. Labor, operating expenses and other income/expense stay at budget in both cards. Later months' budgets already follow the live forecast, so the only difference is this month.
+            <template v-if="!outlook.scenarios.some(s => s.key === 'forecast')">The latest-forecast card needs the current month's revenue projection, which isn't available yet.</template>
           </div>
         </div>
 
-        <!-- Fallback when the outlook can't be built (no closed month since August has actuals yet): the plain budget projection. -->
+        <!-- Fallback when the outlook can't be built (no year totals yet): the plain budget projection. -->
         <div v-else-if="projectedNetIncomeForYear !== null" class="hero-row two-up">
           <div class="hero-card anchor">
             <div class="hero-top">

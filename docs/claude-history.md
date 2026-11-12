@@ -6093,3 +6093,15 @@ moved on first refresh (every month within ±5.1%), the pre_auto table and the p
 Kit's request, and follow-ups shipped: job-mapping label "Salaried / fixed pay", shared logins excluded from hours
 averages, unmapping a saved job, suggestions offered as a button rather than preselected.
 
+## 2026-11-12 — Cash & Loans Year-End Outlook simplified to two cards
+
+Kit chose (from three options) two cards with no pace ratio. Removed: the "Recent pace" scenario (`pace`), the revenue
+pace ratio (last up-to-3 closed months from August, actual ÷ budget) and the cost ratios shown "for reference", plus the
+long explanatory paragraph. Why: since dynamic budgeting steps 1–2, later months' budgets follow the live forecast, so
+scaling December by "revenue ran 96% of budget" mostly counted the same run rate twice, and Kit rarely used Recent pace.
+`yearOutlook()` now takes no monthly actuals and returns `budget` and `forecast` (current month's revenue replaced by the
+night-by-night projection, that month's COGS scaled by the revenue difference). Hand check: base revenue 1000, COGS 300,
+this month's budget 100 revenue / 30 COGS, projection 110 → revenue 1010, COGS 303, Net Income +7. The forecast card's
+number differs from the old Night-by-night card by the removed pace adjustment on later months (not measured; compare
+the page's old figures if needed). Typecheck 302 before and after; not viewed in a browser (Basic Auth).
+
