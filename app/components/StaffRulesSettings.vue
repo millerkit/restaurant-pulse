@@ -44,8 +44,7 @@ const addAcct = ref<number | ''>('')
 
 // ---- Toast jobs -> budget roles (dynamic budgeting step 4, 2026-11-12) ----
 // Staffing Plan hours follow each mapped person's real Toast hours on jobs mapped to their role.
-// A suggestion (title matches a role name) is preselected but only saved when "Save job mapping"
-// is pressed; "Salaried / fixed pay" is a deliberate no: the job is paid a fixed salary (already in the budget), so its hours don't drive anything.
+// A suggestion (title matches a role name) is offered as a button, never preselected; "Salaried / fixed pay" is a deliberate no: the job is paid a fixed salary (already in the budget), so its hours don't drive anything.
 type MapAccount = { accountId: number, accountNumber: string | null, name: string, groupKey: string }
 type MapJob = { guid: string, title: string, isBoh: boolean, isSaved: boolean, savedAccountId?: number | null, suggestedAccountId: number | null, recentHours: number, recentPeople: number }
 const { data: mapping, refresh: refreshMapping } = await useFetch<{ accounts: MapAccount[], jobs: MapJob[] }>('/api/budget/labor-mapping')
@@ -53,7 +52,9 @@ const jobChoice = reactive<Record<string, number | 'none' | ''>>({})
 watchEffect(() => {
   for (const j of mapping.value?.jobs ?? []) {
     if (j.guid in jobChoice) continue
-    jobChoice[j.guid] = j.isSaved ? (j.savedAccountId ?? 'none') : (j.suggestedAccountId ?? '')
+    // Suggestions are shown beside the select, never preselected: a job deliberately left unmapped
+    // would otherwise come back looking mapped after every reload.
+    jobChoice[j.guid] = j.isSaved ? (j.savedAccountId ?? 'none') : ''
   }
 })
 const jobRows = computed(() => (mapping.value?.jobs ?? []).filter(j => j.recentHours > 0 || j.isSaved))
@@ -61,7 +62,8 @@ const mapAccountsFor = (isBoh: boolean) => [...(mapping.value?.accounts ?? [])].
   const rank = (x: MapAccount) => (x.groupKey === (isBoh ? 'boh' : 'foh') ? 0 : 1)
   return rank(a) - rank(b) || (a.accountNumber ?? '').localeCompare(b.accountNumber ?? '', undefined, { numeric: true })
 })
-const isSuggestionOnly = (j: MapJob) => !j.isSaved && jobChoice[j.guid] !== '' && jobChoice[j.guid] === j.suggestedAccountId
+const suggestionFor = (j: MapJob) => (!j.isSaved && jobChoice[j.guid] === '' && j.suggestedAccountId != null
+  ? (mapping.value?.accounts ?? []).find(a => a.accountId === j.suggestedAccountId) ?? null : null)
 const saveJobMapping = () => run(async () => {
   // "Not mapped yet" on a job that WAS saved removes its mapping; on a never-saved job it sends nothing.
   const jobs = jobRows.value
@@ -130,8 +132,9 @@ const saveJobMapping = () => run(async () => {
       <li v-for="j in jobRows" :key="j.guid">
         <div class="sr-who">
           <span class="sr-name">{{ j.title }}</span>
-          <span class="sr-sub">{{ j.recentHours }} hrs, {{ j.recentPeople }} {{ j.recentPeople === 1 ? 'person' : 'people' }} in the last 12 weeks<template v-if="isSuggestionOnly(j)"> · ✚ suggested, not saved yet</template></span>
+          <span class="sr-sub">{{ j.recentHours }} hrs, {{ j.recentPeople }} {{ j.recentPeople === 1 ? 'person' : 'people' }} in the last 12 weeks</span>
         </div>
+        <button v-if="suggestionFor(j)" type="button" class="sr-remove" @click="jobChoice[j.guid] = suggestionFor(j)!.accountId">✚ Suggested: {{ suggestionFor(j)!.name }}</button>
         <select v-model="jobChoice[j.guid]" class="sr-input" :aria-label="`Budget role for ${j.title}`">
           <option value="">Not mapped yet</option>
           <option value="none">Salaried / fixed pay (no hours tracking)</option>
