@@ -601,8 +601,8 @@ CREATE TABLE weekly_revenue_benchmark (
   updated_at     TEXT NOT NULL
 );
 
--- Editable buyout guaranteed-minimum pricing, added 2026-09-24 to back the
--- Revenue tab's buyout-planning section. Two tiers matching the real pricing
+-- Editable buyout guaranteed-minimum pricing, added 2026-09-24. Since 2026-11-12 it only
+-- prefills a dated buyout's price on the Sales Plan and drives the What-If page. Two tiers matching the real pricing
 -- structure (Tue/Wed/Thu vs. Fri/Sat/Sun) — editable because the user
 -- expects to revise these rates over time, unlike the weekday grouping
 -- itself. Single-row (id is always 1), same shape as reserve_plan/
@@ -632,6 +632,8 @@ CREATE TABLE buyout_rates (
 -- a fraction of a full buyout at all (it displaces that one area's normal
 -- revenue, not the whole restaurant's), so it's still entered by hand as a
 -- one-off Food/Beverage budget adjustment instead.
+-- UNUSED since 2026-11-12: undated "hoped-for" buyout counts were removed (Special Nights holds
+-- dated buyouts; the What-If page holds hypotheticals). Kept so old data isn't lost.
 CREATE TABLE revenue_buyout_plan (
   year   INTEGER NOT NULL,
   month  INTEGER NOT NULL,
@@ -651,6 +653,7 @@ CREATE TABLE revenue_buyout_plan (
 -- avoid it, since a pseudo-account would need special-casing everywhere
 -- that assumes every accounts row is a real QBO account: the export
 -- template, actuals-by-account matching, the account tree itself).
+-- UNUSED (see revenue_buyout_plan).
 CREATE TABLE revenue_buyout_applied (
   year        INTEGER NOT NULL,
   month       INTEGER NOT NULL,

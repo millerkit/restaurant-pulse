@@ -159,7 +159,7 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   Tuesdays) zeroes those nights and lifts the others by the recapture %, capped at capacity.
 - **Budget lines that follow the forecast** (`server/utils/budget-forecast.ts`), for every month after
   the current one through December of next year: food sales 4010 and beverage sales 4022/4024/4026/4028
-  = the Capacity projection (`createCapacityModel`) + planned buyouts, split by the real sales mix since
+  = the Capacity projection (`createCapacityModel`) + dated buyouts, split by the real sales mix since
   the move; food & drink cost 5010/5110/5120/5125/5130 = each line's actual % of its sales over the last
   (up to) three closed months from Aug 2026 × the budgeted sales. **Food cost % is measured over all food
   sales** (4010 + event food 4150/4180 + catering food 4230; costs 5010 + 5220) and applied to all budgeted
@@ -168,7 +168,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 - **Special nights and holidays**: holidays are dated (`holiday_closures`, Settings); buyouts, closures,
   off-site and event nights are dated `special_nights` (Sales Plan). A non-buyout night replaces a normal
   night with its own expected dine-in revenue; a buyout stays a normal night and adds (its price − that
-  weekday's normal night). Undated buyout counts per weekday (`revenue_buyout_plan`) add the same way.
+  weekday's normal night). The old undated per-weekday buyout counts (`revenue_buyout_plan`, the Sales Plan's
+  Buyout Revenue card) were removed 2026-11-12; hypothetical buyouts go on the What-If page.
   **Two revenue fields per night** (2026-11-12, migration 0018): `expected_revenue` = regular dine-in that
   night (hint: the weekday's normal night), `event_revenue` = what the event itself brings in. Kinds: buyout
   (price rings into dine-in), off-site, on-site event, catering (runs alongside a normal night); closures are entered only as Settings holidays. For

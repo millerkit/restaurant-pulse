@@ -242,16 +242,23 @@ export default defineEventHandler(() => {
   const buyoutRates = loadBuyoutRates(db)
   const buyoutWeekdays = buyoutWeekdaysFor(buyoutRates)
 
-  // Real counts already booked on the Revenue tab (revenue_buyout_plan),
-  // summed across every month of modelYear per weekday — these are already
-  // reflected in currentAnnual.revenue client-side (the Revenue tab's Apply
-  // action writes them into real revenue accounts' budget_targets), so
-  // they're shown for context only, never added into the simulation's own
-  // revenue delta. The client's buyout count input stays a pure delta on
-  // top of this — "how many *more* buyouts than what's already booked."
-  const bookedRows = db.prepare('SELECT dow, SUM(count) AS totalCount FROM revenue_buyout_plan WHERE year = ? GROUP BY dow').all(modelYear) as { dow: number, totalCount: number }[]
+  // Dated buyouts already on the Sales Plan (special_nights) for modelYear, per weekday: how many,
+  // and the revenue they add (price - that weekday's normal night). These are already in the
+  // automatic budget (currentAnnual.revenue client-side), so they're shown for context only and
+  // never added into the simulation's own revenue delta. The client's buyout count input stays a
+  // pure delta on top: "how many *more* buyouts than what's already booked."
+  const bookedRows = db.prepare(`
+    SELECT CAST(strftime('%w', date) AS INTEGER) AS dow, expected_revenue AS price
+    FROM special_nights WHERE kind = 'buyout' AND date BETWEEN ? AND ?
+  `).all(`${modelYear}-01-01`, `${modelYear}-12-31`) as { dow: number, price: number }[]
   const buyoutBookedByDow: Record<number, number> = {}
-  for (const r of bookedRows) buyoutBookedByDow[r.dow] = r.totalCount
+  const buyoutBookedRevenueByDow: Record<number, number> = {}
+  for (const r of bookedRows) {
+    const normal = buyoutWeekdays.find(w => w.dow === r.dow)?.dollarTarget
+    if (normal == null) continue
+    buyoutBookedByDow[r.dow] = (buyoutBookedByDow[r.dow] ?? 0) + 1
+    buyoutBookedRevenueByDow[r.dow] = (buyoutBookedRevenueByDow[r.dow] ?? 0) + (r.price - normal)
+  }
 
   // ---- ongoing retail context (4300 Retail Sales' leaf accounts) ----
   // Shown beside the "added monthly retail" lines so the user can see what
@@ -302,6 +309,7 @@ export default defineEventHandler(() => {
     buyoutRates,
     buyoutWeekdays,
     buyoutBookedByDow,
+    buyoutBookedRevenueByDow,
     retailBudgetByMonth,
     retailTrailingMonthly
   }

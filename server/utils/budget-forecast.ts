@@ -11,8 +11,7 @@
 // - Beverage sales (4022/4024/4026/4028) = Capacity's beverage sales + the beverage
 //   share of planned buyouts, split by the real beer/liquor/wine/N-A mix since the
 //   move.
-// - Planned buyouts = dated buyouts that month (expected night − a normal night that
-//   weekday) + the undated per-weekday counts (count × (rate − a normal night)).
+// - Dated buyouts that month add (expected night − a normal night that weekday).
 // - Food & drink cost (5010, 5110/5120/5125/5130) = each line's real cost % of its
 //   paired sales account over the last (up to) three closed, fully synced months
 //   from August 2026 on × that month's sales line.
@@ -143,31 +142,25 @@ function salesMix(db: Db): { foodShare: number, beverageWeights: Map<string, num
   }
 }
 
-// Extra sales planned buyouts add to a month (above the normal nights they displace).
-export function plannedBuyoutIncrement(db: Db, year: number, month: number): { total: number, dated: number, undated: number } {
+// Extra sales dated buyouts add to a month (above the normal nights they displace):
+// each adds (its price - that weekday's normal night). Undated "hoped-for" buyout counts
+// were removed 2026-11-12; hypothetical buyouts belong on the What-If page.
+export function plannedBuyoutIncrement(db: Db, year: number, month: number): { total: number } {
   const monthStartIso = `${year}-${pad(month)}-01`
   let weekdays: ReturnType<typeof buyoutWeekdaysFor> = []
   try {
     weekdays = buyoutWeekdaysFor(loadBuyoutRates(db), monthStartIso)
   } catch {
-    return { total: 0, dated: 0, undated: 0 }
+    return { total: 0 }
   }
-  const normalFor = (dow: number) => weekdays.find(w => w.dow === dow)
-  let undated = 0
-  const counts = db.prepare('SELECT dow, count FROM revenue_buyout_plan WHERE year = ? AND month = ?').all(year, month) as { dow: number, count: number }[]
-  for (const c of counts) {
-    const w = normalFor(c.dow)
-    if (!w || w.dollarTarget == null || !(c.count > 0)) continue
-    undated += c.count * (w.rate - w.dollarTarget)
-  }
-  let dated = 0
+  let total = 0
   for (const n of loadSpecialNights(db, monthStartIso, monthEnd(year, month)).values()) {
     if (n.kind !== 'buyout') continue
-    const w = normalFor(new Date(`${n.date}T00:00:00Z`).getUTCDay())
+    const w = weekdays.find(x => x.dow === new Date(`${n.date}T00:00:00Z`).getUTCDay())
     if (!w || w.dollarTarget == null) continue
-    dated += n.expectedRevenue - w.dollarTarget
+    total += n.expectedRevenue - w.dollarTarget
   }
-  return { total: dated + undated, dated, undated }
+  return { total }
 }
 
 // What a month's dated special nights add to the budget beyond the Capacity projection:

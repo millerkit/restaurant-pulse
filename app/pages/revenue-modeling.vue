@@ -35,6 +35,7 @@ type RevenueModelingData = {
   buyoutRates: { weekdayRate: number, weekendRate: number, updatedAt: string | null }
   buyoutWeekdays: BuyoutWeekday[]
   buyoutBookedByDow: Record<number, number>
+  buyoutBookedRevenueByDow: Record<number, number>
   retailBudgetByMonth: Record<number, number>
   retailTrailingMonthly: number | null
 }
@@ -201,16 +202,14 @@ function resetSimulation() {
 function buyoutIncrementFor(w: BuyoutWeekday): number | null {
   return w.dollarTarget != null ? w.rate - w.dollarTarget : null
 }
-// Real counts already booked on the Revenue tab this year (context only —
-// see server/api/revenue-modeling.get.ts's buyoutBookedByDow comment for
-// why this is never added into buyoutAnnualRevenueDelta: it's already
-// baked into currentAnnual.revenue via the Revenue tab's own Apply action).
+// Dated buyouts already on the Sales Plan this year (context only — see
+// server/api/revenue-modeling.get.ts for why this is never added into
+// buyoutAnnualRevenueDelta: it's already in the automatic budget).
 function bookedCountFor(dow: number): number {
   return data.value?.buyoutBookedByDow?.[dow] ?? 0
 }
 function bookedRevenueFor(w: BuyoutWeekday): number {
-  const inc = buyoutIncrementFor(w)
-  return inc != null ? bookedCountFor(w.dow) * inc : 0
+  return data.value?.buyoutBookedRevenueByDow?.[w.dow] ?? 0
 }
 // The stepper is always a pure delta on top of what's already booked, per
 // the user's own instruction — never pre-filled with the booked count —
@@ -220,7 +219,7 @@ function simCountFor(w: BuyoutWeekday): number {
 }
 function simRevenueFor(w: BuyoutWeekday): number {
   const inc = buyoutIncrementFor(w)
-  return inc != null ? simCountFor(w) * inc : 0
+  return bookedRevenueFor(w) + (inc != null ? (buyoutCounts.value[w.dow] ?? 0) * inc : 0)
 }
 const buyoutAnnualRevenueDelta = computed(() => {
   return (data.value?.buyoutWeekdays ?? []).reduce((sum, w) => {
@@ -846,7 +845,7 @@ function marginChip(base: number | null, sim: number | null): 'good' | 'critical
           </div>
 
           <div class="section-note">
-            Already booked for {{ data!.modelYear }} (from the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>): <strong>{{ fmtMoneyFull(buyoutBookedRevenueTotal) }}</strong>
+            Already booked for {{ data!.modelYear }} (dated buyouts on the <NuxtLink to="/budget/revenue">Sales Plan</NuxtLink>): <strong>{{ fmtMoneyFull(buyoutBookedRevenueTotal) }}</strong>
             <template v-if="buyoutHasAnyCount"> &middot; plus <strong>{{ fmtDeltaMoney(0, buyoutAnnualRevenueDelta) }}</strong> from this simulation</template>
           </div>
         </section>

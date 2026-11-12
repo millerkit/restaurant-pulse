@@ -1,13 +1,8 @@
-// Backs the Revenue tab's buyout-planning section: real weekday revenue
-// targets (so "how much does a buyout actually add" can be computed client-
-// side as buyout rate minus what that night would have made anyway), the
-// currently-declared buyout rates, this month's planned counts, and
-// whatever this feature last applied to each revenue account's budget —
-// the client needs all four to render the preview and to compute a correct
-// re-apply delta. See schema.sql's revenue_buyout_applied comment for why
-// that last piece exists. The rates/weekday-target computation itself lives
-// in server/utils/buyout-rates.ts, shared with revenue-modeling.get.ts's
-// own (unpersisted, annual-count) buyout what-if.
+// Backs the Sales Plan's Special Nights form: the guaranteed-minimum buyout rates (they prefill a
+// buyout's price) and each weekday's normal-night revenue (the hint beside the dine-in field, and
+// what a buyout displaces: its increment is price - normal night). The undated per-weekday buyout
+// counts this route used to return were removed 2026-11-12; hypothetical buyouts live on the
+// What-If page. Rates/weekday math lives in server/utils/buyout-rates.ts.
 
 export default defineEventHandler((event) => {
   const query = getQuery(event)
@@ -16,21 +11,7 @@ export default defineEventHandler((event) => {
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
     throw createError({ statusCode: 400, statusMessage: 'year and month (1-12) query params are required' })
   }
-
-  const db = useDb()
-
-  const rates = loadBuyoutRates(db)
+  const rates = loadBuyoutRates(useDb())
   const weekdays = buyoutWeekdaysFor(rates, `${year}-${String(month).padStart(2, '0')}-01`)
-
-  const countRows = db.prepare('SELECT dow, count FROM revenue_buyout_plan WHERE year = ? AND month = ?').all(year, month) as { dow: number, count: number }[]
-  const countByDow: Record<number, number> = {}
-  for (const r of countRows) countByDow[r.dow] = r.count
-
-  const appliedRows = db.prepare('SELECT account_id AS accountId, amount FROM revenue_buyout_applied WHERE year = ? AND month = ?').all(year, month) as { accountId: number, amount: number }[]
-  const appliedByAccountId: Record<number, number> = {}
-  for (const r of appliedRows) appliedByAccountId[r.accountId] = r.amount
-
-  const foodBeverageMix = computeFoodBeverageMix()
-
-  return { year, month, rates, weekdays, countByDow, appliedByAccountId, foodBeverageMix }
+  return { year, month, rates, weekdays }
 })

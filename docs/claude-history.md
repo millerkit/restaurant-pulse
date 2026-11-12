@@ -6002,3 +6002,15 @@ $6,500 of tickets lived only in a hand-typed Event Sales budget, so the section 
 - Same day, follow-ups from Kit: the night-by-night table is its own "Night by Night" card below Special Nights
   (it covers every remaining night); its column is "OpenTable bookings"; "Closed" can no longer be added as a special
   night (closures and holidays live in Settings; existing closed rows still display and can be removed).
+
+## Buyout Revenue card and undated buyout counts removed — 2026-11-12
+
+Kit introduced undated per-weekday buyout counts to see how much 2027 revenue could cover payroll (seeded 2 a month
+for 2027 by `scripts/seed-2027-buyouts.mjs`), but with dated buyouts in Special Nights the card was a second, confusing
+way to enter the same thing. Removed: the Sales Plan's Buyout Revenue card, `POST /api/budget/buyout-plan`, the
+seed script, the "retire the undated count" option on adding a dated buyout, and the undated term in
+`plannedBuyoutIncrement` (budget now counts dated buyouts only). The guaranteed-minimum rates editor moved into the
+Special Nights card (prefills a buyout's price). `GET /api/budget/buyout-plan` now returns only rates and weekday
+normal nights. What-If's "already booked" now reads dated buyouts (`buyoutBookedRevenueByDow`) instead of the old
+counts; hypothetical buyouts are its stepper. Tables `revenue_buyout_plan` / `revenue_buyout_applied` are kept but unused.
+Effect: the 2027 budget loses the hoped-for buyout revenue (the Jan 2027 example was +$6,442) at the next refresh.

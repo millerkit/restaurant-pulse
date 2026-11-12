@@ -527,7 +527,7 @@ const beverageMixLabel = computed(() => {
 })
 
 // Automatic budget lines (2026-11-11, server/utils/budget-forecast.ts): for months that
-// haven't started, Food/Beverage sales follow the Capacity forecast plus planned buyouts,
+// haven't started, Food/Beverage sales follow the Capacity forecast plus dated buyouts,
 // written by the server every night and after any input changes. The current month froze
 // on the 1st. A line typed over is pinned; ↺ hands it back to the forecast.
 const selectedMonthIsAuto = computed(() => revenueAccounts.value.some(a => a.autoManaged))
@@ -560,49 +560,20 @@ function pinTitle(acc: BudgetAccount): string {
 type BuyoutWeekday = { dow: number, label: string, short: string, dollarTarget: number | null, rate: number }
 const buyoutRates = ref<{ weekdayRate: number, weekendRate: number } | null>(null)
 const buyoutWeekdays = ref<BuyoutWeekday[]>([])
-const buyoutSavedCounts = ref<Record<number, number>>({})
-const buyoutFoodBeverageMix = ref<{ foodPct: number | null, beveragePct: number | null, hasData: boolean }>({ foodPct: null, beveragePct: null, hasData: false })
-const buyoutCountInputs = ref<Record<number, string>>({})
-
 async function loadBuyoutPlan() {
   try {
-    const result = await $fetch<{
-      rates: { weekdayRate: number, weekendRate: number }
-      weekdays: BuyoutWeekday[]
-      countByDow: Record<string, number>
-      appliedByAccountId: Record<string, number>
-      foodBeverageMix: { foodPct: number | null, beveragePct: number | null, hasData: boolean }
-    }>('/api/budget/buyout-plan', { query: { year: YEAR, month: editMonth.value } })
+    const result = await $fetch<{ rates: { weekdayRate: number, weekendRate: number }, weekdays: BuyoutWeekday[] }>(
+      '/api/budget/buyout-plan', { query: { year: YEAR, month: editMonth.value } }
+    )
     buyoutRates.value = result.rates
     buyoutWeekdays.value = result.weekdays
-    buyoutSavedCounts.value = Object.fromEntries(result.weekdays.map(w => [w.dow, result.countByDow[w.dow] ?? 0]))
-    buyoutFoodBeverageMix.value = result.foodBeverageMix
-    const inputs: Record<number, string> = {}
-    for (const w of result.weekdays) inputs[w.dow] = String(result.countByDow[w.dow] ?? 0)
-    buyoutCountInputs.value = inputs
   } catch {
     buyoutRates.value = null
     buyoutWeekdays.value = []
-    buyoutSavedCounts.value = {}
-    buyoutCountInputs.value = {}
   }
 }
 onMounted(loadBuyoutPlan)
 watch(editMonth, loadBuyoutPlan)
-
-// Decimal counts are intentional, not just tolerated — a buyout priced
-// above/below the standard rate for its weekday (e.g. a negotiated $11,000
-// Thursday instead of the usual $10,000) is genuinely "1 buyout," so it's
-// represented as a fractional multiple of the standard rate (here, 1.4645)
-// rather than forcing the manual Food/Beverage adjustment this replaced.
-// Rounded to 4 decimal places purely to avoid float noise accumulating
-// across repeated edits — not a meaningful precision limit for a dollar
-// figure this size.
-function parseCount(raw: string | undefined): number {
-  const n = Number((raw ?? '').replace(/[^0-9.-]/g, ''))
-  if (!Number.isFinite(n) || n < 0) return 0
-  return Math.round(n * 10000) / 10000
-}
 
 // Rate editor — a separate, deliberately global save (not per-month): the
 // $10K/$12K tiers are the restaurant's current pricing, not a monthly
@@ -633,21 +604,8 @@ async function saveBuyoutRates() {
   }
 }
 
-// The planned incremental revenue for the selected month — sum across every
-// weekday of count x (rate − normal-night target). A weekday with no target
-// yet (not enough real history) contributes nothing rather than guessing.
-const undatedBuyoutIncrement = computed(() => {
-  return buyoutWeekdays.value.reduce((sum, w) => {
-    const count = parseCount(buyoutCountInputs.value[w.dow])
-    if (count === 0 || w.dollarTarget == null) return sum
-    return sum + count * (w.rate - w.dollarTarget)
-  }, 0)
-})
-// Dated buyouts (Special Nights below) feed the budget too, so a buyout is entered once:
-// each adds (its expected night revenue − that weekday's normal night). The per-weekday
-// counts above are for buyouts you expect but haven't put on a date yet; adding a dated
-// buyout can retire its matching undated count (see special-nights.post.ts). A weekday
-// with no normal-night target yet contributes nothing, same as the counts.
+// Dated buyouts feed the budget: each adds (its price − that weekday's normal night). A
+// weekday with no normal-night target yet contributes nothing.
 const datedBuyouts = computed(() => specialNights.value
   .filter(n => n.kind === 'buyout')
   .map((n) => {
@@ -656,39 +614,11 @@ const datedBuyouts = computed(() => specialNights.value
     return { date: n.date, expected: n.expectedRevenue, normal, increment: normal != null ? n.expectedRevenue - normal : 0 }
   }))
 const datedBuyoutIncrement = computed(() => datedBuyouts.value.reduce((sum, b) => sum + b.increment, 0))
-const buyoutIncrementTotal = computed(() => undatedBuyoutIncrement.value + datedBuyoutIncrement.value)
-const FOOD_PCT_FALLBACK = 0.65 // matches import-capacity-projections.mjs's own fallback for the same split, before any real revenue data exists
-const buyoutIncrementFood = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.foodPct ?? FOOD_PCT_FALLBACK))
-const buyoutIncrementBeverage = computed(() => buyoutIncrementTotal.value * (buyoutFoodBeverageMix.value.beveragePct ?? (1 - FOOD_PCT_FALLBACK)))
-
-const buyoutHasAnyCount = computed(() => datedBuyouts.value.length > 0 || buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) > 0))
-// Planned buyouts reach the budget automatically for months that haven't started
-// (server/utils/budget-forecast.ts); this only saves the undated counts.
-const buyoutCountsChanged = computed(() => buyoutWeekdays.value.some(w => parseCount(buyoutCountInputs.value[w.dow]) !== (buyoutSavedCounts.value[w.dow] ?? 0)))
-const buyoutSaveStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
-const buyoutSaveMessage = ref('')
-async function saveBuyoutCounts() {
-  buyoutSaveStatus.value = 'running'
-  try {
-    const counts: Record<number, number> = {}
-    for (const w of buyoutWeekdays.value) counts[w.dow] = parseCount(buyoutCountInputs.value[w.dow])
-    await $fetch('/api/budget/buyout-plan', { method: 'POST', body: { year: YEAR, month: editMonth.value, counts } })
-    await Promise.all([loadYear(), loadBuyoutPlan()])
-    buyoutSaveMessage.value = selectedMonthIsAuto.value ? 'Saved; the budget below now includes them.' : 'Saved.'
-    buyoutSaveStatus.value = 'done'
-  } catch (err: any) {
-    buyoutSaveStatus.value = 'error'
-    buyoutSaveMessage.value = err?.data?.statusMessage || err?.message || 'Save failed'
-  }
-}
-
 watch(editMonth, () => {
   actionStatus.value = 'idle'
   actionMessage.value = ''
   saveStatus.value = 'idle'
   saveMessage.value = ''
-  buyoutSaveStatus.value = 'idle'
-  buyoutSaveMessage.value = ''
 })
 
 // ---- Save / unsaved-changes guard -------------------------------------------
@@ -831,14 +761,6 @@ onMounted(loadSpecialNights)
 watch(editMonth, loadSpecialNights)
 
 const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, eventAmount: string, note: string }>({ date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' })
-// When a new dated buyout lands on a weekday that still has an undated planner count, offer
-// to retire that count (default on): it's almost certainly the same buyout being given a date.
-const newSpecialReplacesUndated = ref(true)
-const newSpecialUndatedCount = computed(() => {
-  const { date, kind } = newSpecial.value
-  if (kind !== 'buyout' || !date) return 0
-  return parseCount(buyoutCountInputs.value[utcDow(date)])
-})
 function utcDow(iso: string) {
   return new Date(`${iso}T00:00:00Z`).getUTCDay()
 }
@@ -882,10 +804,9 @@ async function addSpecialNight() {
   try {
     await $fetch('/api/special-nights', {
       method: 'POST',
-      body: { date, kind, expectedRevenue: SPECIAL_USES_DINE_IN[kind] ? Math.max(0, parseEditableAmount(amount)) : 0, eventRevenue: SPECIAL_USES_EVENT[kind] ? Math.max(0, parseEditableAmount(eventAmount)) : 0, note, replacesUndated: kind === 'buyout' && newSpecialUndatedCount.value > 0 && newSpecialReplacesUndated.value }
+      body: { date, kind, expectedRevenue: SPECIAL_USES_DINE_IN[kind] ? Math.max(0, parseEditableAmount(amount)) : 0, eventRevenue: SPECIAL_USES_EVENT[kind] ? Math.max(0, parseEditableAmount(eventAmount)) : 0, note }
     })
     newSpecial.value = { date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' }
-    newSpecialReplacesUndated.value = true
     specialStatus.value = 'idle'
     specialMessage.value = ''
     await afterSpecialChange()
@@ -975,7 +896,7 @@ function formatNightDate(iso: string) {
               {{ MONTH_NAMES[editMonth - 1] }} hasn't started, so its food and beverage sales follow the forecast and update by themselves: the
               <NuxtLink to="/capacity?tab=edit">Capacity</NuxtLink> projection
               <template v-if="revenueHasCapacityData">(Food <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueFood ?? 0).toLocaleString() }}</strong>, Beverage <strong>${{ Math.round(capacityTargetForMonth(editMonth)?.expectedRevenueBeverage ?? 0).toLocaleString() }}</strong>)</template>
-              plus planned buyouts below<template v-if="beverageMixLabel">, with beverage split {{ beverageMixLabel }} from real sales since the move</template>.
+              plus dated buyouts below<template v-if="beverageMixLabel">, with beverage split {{ beverageMixLabel }} from real sales since the move</template>.
               Food &amp; drink cost follows on the <NuxtLink to="/budget/edit">Budget</NuxtLink> page. Type over a line to pin it; ↺ sends it back to automatic.
             </span>
             <span v-else class="quiet-note">
@@ -986,57 +907,6 @@ function formatNightDate(iso: string) {
             {{ pinnedLines.length }} line{{ pinnedLines.length === 1 ? ' is' : 's are' }} pinned for {{ MONTH_NAMES[editMonth - 1] }}.
             <button class="mini-btn" :disabled="unpinStatus === 'running'" @click="unpinLines(pinnedLines)">Unpin all</button>
             <span v-if="unpinStatus === 'error'" class="chip warning">Couldn't unpin</span>
-          </div>
-        </div>
-
-        <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
-          <div class="live-pace-head">
-            <span class="chip accent">Buyout Revenue</span>
-            <span class="quiet-note">A buyout swaps a normal night for a guaranteed minimum — only the difference over what that weekday normally makes is new revenue. Enter a buyout once, with its date, under Special Nights below; it counts here automatically. The counts in this panel are only for buyouts you expect but haven't put on a date yet.</span>
-          </div>
-
-          <div class="section-note buyout-rates-row">
-            <span>Guaranteed minimum: Tue–Thu $</span>
-            <input type="text" inputmode="numeric" class="rate-input" v-model="weekdayRateInput" />
-            <span>· Fri–Sun $</span>
-            <input type="text" inputmode="numeric" class="rate-input" v-model="weekendRateInput" />
-            <button class="mini-btn" :disabled="rateSaveStatus === 'saving'" @click="saveBuyoutRates">Update rates</button>
-            <span v-if="rateSaveStatus === 'error'" class="chip warning">Couldn't save rates</span>
-          </div>
-
-          <div v-if="datedBuyouts.length" class="section-note">
-            Dated buyouts in {{ MONTH_NAMES[editMonth - 1] }}:
-            <span v-for="(b, i) in datedBuyouts" :key="b.date"><strong>{{ formatNightDate(b.date) }}</strong> ${{ Math.round(b.expected).toLocaleString() }}<template v-if="b.normal != null"> (+${{ Math.round(b.increment).toLocaleString() }} over a normal night)</template><template v-else> (no normal-night target yet — not counted)</template>{{ i < datedBuyouts.length - 1 ? '; ' : '.' }}</span>
-          </div>
-          <div class="section-note small">Not yet on the calendar (no date):</div>
-          <div class="buyout-weekday-grid">
-            <div v-for="w in buyoutWeekdays" :key="w.dow" class="buyout-weekday-cell">
-              <span class="buyout-weekday-label">{{ w.short }}</span>
-              <span class="buyout-weekday-target">{{ w.dollarTarget != null ? `normal night ~$${Math.round(w.dollarTarget).toLocaleString()}` : 'not enough data yet' }}</span>
-              <input
-                type="text" inputmode="decimal" class="buyout-count-input"
-                v-model="buyoutCountInputs[w.dow]" :disabled="w.dollarTarget == null" placeholder="0"
-                title="Decimals are fine — a buyout priced above/below this weekday's standard rate is a fractional count (e.g. 1.4645 for a $11,000 Thursday against a $10,000 standard rate)"
-              />
-            </div>
-          </div>
-
-          <div class="section-note">
-            <template v-if="buyoutHasAnyCount">
-              Planned buyout revenue for {{ MONTH_NAMES[editMonth - 1] }}:
-              <strong>+${{ Math.round(buyoutIncrementTotal).toLocaleString() }}</strong>
-              <template v-if="datedBuyouts.length && undatedBuyoutIncrement !== 0">(dated ${{ Math.round(datedBuyoutIncrement).toLocaleString() }} + not-yet-dated ${{ Math.round(undatedBuyoutIncrement).toLocaleString() }})</template>
-              (Food ${{ Math.round(buyoutIncrementFood).toLocaleString() }} / Beverage ${{ Math.round(buyoutIncrementBeverage).toLocaleString() }}<template v-if="!buyoutFoodBeverageMix.hasData"> — no real sales data yet, used a 65/35 fallback split</template>).
-            </template>
-            <template v-else>No buyouts planned for {{ MONTH_NAMES[editMonth - 1] }} yet.</template>
-            <button
-              class="mini-btn" :disabled="buyoutSaveStatus === 'running' || !buyoutCountsChanged"
-              :title="!buyoutCountsChanged ? 'No changes to save' : ''"
-              @click="saveBuyoutCounts"
-            >Save planned buyouts</button>
-            <span v-if="buyoutSaveStatus === 'done'" class="chip good">{{ buyoutSaveMessage }}</span>
-            <span v-if="buyoutSaveStatus === 'error'" class="chip warning">{{ buyoutSaveMessage }}</span>
-            <span v-if="!selectedMonthIsAuto" class="quiet-note small">{{ MONTH_NAMES[editMonth - 1] }}'s plan is frozen, so these feed the Projected column, not the budget.</span>
           </div>
         </div>
 
@@ -1080,10 +950,6 @@ function formatNightDate(iso: string) {
             </label>
             <input v-model="newSpecial.note" type="text" class="rate-input note-input" placeholder="Note (optional)" maxlength="200" aria-label="Note" />
             <button type="submit" class="mini-btn" :disabled="specialStatus === 'saving'">Add night</button>
-            <label v-if="newSpecialUndatedCount > 0" class="replace-undated">
-              <input v-model="newSpecialReplacesUndated" type="checkbox" />
-              This is the {{ Number(newSpecialUndatedCount.toFixed(2)) }} not-yet-dated {{ formatNightDate(newSpecial.date).split(',')[0] }} buyout in the planner — retire it so it isn't counted twice
-            </label>
             <span v-if="newSpecialIsMonday" class="chip warning">⚠ Mondays are already closed</span>
             <span v-if="specialStatus === 'error'" class="chip warning">{{ specialMessage }}</span>
           </form>
@@ -1096,8 +962,21 @@ function formatNightDate(iso: string) {
             <template v-else-if="newSpecial.kind === 'catering'"> Catering runs alongside a normal night.</template>
           </div>
           <div class="quiet-note small">Adding a date that's already listed replaces it.</div>
+          <div class="section-note buyout-rates-row">
+            <span>Buyout guaranteed minimum: Tue–Thu $</span>
+            <input v-model="weekdayRateInput" type="text" inputmode="numeric" class="rate-input" aria-label="Tuesday to Thursday buyout minimum" />
+            <span>· Fri–Sun $</span>
+            <input v-model="weekendRateInput" type="text" inputmode="numeric" class="rate-input" aria-label="Friday to Sunday buyout minimum" />
+            <button type="button" class="mini-btn" :disabled="rateSaveStatus === 'saving'" @click="saveBuyoutRates">Update rates</button>
+            <span v-if="rateSaveStatus === 'error'" class="chip warning">Couldn't save rates</span>
+            <span class="quiet-note small">Prefills a new buyout's price.</span>
+          </div>
           <div class="quiet-note small">
-            A buyout here also adds (its price − a normal night) to the budget automatically for months that haven't started. Removing one does not restore a planner count. An event's revenue is budgeted to Event Sales (4145/4150 on-site, 4175/4180 off-site) or Catering (4210/4230); type over one of those lines in the table below to pin your own number.
+            <template v-if="datedBuyouts.length">
+              Buyouts in {{ MONTH_NAMES[editMonth - 1] }} add
+              <strong>+${{ Math.round(datedBuyoutIncrement).toLocaleString() }}</strong> over the normal nights they replace<template v-if="datedBuyouts.some(b => b.normal == null)"> (a night with no normal-night average yet isn't counted)</template>.
+            </template>
+            A buyout's price swaps out that weekday's normal night, so only the difference is new revenue; it reaches the budget automatically for months that haven't started. Hypothetical, undated buyouts belong on the <NuxtLink to="/revenue-modeling">What-If</NuxtLink> page. An event's revenue is budgeted to Event Sales (4145/4150 on-site, 4175/4180 off-site) or Catering (4210/4230); type over one of those lines in the table below to pin your own number.
           </div>
         </div>
 
@@ -1486,40 +1365,6 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   background: var(--surface);
   color: var(--ink);
 }
-.buyout-weekday-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  margin: 4px 0 10px;
-}
-.buyout-weekday-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 6px;
-  border-radius: 10px;
-  background: var(--surface-alt);
-}
-.buyout-weekday-label { font-size: 12px; font-weight: 700; color: var(--ink); }
-.buyout-weekday-target { font-size: 10.5px; color: var(--ink-3); text-align: center; }
-.buyout-count-input {
-  width: 56px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--hair);
-  background: var(--surface);
-  color: var(--ink);
-}
-.buyout-count-input:disabled { opacity: 0.5; }
-
-@media (max-width: 760px) {
-  .buyout-weekday-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
 .mini-btn {
   font-size: 11px;
   font-weight: 700;
@@ -1545,7 +1390,6 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .special-add-row .special-field { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-2); }
 .special-add-row .special-field .rate-input { width: 90px; }
 .special-add-row .special-field .rate-input:disabled { opacity: 0.45; }
-.special-add-row .replace-undated { flex-basis: 100%; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; margin-bottom: 10px; }
