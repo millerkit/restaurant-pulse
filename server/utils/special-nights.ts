@@ -1,14 +1,14 @@
 import type Database from 'better-sqlite3'
 
-export const SPECIAL_NIGHT_KINDS = ['buyout', 'closed', 'offsite', 'event'] as const
+export const SPECIAL_NIGHT_KINDS = ['buyout', 'closed', 'offsite', 'event', 'catering'] as const
 export type SpecialNightKind = typeof SPECIAL_NIGHT_KINDS[number]
-export type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, note: string | null, holiday?: string }
+export type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, holiday?: string }
 
 // Dated one-off nights entered on the Sales Plan (special_nights). Raw table only.
 export function loadSpecialNights(db: Database.Database, from: string, to: string): Map<string, SpecialNight> {
   try {
     const rows = db.prepare(`
-      SELECT date, kind, expected_revenue AS expectedRevenue, note
+      SELECT date, kind, expected_revenue AS expectedRevenue, event_revenue AS eventRevenue, note
       FROM special_nights WHERE date >= ? AND date <= ? ORDER BY date
     `).all(from, to) as SpecialNight[]
     return new Map(rows.map(r => [r.date, r]))
@@ -34,19 +34,19 @@ export function loadHolidayClosures(db: Database.Database, from: string, to: str
 export function loadPlannedNights(db: Database.Database, from: string, to: string): Map<string, SpecialNight> {
   const out = new Map<string, SpecialNight>()
   for (const h of loadHolidayClosures(db, from, to).values()) {
-    out.set(h.date, { date: h.date, kind: 'closed', expectedRevenue: 0, note: h.name, holiday: h.name })
+    out.set(h.date, { date: h.date, kind: 'closed', expectedRevenue: 0, eventRevenue: 0, note: h.name, holiday: h.name })
   }
   for (const s of loadSpecialNights(db, from, to).values()) out.set(s.date, s)
   return out
 }
 
-// Nights that replace normal dinner service, i.e. everything but buyouts. A buyout
-// stays a normal night in the capacity budget; the Sales Plan's buyout panel adds
-// the price above a normal night on top. Mondays are dropped (already closed).
+// Nights that replace normal dinner service, i.e. everything but buyouts and catering.
+// A buyout stays a normal night in the capacity budget; the Sales Plan's buyout panel adds
+// the price above a normal night on top. Catering runs alongside normal service. Mondays are dropped (already closed).
 export function loadReplacedNights(db: Database.Database, from: string, to: string): Map<string, SpecialNight> {
   const out = new Map<string, SpecialNight>()
   for (const n of loadPlannedNights(db, from, to).values()) {
-    if (n.kind === 'buyout') continue
+    if (n.kind === 'buyout' || n.kind === 'catering') continue
     if (new Date(`${n.date}T00:00:00Z`).getUTCDay() === 1) continue
     out.set(n.date, n)
   }

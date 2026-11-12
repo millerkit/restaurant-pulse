@@ -80,10 +80,11 @@ export function computeRevenueProjection(db: Db, year: number, month: number) {
   const nights = []
   for (let d = firstRemaining; d <= monthEnd; d = addDays(d, 1)) {
     if (dow(d) === 1) continue // closed Mondays
-    const special = specialInHistory.get(d) ?? null
+    const planned = specialInHistory.get(d) ?? null
     const normal = weekdayNormal(d)
-    if (special) {
-      nights.push({ date: d, expected: special.expectedRevenue, normalRevenue: normal?.revenue ?? null, bookingAdjustment: 0, special })
+    // Catering runs alongside normal service: projected as a normal night, event revenue shown beside it.
+    if (planned && planned.kind !== 'catering') {
+      nights.push({ date: d, expected: planned.expectedRevenue, normalRevenue: normal?.revenue ?? null, bookingAdjustment: 0, special: planned, eventRevenue: planned.eventRevenue })
       continue
     }
     let bookingAdjustment = 0
@@ -96,7 +97,8 @@ export function computeRevenueProjection(db: Db, year: number, month: number) {
       expected: normal ? Math.max(0, normal.revenue + bookingAdjustment) : null,
       normalRevenue: normal?.revenue ?? null,
       bookingAdjustment,
-      special: null
+      special: planned,
+      eventRevenue: planned?.eventRevenue ?? 0
     })
   }
 

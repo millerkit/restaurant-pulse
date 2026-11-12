@@ -12,7 +12,7 @@ const { data, pending, error, refresh } = await useFetch('/api/dashboard', { laz
 type PaceNight = {
   date: string, daysOut: number, inUpload: boolean, booked: number | null, typicalBooked: number | null,
   weekdayAvgCovers: number | null, historyNights: number, pace: number | null, estimate: number | null,
-  special: { kind: 'buyout' | 'closed' | 'offsite' | 'event', expectedRevenue: number, note: string | null } | null
+  special: { kind: 'buyout' | 'closed' | 'offsite' | 'event' | 'catering', expectedRevenue: number, note: string | null } | null
 }
 // A dated special night (entered on the Revenue tab) replaces the pace chip/estimate.
 function specialChip(n: PaceNight): { cls: string, label: string } | null {
@@ -22,6 +22,7 @@ function specialChip(n: PaceNight): { cls: string, label: string } | null {
     case 'buyout': return { cls: 'event', label: `★ Buyout${amount}` }
     case 'event': return { cls: 'event', label: `★ Event night${amount}` }
     case 'offsite': return { cls: 'neutral', label: '◦ Off-site event — no dinner service' }
+    case 'catering': return { cls: 'event', label: '★ Catering' }
     default: return { cls: 'neutral', label: '◦ Closed' }
   }
 }

@@ -1,6 +1,8 @@
 import { refreshForecastsAfterChange } from '../utils/capacity-forecast'
-// Adds or replaces one dated special night. expectedRevenue is core dine-in revenue
-// expected that night (see schema.sql's special_nights comment).
+// Adds or replaces one dated special night. expectedRevenue is regular core dine-in revenue
+// expected that night; eventRevenue (2026-11-12) is what the event itself brings in (tickets,
+// event food/drink, catering), which the automatic budget posts to Event Sales / Catering.
+// See schema.sql's special_nights comment.
 //
 // A dated buyout also feeds the BUDGET: the Revenue tab's buyout panel counts it as
 // (expectedRevenue − that weekday's normal night) alongside the planner's undated
@@ -10,7 +12,7 @@ import { refreshForecastsAfterChange } from '../utils/capacity-forecast'
 // doesn't count it twice. If it prices the same, that count goes to zero.
 import { SPECIAL_NIGHT_KINDS, type SpecialNightKind } from '../utils/special-nights'
 
-type Body = { date: string, kind: SpecialNightKind, expectedRevenue: number, note?: string | null, replacesUndated?: boolean }
+type Body = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue?: number, note?: string | null, replacesUndated?: boolean }
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<Body>(event)
@@ -22,6 +24,10 @@ export default defineEventHandler(async (event) => {
   }
   if (typeof body.expectedRevenue !== 'number' || !Number.isFinite(body.expectedRevenue) || body.expectedRevenue < 0) {
     throw createError({ statusCode: 400, statusMessage: 'expectedRevenue must be a number of 0 or more' })
+  }
+  const eventRevenue = body.eventRevenue ?? 0
+  if (typeof eventRevenue !== 'number' || !Number.isFinite(eventRevenue) || eventRevenue < 0) {
+    throw createError({ statusCode: 400, statusMessage: 'eventRevenue must be a number of 0 or more' })
   }
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 200) : null
   const db = useDb()
@@ -35,10 +41,10 @@ export default defineEventHandler(async (event) => {
   try {
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO special_nights (date, kind, expected_revenue, note, updated_at) VALUES (?, ?, ?, ?, ?)
+        INSERT INTO special_nights (date, kind, expected_revenue, event_revenue, note, updated_at) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (date) DO UPDATE SET kind = excluded.kind, expected_revenue = excluded.expected_revenue,
-          note = excluded.note, updated_at = excluded.updated_at
-      `).run(body.date, body.kind, body.expectedRevenue, note, new Date().toISOString())
+          event_revenue = excluded.event_revenue, note = excluded.note, updated_at = excluded.updated_at
+      `).run(body.date, body.kind, body.expectedRevenue, eventRevenue, note, new Date().toISOString())
 
       if (body.kind === 'buyout' && body.replacesUndated && dow !== 1) {
         const row = db.prepare('SELECT count FROM revenue_buyout_plan WHERE year = ? AND month = ? AND dow = ?').get(year, month, dow) as { count: number } | undefined
@@ -64,5 +70,5 @@ export default defineEventHandler(async (event) => {
   }
   // A forecast input changed: recompute the automatic forecast and budget lines.
   refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
-  return { date: body.date, kind: body.kind, expectedRevenue: body.expectedRevenue, note, undatedCountBefore, undatedCountAfter }
+  return { date: body.date, kind: body.kind, expectedRevenue: body.expectedRevenue, eventRevenue, note, undatedCountBefore, undatedCountAfter }
 })

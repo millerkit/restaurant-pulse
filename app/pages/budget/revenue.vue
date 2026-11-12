@@ -760,15 +760,24 @@ async function saveRevenue() {
 // normal (or its special-night amount), with a booking-pace nudge for the next few
 // nights. A backtest of Aug–Oct put the old method at 8.1% average month-end error vs.
 // 4.0–4.9% for this one once special nights are entered (see CLAUDE.md).
-type SpecialNightKind = 'buyout' | 'closed' | 'offsite' | 'event'
-type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, note: string | null }
+type SpecialNightKind = 'buyout' | 'closed' | 'offsite' | 'event' | 'catering'
+type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null }
 const SPECIAL_KIND_LABEL: Record<SpecialNightKind, string> = {
   buyout: 'Buyout',
   closed: 'Closed',
   offsite: 'Off-site event (no dinner service)',
-  event: 'Ticketed event'
+  event: 'On-site event',
+  catering: 'Catering'
 }
-type ProjectionNight = { date: string, expected: number | null, normalRevenue: number | null, bookingAdjustment: number, special: SpecialNight | null }
+// Which of the two revenue fields each type uses. A buyout's price rings into dine-in sales;
+// a closure has neither; off-site events and catering only bring event revenue (catering runs
+// alongside a normal night).
+const SPECIAL_USES_DINE_IN: Record<SpecialNightKind, boolean> = { buyout: true, closed: false, offsite: false, event: true, catering: false }
+const SPECIAL_USES_EVENT: Record<SpecialNightKind, boolean> = { buyout: false, closed: false, offsite: true, event: true, catering: true }
+// Closures (holidays included) are entered in Settings, so 'closed' can't be added here; old rows still show.
+const ADDABLE_SPECIAL_KINDS = (['buyout', 'event', 'offsite', 'catering'] as const)
+const dollars = (n: number) => `$${Math.round(n).toLocaleString()}`
+type ProjectionNight = { date: string, expected: number | null, normalRevenue: number | null, bookingAdjustment: number, eventRevenue?: number, special: SpecialNight | null }
 type NightlyProjection = {
   knownThrough: string | null, actualCoreToDate: number, remainingTotal: number, projectedCoreTotal: number,
   missingHistory: number, bookingSnapshot: { date: string, time: string } | null, nights: ProjectionNight[]
@@ -821,7 +830,7 @@ async function loadSpecialNights() {
 onMounted(loadSpecialNights)
 watch(editMonth, loadSpecialNights)
 
-const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, note: string }>({ date: '', kind: 'buyout', amount: '', note: '' })
+const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, eventAmount: string, note: string }>({ date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' })
 // When a new dated buyout lands on a weekday that still has an undated planner count, offer
 // to retire that count (default on): it's almost certainly the same buyout being given a date.
 const newSpecialReplacesUndated = ref(true)
@@ -838,11 +847,20 @@ function defaultBuyoutAmount(date: string): number | null {
   const d = utcDow(date)
   return d === 0 || d >= 5 ? buyoutRates.value.weekendRate : buyoutRates.value.weekdayRate
 }
-// Prefill: a buyout defaults to the planner's guaranteed minimum for that weekday; a
-// closure or off-site night has no dinner revenue.
+// A normal night's dine-in revenue for the chosen date's weekday (the planner's weekday
+// average since the move), shown as a hint next to the dine-in field.
+const newSpecialNormalNight = computed(() => {
+  const { date } = newSpecial.value
+  if (!date) return null
+  return buyoutWeekdays.value.find(w => w.dow === utcDow(date))?.dollarTarget ?? null
+})
+const newSpecialWeekdayName = computed(() => newSpecial.value.date ? formatNightDate(newSpecial.value.date).split(',')[0] : '')
+// Prefill: a buyout defaults to the planner's guaranteed minimum for that weekday; fields a
+// type doesn't use are cleared.
 watch(() => [newSpecial.value.date, newSpecial.value.kind] as const, ([date, kind]) => {
-  if (kind === 'closed' || kind === 'offsite') newSpecial.value.amount = '0'
-  else if (kind === 'buyout' && (newSpecial.value.amount === '' || newSpecial.value.amount === '0')) {
+  if (!SPECIAL_USES_DINE_IN[kind]) newSpecial.value.amount = ''
+  if (!SPECIAL_USES_EVENT[kind]) newSpecial.value.eventAmount = ''
+  if (kind === 'buyout' && (newSpecial.value.amount === '' || newSpecial.value.amount === '0')) {
     const a = defaultBuyoutAmount(date)
     if (a != null) newSpecial.value.amount = String(a)
   }
@@ -854,7 +872,7 @@ async function afterSpecialChange() {
   if (editMonth.value === asOfMonth) await loadNightlyProjection()
 }
 async function addSpecialNight() {
-  const { date, kind, amount, note } = newSpecial.value
+  const { date, kind, amount, eventAmount, note } = newSpecial.value
   if (!date) {
     specialStatus.value = 'error'
     specialMessage.value = 'Pick a date first.'
@@ -864,9 +882,9 @@ async function addSpecialNight() {
   try {
     await $fetch('/api/special-nights', {
       method: 'POST',
-      body: { date, kind, expectedRevenue: Math.max(0, parseEditableAmount(amount)), note, replacesUndated: kind === 'buyout' && newSpecialUndatedCount.value > 0 && newSpecialReplacesUndated.value }
+      body: { date, kind, expectedRevenue: SPECIAL_USES_DINE_IN[kind] ? Math.max(0, parseEditableAmount(amount)) : 0, eventRevenue: SPECIAL_USES_EVENT[kind] ? Math.max(0, parseEditableAmount(eventAmount)) : 0, note, replacesUndated: kind === 'buyout' && newSpecialUndatedCount.value > 0 && newSpecialReplacesUndated.value }
     })
-    newSpecial.value = { date: '', kind: 'buyout', amount: '', note: '' }
+    newSpecial.value = { date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' }
     newSpecialReplacesUndated.value = true
     specialStatus.value = 'idle'
     specialMessage.value = ''
@@ -1025,17 +1043,18 @@ function formatNightDate(iso: string) {
         <div v-if="!viewingYearTotal" class="drill-card capacity-panel">
           <div class="live-pace-head">
             <span class="chip accent">Special Nights</span>
-            <span class="quiet-note">Buyouts, closures and event nights in {{ MONTH_NAMES[editMonth - 1] }}. Each replaces a normal night: in the current month's Projected figure, in This Week's Next 7 Nights, and, for months that haven't started, in the budget automatically: closures, off-site and event nights are taken out of the Capacity projection and buyouts are added on top. Expected revenue is dine-in sales only: a buyout's price, $0 for a closure or off-site night, and for an event only dine-in sales on top of tickets (tickets belong in Event Sales). No holiday closure is needed for any of these; holidays are set in <NuxtLink to="/settings">Settings</NuxtLink>.</span>
+            <span class="quiet-note">Buyouts, closures, events and catering in {{ MONTH_NAMES[editMonth - 1] }}. Enter what the <strong>event itself</strong> should bring in (tickets, event food and drink, catering) and the <strong>regular dine-in</strong> revenue expected that night. For months that haven't started, the budget follows automatically: event revenue goes to Event Sales or Catering (food/drink split by the real sales mix), dine-in goes to Food and Beverage Sales, closures and event nights are taken out of the Capacity projection, and buyouts are added on top. In the current month the plan is frozen, so these feed the Projected figure and This Week's Next 7 Nights. Closures, including holidays, are entered in <NuxtLink to="/settings">Settings</NuxtLink> (Restaurant Setup), not here.</span>
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>
-              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Expected dine-in revenue</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
+              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Event revenue</th><th scope="col" class="num">Regular dine-in revenue</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
             </thead>
             <tbody>
               <tr v-for="n in specialNights" :key="n.date">
                 <th scope="row">{{ formatNightDate(n.date) }}</th>
                 <td>{{ SPECIAL_KIND_LABEL[n.kind] }}</td>
-                <td class="num">${{ Math.round(n.expectedRevenue).toLocaleString() }}</td>
+                <td class="num">{{ SPECIAL_USES_EVENT[n.kind] ? dollars(n.eventRevenue) : '—' }}</td>
+                <td class="num">{{ n.kind === 'catering' ? 'normal night' : dollars(n.expectedRevenue) }}</td>
                 <td class="note-cell">{{ n.note ?? '' }}</td>
                 <td><button class="mini-btn" :disabled="specialStatus === 'saving'" @click="removeSpecialNight(n.date)">Remove</button></td>
               </tr>
@@ -1045,10 +1064,20 @@ function formatNightDate(iso: string) {
           <form class="section-note special-add-row" @submit.prevent="addSpecialNight">
             <input v-model="newSpecial.date" type="date" class="rate-input date-input" :min="specialMonthRange.from" :max="specialMonthRange.to" aria-label="Date" required />
             <select v-model="newSpecial.kind" class="rate-input kind-input" aria-label="Type">
-              <option v-for="(label, k) in SPECIAL_KIND_LABEL" :key="k" :value="k">{{ label }}</option>
+              <option v-for="k in ADDABLE_SPECIAL_KINDS" :key="k" :value="k">{{ SPECIAL_KIND_LABEL[k] }}</option>
             </select>
-            <span>$</span>
-            <input v-model="newSpecial.amount" type="text" inputmode="numeric" class="rate-input" placeholder="0" aria-label="Expected dine-in revenue" />
+            <label class="special-field">
+              <span class="special-field-label">Event revenue $</span>
+              <input v-model="newSpecial.eventAmount" type="text" inputmode="numeric" class="rate-input" placeholder="0" :disabled="!SPECIAL_USES_EVENT[newSpecial.kind]" aria-label="Expected event revenue" />
+            </label>
+            <label class="special-field">
+              <span class="special-field-label">{{ newSpecial.kind === 'buyout' ? 'Buyout price $' : 'Regular dine-in $' }}</span>
+              <input
+                v-model="newSpecial.amount" type="text" inputmode="numeric" class="rate-input"
+                :placeholder="newSpecialNormalNight != null && newSpecial.kind !== 'buyout' ? String(Math.round(newSpecialNormalNight)) : '0'"
+                :disabled="!SPECIAL_USES_DINE_IN[newSpecial.kind]" aria-label="Expected regular dine-in revenue"
+              />
+            </label>
             <input v-model="newSpecial.note" type="text" class="rate-input note-input" placeholder="Note (optional)" maxlength="200" aria-label="Note" />
             <button type="submit" class="mini-btn" :disabled="specialStatus === 'saving'">Add night</button>
             <label v-if="newSpecialUndatedCount > 0" class="replace-undated">
@@ -1058,33 +1087,42 @@ function formatNightDate(iso: string) {
             <span v-if="newSpecialIsMonday" class="chip warning">⚠ Mondays are already closed</span>
             <span v-if="specialStatus === 'error'" class="chip warning">{{ specialMessage }}</span>
           </form>
+          <div v-if="newSpecial.date && newSpecial.kind !== 'closed'" class="quiet-note small">
+            <template v-if="newSpecialNormalNight != null">A normal {{ newSpecialWeekdayName }} night brings in about {{ dollars(newSpecialNormalNight) }} of dine-in revenue.</template>
+            <template v-else>Not enough history yet for a normal {{ newSpecialWeekdayName }} night.</template>
+            <template v-if="newSpecial.kind === 'event'"> Enter $0 dine-in if the event replaces regular service.</template>
+            <template v-else-if="newSpecial.kind === 'buyout'"> A buyout's price rings into dine-in sales.</template>
+            <template v-else-if="newSpecial.kind === 'offsite'"> No dinner service that night, so no dine-in revenue.</template>
+            <template v-else-if="newSpecial.kind === 'catering'"> Catering runs alongside a normal night.</template>
+          </div>
           <div class="quiet-note small">Adding a date that's already listed replaces it.</div>
           <div class="quiet-note small">
-            A buyout here also adds (its revenue − a normal night) to the budget automatically for months that haven't started. Removing one does not restore a planner count.
+            A buyout here also adds (its price − a normal night) to the budget automatically for months that haven't started. Removing one does not restore a planner count. An event's revenue is budgeted to Event Sales (4145/4150 on-site, 4175/4180 off-site) or Catering (4210/4230); type over one of those lines in the table below to pin your own number.
           </div>
+        </div>
 
-          <details v-if="selectedMonthIsCurrent && nightlyProjection" class="nightly-detail">
-            <summary>How {{ MONTH_NAMES[editMonth - 1] }}'s dine-in revenue is projected, night by night</summary>
-            <div class="quiet-note small">
-              ${{ Math.round(nightlyProjection.actualCoreToDate).toLocaleString() }} synced<template v-if="nightlyProjection.knownThrough"> through {{ formatNightDate(nightlyProjection.knownThrough) }}</template>
-              + ${{ Math.round(nightlyProjection.remainingTotal).toLocaleString() }} expected over the remaining nights
-              = <strong>${{ Math.round(nightlyProjection.projectedCoreTotal).toLocaleString() }}</strong>.
-              <template v-if="nightlyProjection.bookingSnapshot">Bookings as of the OpenTable upload on {{ formatNightDate(nightlyProjection.bookingSnapshot.date) }}.</template>
-            </div>
-            <table class="special-table">
-              <thead><tr><th scope="col">Night</th><th scope="col" class="num">Normal night</th><th scope="col" class="num">Bookings</th><th scope="col" class="num">Expected</th></tr></thead>
-              <tbody>
-                <tr v-for="n in nightlyProjection.nights" :key="n.date">
-                  <th scope="row">{{ formatNightDate(n.date) }}</th>
-                  <td class="num">{{ n.normalRevenue != null ? `$${Math.round(n.normalRevenue).toLocaleString()}` : '—' }}</td>
-                  <td class="num">{{ n.special ? '' : Math.abs(n.bookingAdjustment) >= 1 ? `${n.bookingAdjustment > 0 ? '+' : '−'}$${Math.round(Math.abs(n.bookingAdjustment)).toLocaleString()}` : '' }}</td>
-                  <td class="num">
-                    <template v-if="n.special">{{ SPECIAL_KIND_LABEL[n.special.kind] }} · </template>{{ n.expected != null ? `$${Math.round(n.expected).toLocaleString()}` : 'not enough history' }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </details>
+        <div v-if="!viewingYearTotal && selectedMonthIsCurrent && nightlyProjection" class="drill-card capacity-panel">
+          <div class="live-pace-head"><span class="chip accent">Night by Night</span><span class="quiet-note">How {{ MONTH_NAMES[editMonth - 1] }}'s dine-in revenue is projected, every remaining night, not just special nights.</span></div>
+          <div class="quiet-note small">
+            ${{ Math.round(nightlyProjection.actualCoreToDate).toLocaleString() }} synced<template v-if="nightlyProjection.knownThrough"> through {{ formatNightDate(nightlyProjection.knownThrough) }}</template>
+            + ${{ Math.round(nightlyProjection.remainingTotal).toLocaleString() }} expected over the remaining nights
+            = <strong>${{ Math.round(nightlyProjection.projectedCoreTotal).toLocaleString() }}</strong>.
+            <template v-if="nightlyProjection.bookingSnapshot">Bookings as of the OpenTable upload on {{ formatNightDate(nightlyProjection.bookingSnapshot.date) }}.</template>
+          </div>
+          <table class="special-table">
+            <thead><tr><th scope="col">Night</th><th scope="col" class="num">Normal night</th><th scope="col" class="num">OpenTable bookings</th><th scope="col" class="num">Expected</th></tr></thead>
+            <tbody>
+              <tr v-for="n in nightlyProjection.nights" :key="n.date">
+                <th scope="row">{{ formatNightDate(n.date) }}</th>
+                <td class="num">{{ n.normalRevenue != null ? `$${Math.round(n.normalRevenue).toLocaleString()}` : '—' }}</td>
+                <td class="num">{{ n.special ? '' : Math.abs(n.bookingAdjustment) >= 1 ? `${n.bookingAdjustment > 0 ? '+' : '−'}$${Math.round(Math.abs(n.bookingAdjustment)).toLocaleString()}` : '' }}</td>
+                <td class="num">
+                  <template v-if="n.special">{{ SPECIAL_KIND_LABEL[n.special.kind] }} · </template>{{ n.expected != null ? `$${Math.round(n.expected).toLocaleString()}` : 'not enough history' }}
+                  <div v-if="n.eventRevenue" class="quiet-note small">+ {{ dollars(n.eventRevenue) }} event revenue (Event Sales)</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <div v-if="!viewingYearTotal" class="action-row">
@@ -1504,9 +1542,10 @@ table.edit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .special-add-row .date-input { width: 140px; }
 .special-add-row .kind-input { width: auto; }
 .special-add-row .note-input { width: 180px; }
+.special-add-row .special-field { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-2); }
+.special-add-row .special-field .rate-input { width: 90px; }
+.special-add-row .special-field .rate-input:disabled { opacity: 0.45; }
 .special-add-row .replace-undated { flex-basis: 100%; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
-.nightly-detail { margin-top: 8px; }
-.nightly-detail summary { font-size: 12px; font-weight: 700; color: var(--accent-text); cursor: pointer; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; margin-bottom: 10px; }

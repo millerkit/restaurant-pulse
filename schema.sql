@@ -897,20 +897,24 @@ CREATE TABLE reservation_imports (
 );
 
 -- Dated nights that aren't ordinary dinner service (added 2026-11-05): buyouts,
--- closures (holidays etc.), off-site events and ticketed event nights. Used by the
--- Revenue tab's night-by-night current-month projection and the Dashboard's Next 7
--- Nights panel. expected_revenue is CORE dine-in revenue expected that night (the
--- accounts in CORE_REVENUE_ACCOUNT_NUMBERS): a buyout rings into core, so its amount
--- goes here; a closure or off-site night is $0; a ticketed event's ticket revenue
--- posts to Event Sales (projected separately from its own budget), so only any
--- regular dinner revenue alongside it belongs here. A dated buyout also feeds the
--- budget (expected_revenue minus that weekday's normal night, in the Revenue tab's
--- Buyout Revenue panel); revenue_buyout_plan's per-weekday counts remain only for
--- buyouts expected but not yet dated.
+-- closures (holidays etc.), off-site events, ticketed on-site event nights and catering.
+-- Used by the Revenue tab's night-by-night current-month projection, the Dashboard's Next 7
+-- Nights panel and the automatic budget. Two revenue fields (2026-11-12):
+--   expected_revenue = regular CORE dine-in revenue that night (CORE_REVENUE_ACCOUNT_NUMBERS):
+--     a buyout rings into core, so its price goes here; closure/off-site $0; an event only the
+--     dine-in alongside it. Catering nights are normal service, so it is ignored for them.
+--   event_revenue = what the event itself brings in (tickets, event food/drink, catering fee),
+--     posted to Event Sales / Catering (4145/4150, 4175/4180, 4210/4230). Split food/drink by
+--     the real sales mix. For months that haven't started the budget follows it automatically
+--     (server/utils/budget-forecast.ts); the current month's plan is frozen.
+-- A dated buyout also feeds the budget (expected_revenue minus that weekday's normal night, in
+-- the Revenue tab's Buyout Revenue panel); revenue_buyout_plan's per-weekday counts remain only
+-- for buyouts expected but not yet dated.
 CREATE TABLE special_nights (
   date             TEXT PRIMARY KEY,
-  kind             TEXT NOT NULL CHECK (kind IN ('buyout', 'closed', 'offsite', 'event')),
+  kind             TEXT NOT NULL CHECK (kind IN ('buyout', 'closed', 'offsite', 'event', 'catering')),
   expected_revenue REAL NOT NULL DEFAULT 0 CHECK (expected_revenue >= 0),
+  event_revenue    REAL NOT NULL DEFAULT 0 CHECK (event_revenue >= 0),
   note             TEXT,
   updated_at       TEXT NOT NULL
 );

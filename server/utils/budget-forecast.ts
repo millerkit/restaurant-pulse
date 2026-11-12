@@ -47,7 +47,15 @@ export const COST_PAIRS: { cost: string, sales: string, extraCost?: string[], ex
   { cost: '5125', sales: '4026' },
   { cost: '5130', sales: '4028' }
 ]
-export const MANAGED_ACCOUNT_NUMBERS = [FOOD_SALES, ...BEVERAGE_SALES, ...COST_PAIRS.map(p => p.cost)]
+// Event Sales / Catering lines the dated special nights feed (2026-11-12): each kind's event
+// revenue is split food/drink by the real sales mix.
+export const EVENT_ACCOUNTS: Record<'event' | 'offsite' | 'catering', { food: string, beverage: string }> = {
+  event: { food: '4150', beverage: '4145' },
+  offsite: { food: '4180', beverage: '4175' },
+  catering: { food: '4230', beverage: '4210' }
+}
+export const EVENT_ACCOUNT_NUMBERS = Object.values(EVENT_ACCOUNTS).flatMap(a => [a.food, a.beverage])
+export const MANAGED_ACCOUNT_NUMBERS = [FOOD_SALES, ...BEVERAGE_SALES, ...COST_PAIRS.map(p => p.cost), ...EVENT_ACCOUNT_NUMBERS]
 
 // First steady month at the new location: June/July food cost reflects the opening
 // stock-up (purchase-based cost, no inventory accounting). Same rule the Budget
@@ -162,6 +170,28 @@ export function plannedBuyoutIncrement(db: Db, year: number, month: number): { t
   return { total: dated + undated, dated, undated }
 }
 
+// What a month's dated special nights add to the budget beyond the Capacity projection:
+// - dineIn: regular dine-in revenue on nights that replace service (the Capacity projection
+//   zeroes those nights; this puts back what's expected, e.g. diners alongside a ticketed event)
+// - eventByAccount: event revenue (tickets etc.) by Event Sales / Catering account, food/drink
+//   split by foodShare.
+export function specialNightAdditions(db: Db, year: number, month: number, foodShare: number): { dineIn: number, eventByAccount: Map<string, number> } {
+  const nights = [...loadSpecialNights(db, `${year}-${pad(month)}-01`, monthEnd(year, month)).values()]
+  let dineIn = 0
+  const eventByAccount = new Map<string, number>()
+  for (const n of nights) {
+    const isMonday = new Date(`${n.date}T00:00:00Z`).getUTCDay() === 1
+    if (!isMonday && (n.kind === 'event' || n.kind === 'offsite' || n.kind === 'closed')) dineIn += n.expectedRevenue
+    if (n.kind === 'event' || n.kind === 'offsite' || n.kind === 'catering') {
+      const acct = EVENT_ACCOUNTS[n.kind]
+      if (!(n.eventRevenue > 0)) continue
+      eventByAccount.set(acct.food, (eventByAccount.get(acct.food) ?? 0) + n.eventRevenue * foodShare)
+      eventByAccount.set(acct.beverage, (eventByAccount.get(acct.beverage) ?? 0) + n.eventRevenue * (1 - foodShare))
+    }
+  }
+  return { dineIn, eventByAccount }
+}
+
 export type BudgetForecastResult = { months: string[], rowsChanged: number, costWindow: string[] }
 
 export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResult {
@@ -207,14 +237,35 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
     for (const { year, month } of targetMonths) {
       const proj = model.dayByDaySum(`${year}-${pad(month)}-01`, monthEnd(year, month))
       const buyout = plannedBuyoutIncrement(db, year, month).total
-      const food = proj.expectedRevenueFood + buyout * mix.foodShare
-      const beverage = proj.expectedRevenueBeverage + buyout * (1 - mix.foodShare)
+      const additions = specialNightAdditions(db, year, month, mix.foodShare)
+      const coreExtra = buyout + additions.dineIn
+      const food = proj.expectedRevenueFood + coreExtra * mix.foodShare
+      const beverage = proj.expectedRevenueBeverage + coreExtra * (1 - mix.foodShare)
       const sales = new Map<string, number>([[FOOD_SALES, food]])
       for (const n of BEVERAGE_SALES) {
         const w = mix.beverageWeights?.get(n) ?? 1 / BEVERAGE_SALES.length
         sales.set(n, beverage * w)
       }
       const values = new Map<string, number>(sales)
+      // Event Sales / Catering lines follow the dated special nights. A row nobody has
+      // written automatically (no auto_amount: budgeted by hand before this existed) is left
+      // alone in a month with no dated event revenue, so old hand entries aren't zeroed.
+      for (const num of EVENT_ACCOUNT_NUMBERS) {
+        const accountId = idByNum.get(num)
+        if (accountId == null) continue
+        const amount = additions.eventByAccount.get(num) ?? 0
+        const row = db.prepare('SELECT auto_amount AS autoAmount FROM budget_targets WHERE year = ? AND month = ? AND account_id = ?').get(year, month, accountId) as { autoAmount: number | null } | undefined
+        if (amount === 0 && row && row.autoAmount == null) continue
+        values.set(num, amount)
+      }
+      // Cost follows event/catering food sales as budgeted: a pinned line's own amount, else
+      // what the forecast just worked out.
+      const eventSalesFor = (num: string) => {
+        const accountId = idByNum.get(num)
+        const row = accountId == null ? undefined : existing.get(year, month, accountId) as { amount: number, pinned: number } | undefined
+        if (row?.pinned) return row.amount
+        return values.has(num) ? values.get(num)! : budgetedAmount(num, year, month)
+      }
       for (const p of COST_PAIRS) {
         const pct = window.pctByCost[p.cost]
         // No cost history yet: leave the cost line as entered.
@@ -224,7 +275,7 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
         const salesId = idByNum.get(p.sales)
         const salesRow = salesId == null ? undefined : existing.get(year, month, salesId) as { amount: number, pinned: number } | undefined
         const salesAmount = salesRow?.pinned ? salesRow.amount : (sales.get(p.sales) ?? 0)
-        const extraSales = (p.extraSales ?? []).reduce((sum, n) => sum + budgetedAmount(n, year, month), 0)
+        const extraSales = (p.extraSales ?? []).reduce((sum, n) => sum + eventSalesFor(n), 0)
         const extraCost = (p.extraCost ?? []).reduce((sum, n) => sum + budgetedAmount(n, year, month), 0)
         values.set(p.cost, Math.max(0, pct * (salesAmount + extraSales) - extraCost))
       }

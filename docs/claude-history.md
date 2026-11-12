@@ -5983,3 +5983,22 @@ when new synced data shifts the sales mix and cost %. The first snapshots are da
 (month start, taken on Nov 12, so November's "frozen plan" record reflects the budget as of Nov 12).
 Forecast Accuracy will show results once November closes and fully syncs. The open item was removed from
 CLAUDE.md.
+
+## Special nights: separate event revenue and dine-in fields — 2026-11-12
+
+Kit found the Special Nights table confusing: Wild Things (Nov 17) showed $2,000, but that was dine-in only; its
+$6,500 of tickets lived only in a hand-typed Event Sales budget, so the section looked wrong. Redesigned:
+- `special_nights.event_revenue` added (migration 0018 rebuilds the table to also allow kind `catering`). The
+  Sales Plan form has "Event revenue $" and "Regular dine-in $" fields (each enabled per type) with a hint of the
+  chosen weekday's normal night; the table has both columns; the night-by-night table shows "+ $X event revenue".
+- `server/utils/budget-forecast.ts` (`specialNightAdditions`, `EVENT_ACCOUNTS`): months after the current one get
+  event revenue in 4150/4145 (on-site), 4180/4175 (off-site), 4230/4210 (catering) split by `salesMix().foodShare`,
+  and replaced nights' dine-in is added back to 4010/beverage (before, an event night's dine-in was dropped from
+  the budget). Cost % uses the new event food amounts (pinned rows count at their own amount).
+- Catering nights are not "replaced" nights (`loadReplacedNights`) and project as normal nights.
+- Dashboard/kitchen-week chips handle `catering`. Staffing spec renumbered to migration 0019.
+- Verified locally (migration applied, test event night wrote $6,500 split to 4150/4145, removed afterwards,
+  form hint renders). Not yet deployed; production Nov 17 needs re-entry by Kit.
+- Same day, follow-ups from Kit: the night-by-night table is its own "Night by Night" card below Special Nights
+  (it covers every remaining night); its column is "OpenTable bookings"; "Closed" can no longer be added as a special
+  night (closures and holidays live in Settings; existing closed rows still display and can be removed).

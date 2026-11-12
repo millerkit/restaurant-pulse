@@ -169,6 +169,15 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   off-site and event nights are dated `special_nights` (Sales Plan). A non-buyout night replaces a normal
   night with its own expected dine-in revenue; a buyout stays a normal night and adds (its price − that
   weekday's normal night). Undated buyout counts per weekday (`revenue_buyout_plan`) add the same way.
+  **Two revenue fields per night** (2026-11-12, migration 0018): `expected_revenue` = regular dine-in that
+  night (hint: the weekday's normal night), `event_revenue` = what the event itself brings in. Kinds: buyout
+  (price rings into dine-in), off-site, on-site event, catering (runs alongside a normal night); closures are entered only as Settings holidays. For
+  months that haven't started the budget writes event revenue to Event Sales / Catering (4150/4145 on-site,
+  4180/4175 off-site, 4230/4210 catering; food/drink split by the real sales mix), puts a replaced night's
+  dine-in back into Food/Beverage Sales, and event food counts in food cost. Those accounts are managed (typing
+  pins them); a hand-budgeted row with no `auto_amount` is left alone in months with no dated event revenue.
+  The current month's Event Sales stay hand-budgeted (plan frozen). Existing nights got `event_revenue` 0:
+  re-enter Nov 17 Wild Things ($6,500 of tickets) in the new field.
 - **Current month**: the plan is frozen; the live forecast is the night-by-night projection (synced sales
   + each remaining night's recent weekday average or special-night amount, nudged by bookings for the
   next ~3 days), used for Projected on the Sales Plan and Budget pages (`app/utils/revenueProjection.ts`).
@@ -235,7 +244,7 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 ## Not yet done
 
 - **Dynamic budgeting step 4 — Staffing Plan hours from a rolling 3-week Toast average**: spec in
-  [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md) (not built; migration 0018;
+  [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md) (not built; migration 0019;
   assumes direct roles scale with forecast covers — confirm with Kit before building).
 - **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.

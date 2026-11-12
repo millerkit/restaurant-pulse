@@ -7,7 +7,7 @@ import { paceStatus } from '~/composables/useBudgetData'
 // version of this page is pages/index.vue; the kitchen role can't call its API.
 useHead({ title: `${site.restaurantName} — This Week (Kitchen)` })
 
-type Special = { kind: 'buyout' | 'closed' | 'offsite' | 'event', note: string | null, holiday: string | null } | null
+type Special = { kind: 'buyout' | 'closed' | 'offsite' | 'event' | 'catering', note: string | null, holiday: string | null } | null
 type PaceNight = {
   date: string, daysOut: number, inUpload: boolean, booked: number | null, typicalBooked: number | null,
   weekdayAvgCovers: number | null, historyNights: number, pace: number | null, estimate: number | null,
@@ -50,6 +50,7 @@ function specialChip(s: NonNullable<Special>): { cls: string, label: string } {
     case 'buyout': return { cls: 'event', label: '★ Buyout' }
     case 'event': return { cls: 'event', label: '★ Event night' }
     case 'offsite': return { cls: 'neutral', label: '◦ Off-site event — no dinner service' }
+    case 'catering': return { cls: 'event', label: '★ Catering' }
     default: return { cls: 'neutral', label: s.holiday ? `◦ Closed — ${s.holiday}` : '◦ Closed' }
   }
 }

@@ -3,7 +3,7 @@
 Written 2026-11-11, not built. Meant to be built from directly (possibly by a smaller model). Read
 CLAUDE.md's "The planning model" section first. It describes the automatic-with-pins pattern this step
 copies from Capacity (`server/utils/capacity-forecast.ts`) and budget lines (`server/utils/budget-forecast.ts`).
-**Build after step 3 (forecast snapshots) has merged.** Step 3 uses migration `0017`, so this one is `0018`.
+**Build after step 3 (forecast snapshots) has merged.** Step 3 uses migration `0017`, so this one is `0019`.
 
 ## Goal
 
@@ -43,7 +43,7 @@ automatic budget lines.
     monthEnd).dayByDaySum`, divided by the month's Tue–Sun nights minus holiday closures.
   - This **replaces** the last-year seasonal index (`monthlyIndex` from `/api/capacity/history`) as the
     scaling source, everywhere the Staffing Plan uses `seasonalPct`.
-  - Supervision, overhead and growth roles stay flat. Migration 0018 sets `scales_with_seasonality = 0`
+  - Supervision, overhead and growth roles stay flat. Migration 0019 sets `scales_with_seasonality = 0`
     for hourly and overtime accounts whose `role_class` isn't `direct`, and logs each change.
   - The page's global checkbox becomes "Scale direct roles with forecast covers" and only touches
     direct roles.
@@ -56,7 +56,7 @@ automatic budget lines.
   - Staffing Plan Save keeps its current behavior: it writes the current year from `asOfMonth` and all
     of next year. Because the refresh uses the same shared model, the figures agree.
 
-## Data (migration `scripts/migrations/0018-staffing-auto-hours.mjs`, plus `schema.sql`)
+## Data (migration `scripts/migrations/0019-staffing-auto-hours.mjs`, plus `schema.sql`)
 
 ```sql
 -- Toast job → budget role. One-time mapping, edited in Settings › Staff & Pay Rules.
