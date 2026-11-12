@@ -6084,3 +6084,12 @@ window. It was already an `excluded` staff override (Settings › Staff & Pay Ru
 averaging slots, OT and unplanned hours. Also relabeled the job mapping's "Not budgeted" as "Salaried / fixed pay".
 Production's BOH OT average (28.5 hrs/wk, real individual overtime incl. the Sous Chef) is left as the data says.
 
+## 2026-11-12 (evening) — 5220 Catering Food Costs checked in production; step 4 deployed
+
+Read-only check: account 5220's budget is $0 in every month from Nov 2026 through Dec 2027 and no catering sales (4230)
+are budgeted, so the old recompute left nothing on it (Nov 2026 has $9,130 of event food and 5010 carries its cost).
+5220 actuals are tiny (≈ $56 in May 2026). Nothing to fix; the open item was removed. Step 4 is live: 201 labor lines
+moved on first refresh (every month within ±5.1%), the pre_auto table and the pre-migrate backups were deleted at
+Kit's request, and follow-ups shipped: job-mapping label "Salaried / fixed pay", shared logins excluded from hours
+averages, unmapping a saved job, suggestions offered as a button rather than preselected.
+

@@ -191,7 +191,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   year also rewrites all 12 months of next year's labor from the same inputs (overwriting hand-entered
   next-year labor; current-year-only inputs like a reduced salary or SUTA rate carry over as-is). A raise
   effective mid-month isn't modeled.
-- **Staffing hours follow Toast** (dynamic budgeting step 4, built 2026-11-12, migration 0019; not yet deployed).
+- **Staffing hours follow Toast** (dynamic budgeting step 4, live since 2026-11-12, migration 0019). Shared station logins (staff override "excluded", e.g. Service Bar) never count toward
+  anyone's hours or OT. A job mapped "Salaried / fixed pay" is deliberately not tied to hours.
   A slot linked to a Toast employee (Staffing Plan picker; Settings › Staff & Pay Rules maps Toast jobs →
   roles, `toast_job_labor_accounts`) gets `auto_weekly_hours` = mean of that person's regular hours on the
   role's jobs over the last **6** usable Mon–Sun weeks (`AUTO_HOURS_WINDOW_WEEKS`, `server/utils/labor-hours.ts`;
@@ -257,16 +258,10 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Not yet done
 
-- **Step 4 after deploy** (spec: [`docs/specs/staffing-auto-hours.md`](docs/specs/staffing-auto-hours.md)):
-  check `fly logs` after the next sync for "labor forecast: …", compare future labor lines with
-  `budget_targets_labor_pre_auto` (the first refresh rewrites unpinned ones), then map jobs in Settings and
-  link people on the Staffing Plan. Delete `budget_targets_labor_pre_auto` once trusted.
 - **Simplify Cash & Loans' Year-End Outlook** (bookmarked 2026-11-11): the user treats Night-by-night as
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
   With later months following the forecast, Budget and Night-by-night now converge except for the current
   month; the Forecast Accuracy page (step 3) now answers budget accuracy once months close.
-- **Check 5220 Catering Food Costs budgets in production**: the old food-cost recompute spread food cost
-  onto 5220; zero it in months with no catering (totals are right either way; 5010 shows only the rest).
 - **Eastern Bank, in writing**: (a) does "all annual principal and interest payments" mean the SBA loan
   only or all 10 loans; (b) is "EBITA" a typo for EBITDA; (c) will the pre-opening reclasses count as
   non-recurring add-backs; (d) does EBITDA count a one-time gain on asset sale. **Accountant**: is
