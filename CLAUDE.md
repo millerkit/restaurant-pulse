@@ -224,8 +224,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 Defined in `app/utils/navigation.ts`, rendered by `app/layouts/default.vue` (bottom bar on phones).
 Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales: Daily Results (`/pl/revenue-calendar`, sales
 and profit views), Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`), Seasonal Trends (`/historical`). Team: Kitchen Hours &
-Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, still sample
-data), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
+Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
+from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
 (`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), What-If
 (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
 turns, weekly area closures, holidays), staff and pay rules, people and access, connections, reservation
@@ -267,9 +267,6 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 - **Toast covers backfill in production** further back (for Seasonal Trends' multi-year comparison), and
   confirm production `capacity_areas` capacities match seats × turns (Settings › Restaurant Setup saves fix
   this).
-- **Profit & Loss page** still renders static sample data; wire it to real queries.
-- Per-account actuals in Budget Check's Overspending drill-down; per-line actual vs. budget beyond what the
-  Budget page shows.
 - A truly measured historical fill % needs Mass Ave's old seating, which was never recorded.
 - Labor: an effective-dated salary change (mid-month raises) isn't modeled; payroll tax rates reset each
   January (SUTA is the reduced 2026 rate).

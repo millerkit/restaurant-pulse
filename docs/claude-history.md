@@ -6105,3 +6105,19 @@ this month's budget 100 revenue / 30 COGS, projection 110 → revenue 1010, COGS
 number differs from the old Night-by-night card by the removed pace adjustment on later months (not measured; compare
 the page's old figures if needed). Typecheck 302 before and after; not viewed in a browser (Basic Auth).
 
+
+## 2026-11-12 (night) — Not-yet-done sweep: P&L page, Overspending per-account lines
+
+- **Profit & Loss (`/pl`)**: the "still renders static sample data" item was stale. `app/pages/pl/index.vue` has read
+  `/api/pl` (QBO actuals in `daily_line_items`, benchmarks from `category_benchmarks`) for a long time; local `/api/pl`
+  returns real month and year totals (local data ends 2026-07-28). Nothing rebuilt; removed the item and fixed the
+  navigation map line. It shows actuals only; budget comparison lives on Budget Check.
+- **Budget Check › Overspending drill-down**: the server already returned each account's `amount` and `expected`
+  (`overspending-detail.get.ts`), but the page printed only "+$over". Account rows now read "Account / $X spent vs.
+  $Y budgeted" with "▲ +$Z over" (icon and word, not color alone); an account with no budget says "not budgeted".
+  Expected is prorated like the tile above (current month by operating-day fraction; Jan–Jun 2026 compare to
+  themselves). UI only; no server or math change. Stale header comments about "no per-account actuals" were corrected.
+  Verified: local API with synthetic Nov actuals (Food Costs $15,000 vs $7,725 expected, listed with +$7,275), compiled
+  page serves `acctSub`, typecheck 302 before and after. Not viewed in a browser (Basic Auth; password not put in a URL).
+  Synthetic rows went into a backed-up copy of `data/restaurant.sqlite`, restored afterward (0 rows on/after Nov 1).
+- **Mid-month raise (labor model)**: design proposed to Kit, not built; see CLAUDE.md "Not yet done".

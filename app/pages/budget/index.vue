@@ -217,13 +217,10 @@ const paceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const)
   }
 }))
 
-// Overspending stays at category granularity: per-account actuals don't
-// exist yet (daily_line_items is empty until the QBO sync is wired to the
-// UI), so a per-account "what's driving it" breakdown here would have to
-// be fabricated against this restaurant's *real* chart of accounts, which
-// is worse than just not showing it yet. Revenue is excluded — a revenue
-// shortfall isn't "overspending," and that drill-down already exists on
-// the P&L tab.
+// Overspending rows are per cost category; the "What's driving it?" panel
+// below breaks each into subcategories and the accounts over their budget
+// (real daily_line_items actuals vs. budget_targets). Revenue is excluded —
+// a revenue shortfall isn't "overspending."
 const COST_CATEGORIES = ['cogs', 'labor', 'opex'] as const
 // Spelled out in the callout below, per the user's own request 2026-08-20
 // after "1 of 3 cost categories" left them unsure which 3 — built from
@@ -273,9 +270,8 @@ const overCategories = computed(() => costCategoryRows.value
 // pace-comparison detail at both Month and Year, per the user's own
 // judgment that they don't share Fixed's single-lump-payment problem badly
 // enough to lose Month-grain detail. Only shown as an expandable "why"
-// under a category already flagged in overspendingCategories above — COGS
-// has no subcategory breakdown (same as before this move; per-account
-// actuals don't exist yet, see "Not yet done" in CLAUDE.md).
+// under a category already flagged in overspendingCategories above (COGS,
+// Labor and Opex all have a breakdown; each account shows its actual vs. its budget).
 const { data: detailData, refresh: refreshDetail } = await useFetch('/api/budget/overspending-detail')
 
 type Direction = 'up' | 'down' | 'flat'
@@ -353,6 +349,14 @@ const calloutDriverText = computed(() => {
   if (!top.length) return ''
   return top.map(a => `${a.account} (+$${Math.round(a.over).toLocaleString()})`).join(' and ')
 })
+
+// "$1,414 spent vs. $1,380 budgeted" under an account row: the account's actual
+// against its own budget, prorated to today the same way the tile above is.
+function acctSub(ac: AccountDelta): string {
+  const fmt = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
+  if (Math.abs(ac.expected) < 1) return `${fmt(ac.amount)} spent · not budgeted`
+  return `${fmt(ac.amount)} spent vs. ${fmt(ac.expected)} budgeted`
+}
 
 function topAccountsFor(cat: 'cogs' | 'labor' | 'opex'): AccountDelta[] {
   return (detailData.value?.detail?.[selectedPeriod.value] as any)?.topAccounts?.[cat] ?? []
@@ -502,13 +506,13 @@ function hasDetail(cat: Category) {
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
                       <ul v-if="dr.accounts.length" class="acct-list">
-                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li>
                       </ul>
                     </div>
                   </div>
                   <div v-else class="quiet-note">
                     No single subcategory stands out. Accounts furthest over budget:
-                    <ul v-if="topAccountsFor('cogs').length" class="acct-list"><li v-for="ac in topAccountsFor('cogs')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <ul v-if="topAccountsFor('cogs').length" class="acct-list"><li v-for="ac in topAccountsFor('cogs')" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li></ul>
                     <span v-else>None individually over by $25+ — the overage is spread thin.</span>
                   </div>
                 </div>
@@ -521,13 +525,13 @@ function hasDetail(cat: Category) {
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
                       <ul v-if="dr.accounts.length" class="acct-list">
-                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li>
                       </ul>
                     </div>
                   </div>
                   <div v-else class="quiet-note">
                     No single subcategory stands out. Accounts furthest over budget:
-                    <ul v-if="topAccountsFor('labor').length" class="acct-list"><li v-for="ac in topAccountsFor('labor')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <ul v-if="topAccountsFor('labor').length" class="acct-list"><li v-for="ac in topAccountsFor('labor')" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li></ul>
                     <span v-else>None individually over by $25+ — the overage is spread thin.</span>
                   </div>
                 </div>
@@ -556,14 +560,14 @@ function hasDetail(cat: Category) {
                       <div class="amount-caption">Total this {{ selectedPeriod }}</div>
                       <div class="amount">${{ Math.round(dr.amount).toLocaleString() }}</div>
                       <ul v-if="dr.accounts.length" class="acct-list">
-                        <li v-for="ac in dr.accounts" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li>
+                        <li v-for="ac in dr.accounts" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li>
                       </ul>
                     </div>
                   </div>
                   <div v-if="!opexFixedDetailRows.length && !opexVariableDetailRows.length" class="quiet-note">No operating expense data synced for this {{ selectedPeriod }} yet.</div>
                   <div v-else-if="!opexVariableDetailRows.length" class="quiet-note">
                     No single variable subcategory stands out. Accounts furthest over budget:
-                    <ul v-if="topAccountsFor('opex').length" class="acct-list"><li v-for="ac in topAccountsFor('opex')" :key="ac.account"><span>{{ ac.account }}</span><strong>+${{ Math.round(ac.over).toLocaleString() }}</strong></li></ul>
+                    <ul v-if="topAccountsFor('opex').length" class="acct-list"><li v-for="ac in topAccountsFor('opex')" :key="ac.account"><span class="acct-name">{{ ac.account }}<span class="acct-sub">{{ acctSub(ac) }}</span></span><strong>▲ +${{ Math.round(ac.over).toLocaleString() }} over</strong></li></ul>
                     <span v-else>None individually over by $25+ — the overage is spread thin.</span>
                   </div>
                 </div>
@@ -674,7 +678,10 @@ function hasDetail(cat: Category) {
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 .fixed-note { margin-top: 6px; font-size: 12px; color: var(--ink-2); }
 .acct-list { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line, rgba(128,128,128,.25)); display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
-.acct-list li { display: flex; justify-content: space-between; gap: 10px; }
+.acct-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.acct-list .acct-name { display: flex; flex-direction: column; min-width: 0; }
+.acct-list .acct-sub { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.acct-list strong { white-space: nowrap; }
 .acct-list strong { color: var(--ink); font-variant-numeric: tabular-nums; }
 .quiet-note .acct-list { max-width: 420px; }
 .drill-card .callout { font-size: 12.5px; color: var(--ink-2); background: var(--surface-alt); border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
