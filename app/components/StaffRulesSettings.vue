@@ -45,7 +45,7 @@ const addAcct = ref<number | ''>('')
 // ---- Toast jobs -> budget roles (dynamic budgeting step 4, 2026-11-12) ----
 // Staffing Plan hours follow each mapped person's real Toast hours on jobs mapped to their role.
 // A suggestion (title matches a role name) is preselected but only saved when "Save job mapping"
-// is pressed; "Not budgeted" is a deliberate no (an owner's job, say).
+// is pressed; "Salaried / fixed pay" is a deliberate no: the job is paid a fixed salary (already in the budget), so its hours don't drive anything.
 type MapAccount = { accountId: number, accountNumber: string | null, name: string, groupKey: string }
 type MapJob = { guid: string, title: string, isBoh: boolean, isSaved: boolean, savedAccountId?: number | null, suggestedAccountId: number | null, recentHours: number, recentPeople: number }
 const { data: mapping, refresh: refreshMapping } = await useFetch<{ accounts: MapAccount[], jobs: MapJob[] }>('/api/budget/labor-mapping')
@@ -122,7 +122,7 @@ const saveJobMapping = () => run(async () => {
     <h3 class="sr-h sr-gap">Toast jobs → budget roles</h3>
     <p class="sr-note">
       The Staffing Plan can follow each person's real Toast hours (their average over the last 6 usable weeks). To do that it needs to know which Toast job
-      belongs to which budget role. Pick the role for each job, or "Not budgeted" for jobs that aren't on the hourly plan (an owner's job, say). Then match each person to their
+      belongs to which budget role. Pick the role for each job, or "Salaried / fixed pay" for jobs paid a set salary, such as the managers, chef and owners. Their pay is already in the budget; it just isn't tied to hours. Then match each person to their
       Toast name on the Staffing Plan.
     </p>
     <ul class="sr-list">
@@ -133,7 +133,7 @@ const saveJobMapping = () => run(async () => {
         </div>
         <select v-model="jobChoice[j.guid]" class="sr-input" :aria-label="`Budget role for ${j.title}`">
           <option value="">Not mapped yet</option>
-          <option value="none">Not budgeted</option>
+          <option value="none">Salaried / fixed pay (no hours tracking)</option>
           <option v-for="a in mapAccountsFor(j.isBoh)" :key="a.accountId" :value="a.accountId">{{ a.accountNumber ? `${a.accountNumber} ` : '' }}{{ a.name }}</option>
         </select>
       </li>

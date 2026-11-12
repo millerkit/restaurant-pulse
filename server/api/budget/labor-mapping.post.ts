@@ -1,5 +1,5 @@
 // Saves the Toast job -> Staffing Plan role mapping (Settings › Staff & Pay Rules). accountId null
-// = deliberately not budgeted (an owner's job, say). Only hourly Staffing Plan accounts are valid
+// = salaried / fixed pay, deliberately not tied to hours (a manager's or owner's job, say). Only hourly Staffing Plan accounts are valid
 // targets. Moves the automatic hours, so the forecast refreshes afterwards.
 import { refreshForecastsAfterChange } from '../../utils/capacity-forecast'
 
