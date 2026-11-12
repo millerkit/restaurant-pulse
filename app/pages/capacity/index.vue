@@ -34,6 +34,65 @@ type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNigh
 
 const { isOwner } = useMe()
 const { data: paceData, pending: pacePending, error: paceError, refresh: paceRefresh } = await useFetch('/api/capacity')
+const { data: trendData } = await useFetch<{ asOfAreaDate: string | null, areaTrends: { areaId: number, areaName: string, capacity: number | null, recent4WeekCoversPerNight: number | null, points: { weekStart: string, nights: number, coversPerNight: number | null }[] }[] }>('/api/capacity/area-trends')
+
+// ---- weekly covers/night trend sparklines ----
+const TREND_W = 220
+const TREND_H = 48
+const trendRows = computed(() => {
+  const trends = trendData.value?.areaTrends ?? []
+  return trends.map((t) => {
+    const vals = t.points.map(p => p.coversPerNight).filter((v): v is number => v != null)
+    // Scale to this area's own range (with a minimum span so noise in a
+    // near-flat series doesn't look like a swing). Scaling 0..capacity made
+    // every line look flat; the Change column gives the honest size of the move.
+    const lo = vals.length ? Math.min(...vals) : 0
+    const hi = vals.length ? Math.max(...vals) : 1
+    const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 1
+    const span = Math.max(hi - lo, mean * 0.2, 1)
+    const yMin = (lo + hi) / 2 - span / 2
+    const yMax = yMin + span
+    const pad = 5
+    const x = (i: number) => pad + (i * (TREND_W - 2 * pad)) / Math.max(t.points.length - 1, 1)
+    const y = (v: number) => TREND_H - pad - ((v - yMin) / (yMax - yMin)) * (TREND_H - 2 * pad)
+    const dots = t.points
+      .map((p, i) => ({ weekStart: p.weekStart, nights: p.nights, value: p.coversPerNight, x: x(i), y: p.coversPerNight == null ? 0 : y(p.coversPerNight) }))
+      .filter((d): d is { weekStart: string, nights: number, value: number, x: number, y: number } => d.value != null)
+    // Break the line across weeks with no open nights rather than bridging them.
+    let path = ''
+    let prevIdx = -2
+    t.points.forEach((p, i) => {
+      if (p.coversPerNight == null) return
+      path += `${prevIdx === i - 1 ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.coversPerNight).toFixed(1)} `
+      prevIdx = i
+    })
+    const latest = [...t.points].reverse().find(p => p.coversPerNight != null)?.coversPerNight ?? null
+    // Last 4 weeks with data vs. the 4 before them.
+    const weekly = vals
+    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
+    const recent = weekly.slice(-4)
+    const prior = weekly.slice(-8, -4)
+    let change: { pct: number, delta: number, dir: 'up' | 'down' | 'flat' } | null = null
+    if (recent.length >= 2 && prior.length >= 2 && avg(prior) > 0) {
+      const delta = avg(recent) - avg(prior)
+      const pct = delta / avg(prior)
+      change = { pct, delta, dir: Math.abs(pct) < 0.03 ? 'flat' : pct > 0 ? 'up' : 'down' }
+    }
+    return {
+      change,
+      areaId: t.areaId,
+      areaName: t.areaName,
+      points: t.points,
+      capacity: t.capacity,
+      capY: t.capacity != null ? y(t.capacity) : null,
+      path,
+      dots,
+      latest,
+      recent4: t.recent4WeekCoversPerNight,
+      fill4: t.capacity && t.recent4WeekCoversPerNight != null ? t.recent4WeekCoversPerNight / t.capacity : null
+    }
+  })
+})
 
 function fmtMoney(n: number | null | undefined): string {
   return n == null ? '—' : `$${n.toFixed(2)}`
@@ -684,6 +743,59 @@ async function save() {
             </div>
           </section>
 
+        <section v-if="trendRows.length">
+          <div class="section-head">
+            <div class="section-label">Weekly Covers/Night Trend, By Area</div>
+            <div class="section-note">
+              Last {{ trendRows[0]!.points.length }} weeks (Mon–Sun), open nights only. Each line is scaled to its own range, so compare the Change column across areas, not line heights.
+            </div>
+          </div>
+          <div class="pl-table-card">
+            <table class="pl-table trend-table">
+              <caption>Weekly average covers per night by seating area over recent weeks, with the latest week, last four weeks, and fill percentage of nightly capacity</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Area</th>
+                  <th scope="col">Trend</th>
+                  <th scope="col">Change<br><small>last 4 wks vs. prior 4</small></th>
+                  <th scope="col">Latest Week</th>
+                  <th scope="col">Last 4 Weeks</th>
+                  <th scope="col">Capacity</th>
+                  <th scope="col">4-Wk Fill</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in trendRows" :key="t.areaId">
+                  <th scope="row" style="text-transform: capitalize;">{{ t.areaName }}</th>
+                  <td class="trend-cell">
+                    <svg :viewBox="`0 0 ${TREND_W} ${TREND_H}`" :width="TREND_W" :height="TREND_H" role="img"
+                         :aria-label="`${t.areaName} weekly covers per night: ${t.points.map(p => p.coversPerNight == null ? 'none' : fmtCoversPerNight(p.coversPerNight)).join(', ')}`">
+                      <path class="trend-line" :d="t.path" />
+                      <circle v-for="(p, i) in t.dots" :key="i" class="trend-dot" :class="{ last: i === t.dots.length - 1 }"
+                              :cx="p.x" :cy="p.y" :r="i === t.dots.length - 1 ? 3.5 : 2">
+                        <title>Week of {{ fmtDate(p.weekStart) }}: {{ fmtCoversPerNight(p.value) }}/night over {{ p.nights }} nights</title>
+                      </circle>
+                    </svg>
+                  </td>
+                  <td class="derived trend-change" :class="t.change?.dir">
+                    <template v-if="t.change">
+                      {{ t.change.dir === 'up' ? '▲' : t.change.dir === 'down' ? '▼' : '►' }}
+                      {{ t.change.delta >= 0 ? '+' : '−' }}{{ fmtCoversPerNight(Math.abs(t.change.delta)) }}
+                      ({{ t.change.pct >= 0 ? '+' : '−' }}{{ Math.abs(t.change.pct * 100).toFixed(0) }}%)
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+                  <td class="derived">{{ fmtCoversPerNight(t.latest) }}</td>
+                  <td class="derived">{{ fmtCoversPerNight(t.recent4) }}</td>
+                  <td class="derived">{{ t.capacity ?? 'Closed' }}</td>
+                  <td class="derived">{{ fmtPct(t.fill4) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+
           <!-- Breakeven: covers/night needed to carry each layer of fixed cost -->
           <BreakevenCard v-if="isOwner" />
 
@@ -961,6 +1073,13 @@ async function save() {
 </template>
 
 <style scoped>
+.trend-cell svg { display: block; margin: 0 auto; max-width: 100%; }
+.trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-dot { fill: var(--accent); }
+.trend-change { white-space: nowrap; font-weight: 600; }
+.trend-change.up { color: var(--good); }
+.trend-change.down { color: var(--shortfall-deep); }
+.trend-dot.last { stroke: var(--surface); stroke-width: 1.5; }
 .state-note { padding: 40px 0; text-align: center; color: var(--ink-3); font-size: 14px; }
 
 /* ---------- sub-tab nav (Capacity Pace / Edit Capacity) ---------- */

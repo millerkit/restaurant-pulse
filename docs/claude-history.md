@@ -6014,3 +6014,13 @@ Special Nights card (prefills a buyout's price). `GET /api/budget/buyout-plan` n
 normal nights. What-If's "already booked" now reads dated buyouts (`buyoutBookedRevenueByDow`) instead of the old
 counts; hypothetical buyouts are its stepper. Tables `revenue_buyout_plan` / `revenue_buyout_applied` are kept but unused.
 Effect: the 2027 budget loses the hoped-for buyout revenue (the Jan 2027 example was +$6,442) at the next refresh.
+
+## 2026-11-12 — Weekly covers/night trend moved from What-If to Covers & Spend
+
+Kit asked whether the trend charts belonged on What-If. Decision: the read-only "Weekly Covers/Night Trend, By Area"
+(sparklines, 4-week change, fill %) describes actuals, so it moved to the Covers & Spend pace tab (between "Are We
+Meeting Our Assumptions?" and Breakeven). "Trailing 3-Month Averages, By Area" stays on What-If: it is the simulation's
+baseline with the editable deltas. Server: the trend query moved from `revenue-modeling.get.ts` to the new
+`server/api/capacity/area-trends.get.ts` (under `/api/capacity`, so the GM role can load it); the What-If route no
+longer returns `areaTrends`. Sparkline code and CSS moved with it. Windows were left alone (What-If: trailing 3 months;
+Covers & Spend: last two closed months). Typecheck 302 before and after.
