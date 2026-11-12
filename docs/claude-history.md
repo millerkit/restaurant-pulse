@@ -5972,3 +5972,14 @@ Verification (local DB backed up first and restored afterward; migration also ap
 - Typecheck 300 errors before and after (302 mid-way until an `asOfDate` cast in capacity.get.ts).
 - Page checked as server-rendered HTML (200, summary and monthly tables, chips with icons); not screenshotted because the
   Basic Auth URL could not be opened in the browser pane from this session.
+
+## 2026-11-12 — Forecast snapshots confirmed in production
+
+The first production sync after the step 3 deploy (2026-11-12 13:00 UTC) logged
+`forecast snapshots: weekly 2026-11-09 (144 rows), month_start 2026-11-01 (144 rows)`. That is 13 months ×
+11 plan metrics + 1 live row for the current month. The same run logged `budget forecast: 130 automatic
+budget lines changed (2026-12–2027-12)`, which is every managed line (10 accounts × 13 months), as expected
+when new synced data shifts the sales mix and cost %. The first snapshots are dated Nov 9 (weekly) and Nov 1
+(month start, taken on Nov 12, so November's "frozen plan" record reflects the budget as of Nov 12).
+Forecast Accuracy will show results once November closes and fully syncs. The open item was removed from
+CLAUDE.md.

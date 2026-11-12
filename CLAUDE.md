@@ -241,8 +241,6 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
   the real cash forecast, rarely uses Recent pace, and reads the boxes mainly as a budget-accuracy check.
   With later months following the forecast, Budget and Night-by-night now converge except for the current
   month; the Forecast Accuracy page (step 3) now answers budget accuracy once months close.
-- **Forecast snapshots in production**: after the first deploy, check `fly logs` after a sync for the
-  "forecast snapshots" line; Forecast Accuracy shows "fills in over time" until a snapshotted month closes.
 - **Check 5220 Catering Food Costs budgets in production**: the old food-cost recompute spread food cost
   onto 5220; zero it in months with no catering (totals are right either way; 5010 shows only the rest).
 - **Eastern Bank, in writing**: (a) does "all annual principal and interest payments" mean the SBA loan
