@@ -24,6 +24,8 @@ watch(monthlyData, (months) => {
   planningYearStartedWithBudget.value = months.some(m => m.accounts.some(a => a.amount !== null))
 }, { immediate: true })
 const { monthlyActuals, loadActualsYear } = useActualsYear(YEAR)
+// Scheduled loan principal for the year (not a P&L expense; shown under Net Income on the Total tab).
+const { data: loanPrincipal } = useFetch<{ months: number[], total: number }>('/api/budget/loan-principal', { query: { year: YEAR }, default: () => ({ months: [], total: 0 }) })
 
 // Real "as of" month/day the Live Preview card paces against — see
 // currentAsOfMonth/currentAsOfDay in useBudgetData.ts for why this must be
@@ -1418,6 +1420,16 @@ function exportForQuickBooks() {
                 <th scope="row">Net Income (Total)</th>
                 <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearDisplayNetIncome)">{{ formatNetIncome(yearDisplayNetIncome) }}</strong></span></td>
                 <td v-if="showProjectedColumn"><span class="amount-input readonly"><strong :class="netIncomeClass(yearProjectedNetIncome)">{{ formatNetIncome(yearProjectedNetIncome) }}</strong></span></td>
+              </tr>
+              <tr v-if="loanPrincipal.total > 0">
+                <th scope="row">Loan principal payments (cash, not an expense)</th>
+                <td><span class="amount-input readonly">{{ formatNetIncome(-loanPrincipal.total) }}</span></td>
+                <td v-if="showProjectedColumn"><span class="amount-input readonly">{{ formatNetIncome(-loanPrincipal.total) }}</span></td>
+              </tr>
+              <tr v-if="loanPrincipal.total > 0" class="net-income-row">
+                <th scope="row">Net Income after loan principal</th>
+                <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearDisplayNetIncome - loanPrincipal.total)">{{ formatNetIncome(yearDisplayNetIncome - loanPrincipal.total) }}</strong></span></td>
+                <td v-if="showProjectedColumn"><span class="amount-input readonly"><strong :class="netIncomeClass(yearProjectedNetIncome - loanPrincipal.total)">{{ formatNetIncome(yearProjectedNetIncome - loanPrincipal.total) }}</strong></span></td>
               </tr>
               <tr v-if="yearActualNetIncome !== null" class="net-income-row">
                 <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
