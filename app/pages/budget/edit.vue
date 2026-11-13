@@ -986,6 +986,16 @@ function yearProjectedCategoryTotal(cat: Category): number {
   return yearProjectedTotals.value[cat]
 }
 const yearDisplayNetIncome = computed(() => netIncome(yearDisplayTotals.value))
+// Revenue needed to cover every expense plus loan principal (Net Income after principal = 0).
+// Food & drink cost scales with sales at the budget's own cost %; everything else is held at budget.
+const requiredRevenue = computed(() => {
+  const t = yearDisplayTotals.value
+  if (!t.revenue) return null
+  const costPct = t.cogs / t.revenue
+  if (costPct >= 1) return null
+  const fixed = t.labor + t.opex + (t.other_expense ?? 0) - (t.other_income ?? 0) +loanPrincipal.value.total
+  return fixed / (1 - costPct)
+})
 
 const yearLivePaceCards = computed(() => (['revenue', 'cogs', 'labor', 'opex'] as const).map(cat => {
   const actual = realYearCategoryTotal(cat)
@@ -1430,6 +1440,18 @@ function exportForQuickBooks() {
                 <th scope="row">Net Income after loan principal</th>
                 <td><span class="amount-input readonly"><strong :class="netIncomeClass(yearDisplayNetIncome - loanPrincipal.total)">{{ formatNetIncome(yearDisplayNetIncome - loanPrincipal.total) }}</strong></span></td>
                 <td v-if="showProjectedColumn"><span class="amount-input readonly"><strong :class="netIncomeClass(yearProjectedNetIncome - loanPrincipal.total)">{{ formatNetIncome(yearProjectedNetIncome - loanPrincipal.total) }}</strong></span></td>
+              </tr>
+              <tr v-if="loanPrincipal.total > 0 && requiredRevenue !== null">
+                <th scope="row">Revenue needed to cover all expenses and principal</th>
+                <td><span class="amount-input readonly"><strong>${{ Math.round(requiredRevenue).toLocaleString() }}</strong></span></td>
+                <td v-if="showProjectedColumn"></td>
+              </tr>
+              <tr v-if="loanPrincipal.total > 0 && requiredRevenue !== null">
+                <td :colspan="3">
+                  <div class="section-note">
+                    Solves for the revenue where Net Income after loan principal is $0: food &amp; drink cost rises with sales at this budget's {{ Math.round((yearDisplayTotals.cogs / yearDisplayTotals.revenue) * 100) }}% cost rate; labor, operating expenses and other income/expense stay as budgeted. That is ${{ Math.round(requiredRevenue - yearDisplayTotals.revenue).toLocaleString() }} more than the budgeted revenue.
+                  </div>
+                </td>
               </tr>
               <tr v-if="yearActualNetIncome !== null" class="net-income-row">
                 <th scope="row">Net Income (Actual through {{ MONTH_NAMES[monthsElapsed - 1] }})</th>
