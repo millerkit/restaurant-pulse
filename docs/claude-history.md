@@ -6139,3 +6139,24 @@ Thu–Sun, people who picked up a second job) was flagged ✚ new hire and their
 Now anyone first seen during the first data week counts as already working there (their real start is unknown, not
 recent); a genuine new hire (Elijah, first shift mid-October) is still flagged. Flags clear as the window slides.
 
+
+## 2026-11-13 — Covers & Spend weekly area trend fixes
+
+Kit flagged a sharp Dining Room dip and odd Salon numbers in the Weekly Covers/Night Trend. Checked production
+`daily_toast_area_metrics` against `daily_toast_metrics` and raw Toast orders. Three problems, fixed in
+`server/api/capacity/area-trends.get.ts` (page: `app/pages/capacity/index.vue`):
+- **Nov 12 was the Founder's Collective buyout**, rung as one 60-guest order on table 1 (dropped by the
+  > 50 guests rule) and 40 guests on B1, so Dining Room read 10 and Bar 40. Dated special nights (buyout,
+  event, off-site, closed) and holidays are now left out of the trend and listed under the table; catering
+  stays in.
+- **The sync writes no area row on a night an area had no guests**, so Salon/Outdoor/Chef's Counter averaged
+  only the nights they had anyone (Salon showed 6.2/night; pooled over every open night it is ~4.8). Every
+  regular open night now counts for every area open that night (missing row = 0); an area is closed when its
+  seasonal capacity is null (Outdoor Nov–Apr) or by its weekly closure (`closed_dows` from `closed_from`).
+- **The week in progress** (Tue–Wed only) was shown as "Latest Week". Only complete Mon–Sun weeks are shown
+  now. The Change column is computed server-side, pooled by nights, so it matches Last 4 Weeks (it was an
+  average of weekly averages). Open nights now use whole-restaurant `daily_toast_metrics` covers ≥ 15.
+Verified against production (read-only): through Nov 8, Dining Room last 4 weeks 50.5 vs prior 45.0
+(latest week 54.0), Bar 16.6 vs 16.5, Salon 4.8 vs 4.3, Chef's Counter 7.8 vs 7.0.
+Not changed: the > 50 guests rule also dropped the 60-guest buyout tab from Nov 12's whole-restaurant covers
+(stored 53).

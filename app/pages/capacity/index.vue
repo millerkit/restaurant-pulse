@@ -34,7 +34,7 @@ type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNigh
 
 const { isOwner } = useMe()
 const { data: paceData, pending: pacePending, error: paceError, refresh: paceRefresh } = await useFetch('/api/capacity')
-const { data: trendData } = await useFetch<{ asOfAreaDate: string | null, areaTrends: { areaId: number, areaName: string, capacity: number | null, recent4WeekCoversPerNight: number | null, points: { weekStart: string, nights: number, coversPerNight: number | null }[] }[] }>('/api/capacity/area-trends')
+const { data: trendData } = await useFetch<{ asOfAreaDate: string | null, throughDate: string | null, excludedNights: { date: string, kind: string, note: string | null }[], areaTrends: { areaId: number, areaName: string, capacity: number | null, recent4WeekCoversPerNight: number | null, prior4WeekCoversPerNight: number | null, points: { weekStart: string, nights: number, coversPerNight: number | null }[] }[] }>('/api/capacity/area-trends')
 
 // ---- weekly covers/night trend sparklines ----
 const TREND_W = 220
@@ -67,15 +67,14 @@ const trendRows = computed(() => {
       prevIdx = i
     })
     const latest = [...t.points].reverse().find(p => p.coversPerNight != null)?.coversPerNight ?? null
-    // Last 4 weeks with data vs. the 4 before them.
-    const weekly = vals
-    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
-    const recent = weekly.slice(-4)
-    const prior = weekly.slice(-8, -4)
+    // Last 4 complete weeks vs. the 4 before them, both pooled by nights (server side),
+    // so it matches the Last 4 Weeks column.
+    const recent = t.recent4WeekCoversPerNight
+    const prior = t.prior4WeekCoversPerNight
     let change: { pct: number, delta: number, dir: 'up' | 'down' | 'flat' } | null = null
-    if (recent.length >= 2 && prior.length >= 2 && avg(prior) > 0) {
-      const delta = avg(recent) - avg(prior)
-      const pct = delta / avg(prior)
+    if (recent != null && prior != null && prior > 0) {
+      const delta = recent - prior
+      const pct = delta / prior
       change = { pct, delta, dir: Math.abs(pct) < 0.03 ? 'flat' : pct > 0 ? 'up' : 'down' }
     }
     return {
@@ -747,7 +746,10 @@ async function save() {
           <div class="section-head">
             <div class="section-label">Weekly Covers/Night Trend, By Area</div>
             <div class="section-note">
-              Last {{ trendRows[0]!.points.length }} weeks (Mon–Sun), open nights only. Each line is scaled to its own range, so compare the Change column across areas, not line heights.
+              Last {{ trendRows[0]!.points.length }} complete weeks (Mon–Sun) through {{ trendData?.throughDate ? fmtDate(trendData.throughDate) : '—' }}, regular service nights only (a night with no guests in an area counts as 0). Each line is scaled to its own range, so compare the Change column across areas, not line heights.
+              <template v-if="trendData?.excludedNights?.length">
+                Left out (buyouts, events, closures): {{ trendData.excludedNights.map(n => `${fmtDate(n.date)}${n.note ? ` ${n.note}` : ''}`).join('; ') }}.
+              </template>
             </div>
           </div>
           <div class="pl-table-card">
