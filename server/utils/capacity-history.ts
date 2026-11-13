@@ -121,6 +121,18 @@ export function loadCapacityHistory(db: Db) {
   // than an equal-weighted multi-year average, at the user's own request).
   const priorYears = allYears.filter(y => y < asOfYear)
   const historicalYears = priorYears.length > 0 ? [priorYears[priorYears.length - 1]] : []
+  // The seasonal index (and so the automatic covers forecast) must come from a
+  // year spent entirely in one room. 2026 is half Mass Ave (~40 covers/night)
+  // and half Cambridge St (~85): measured against that blended year, Jan-May
+  // read ~0.6 and Jul-Dec ~1.4, which from 2027-01-01 would have roughly
+  // halved the winter forecast. So skip the move year: 2025 (all Mass Ave)
+  // until 2027 is a full Cambridge St year to use. Charts keep
+  // historicalYears (they normalize 2026 per location, see periodAvgFor).
+  const SPLIT_LOCATION_YEARS = new Set([2026])
+  const singleLocationPrior = priorYears.filter(y => !SPLIT_LOCATION_YEARS.has(y))
+  const indexYears = singleLocationPrior.length > 0
+    ? [singleLocationPrior[singleLocationPrior.length - 1]]
+    : historicalYears
 
   type Metric = 'covers' | 'spend' | 'revenue'
   // spend/revenue are typed nullable on DayPoint defensively, but every
@@ -165,7 +177,7 @@ export function loadCapacityHistory(db: Db) {
   const monthlyIndex = Array.from({ length: 12 }, (_, i) => {
     const month = i + 1
     const perYear: { year: number, indexPct: number }[] = []
-    for (const year of historicalYears) {
+    for (const year of indexYears) {
       const yAvg = yearAvg(year, 'covers')
       if (yAvg == null) continue
       const monthDays = (byYear.get(year) ?? []).filter(d => d.month === month)

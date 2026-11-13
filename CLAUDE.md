@@ -149,7 +149,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 `refreshForecastsAfterChange`, `ensureForecastsFresh` in `server/utils/capacity-forecast.ts`).
 - **Capacity drivers** (Planning › Capacity): per-area **spend per guest** = the area's real Toast blend
   over the two most recently closed, fully synced months (≥ 30 covers), updated at month close.
-  **Expected covers per night** for every month that hasn't started = last year's covers seasonality ×
+  **Expected covers per night** for every month that hasn't started = the most recent single-location
+  year's covers seasonality (2025 until 2027 is complete; 2026, the move year, is skipped) ×
   a baseline from real Cambridge St covers since the move (season-aware capacity), split across areas by
   each area's real fill rate. The current month is never recomputed. Rows are per calendar month and
   reused every year (a closed month's row is next year's forecast). Pins: `capacity_areas.follow_actuals`

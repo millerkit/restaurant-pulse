@@ -6160,3 +6160,33 @@ Verified against production (read-only): through Nov 8, Dining Room last 4 weeks
 (latest week 54.0), Bar 16.6 vs 16.5, Salon 4.8 vs 4.3, Chef's Counter 7.8 vs 7.0.
 Not changed: the > 50 guests rule also dropped the 60-guest buyout tab from Nov 12's whole-restaurant covers
 (stored 53).
+
+## 2026-11-13 — Seasonal index skips the move year (2026)
+
+`loadCapacityHistory` built the monthly covers index from the single most recent prior year. From
+2027-01-01 that would have been 2026, half Mass Ave (~40 covers/night) and half Cambridge St (~85), so the
+index measured against 2026's blended average read Jan–May ~0.55–0.67 and Jun–Nov ~1.2–1.4, with no December
+value. Checked read-only in production with an in-memory copy plus a fake 2027-01-05 day: the automatic
+forecast would have dropped Feb 2027 from 66 to 34 covers/night (Jan 61→36, Mar 61→29, Apr 70→30).
+Fix: the index (`monthlyIndex`, and so `dataAnnualFillPct` and the capacity forecast and labor seasonality
+info) uses `indexYears` = the most recent prior year not in `SPLIT_LOCATION_YEARS` (2026), i.e. 2025 until
+2027 is a full Cambridge St year. The Seasonal Trends charts keep `historicalYears` (they already normalize
+2026 per location). Verified the 2027 run now equals today's index and fill (0.464) exactly. Typecheck count
+unchanged (302).
+
+Context (same day, budget review with Kit): the 2027 Jan–Apr forecast uses only 2025's shape (winter ~9%
+below Jul–Oct); 2026 Mass Ave ran flat winter vs fall, and Mass Ave March covers dipped while spend rose, so
+Feb–Apr is mildly conservative (~$30K profit). Mass Ave January dine-in looked ~1/3 below February, but that was Tasting
+Collective nights coded to On-Site Events (see the next entry); recoded, January 2026 was a normal month. Jul–Oct 2027 labor budget ($509K) is
+7.5% above Jul–Oct 2026 actuals ($473K) with the same Friday counts.
+
+## 2026-11-13 — January 2026 Tasting Collective recoded to dine-in
+
+Kit recoded January 2026's Tasting Collective nights in QBO from On-Site Events (4150/4145) to regular
+restaurant food & beverage (no tickets or deposits; it is a group booking more tables within normal service).
+`diff-qbo-pl.mjs --since=2026-01-01 --until=2026-01-31 --category=revenue --fix` moved $41,443 (4150 $29,400,
+4145 $12,043 → 4010/4022/4024/4026/4028); January total revenue unchanged at $92,134.57 and every category then
+matched QBO. January 2026 core dine-in is now ~$91.6K (spend ~$105/cover). The forecast's covers index is
+unaffected (covers already included those guests). Similar ~$4.4K/night On-Site Events postings on ordinary
+weeknights exist in January 2025 (~$39K) and in February 2025/2026 ($17–23K): likely the same program, left as is
+pending Kit.
