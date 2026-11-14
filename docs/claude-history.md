@@ -6232,3 +6232,17 @@ refresh (about 4 fewer Chef's Counter nights a month). `weekly-targets.ts` (week
 Settings › Restaurant Setup has a "Skipped nights for one area" list under Holiday closures
 (`AreaNightExclusionsSettings.vue`, `/api/settings/area-night-exclusions` get/post/delete, owner-only by default deny).
 Trend display only; no forecast refresh. Verified locally: add and remove through the UI and the API.
+
+
+## Breakeven by weekday follows the real weekly pattern — 2026-11-14
+
+Kit asked for the breakeven card's by-weekday table to weight covers needed by what each night can realistically do:
+the old framing (each night carries an equal share of the layer) asked a 65-cover Tuesday for 89 and a 111-cover
+Friday for 90. Now every night needs the same multiplier k over its own trailing average, where
+k = monthly layer cost ÷ Σ over weekdays (that weekday's count in the month, scaled so the total equals operating
+nights after holidays/replaced nights × avg covers × contribution per cover at that weekday's spend). With
+November's figures k ≈ 1.05: Tue 68, Wed 83, Thu 85, Fri 116, Sat 114, Sun 72 (539/week vs. 540 before). The API
+returns `weekdayWeighting` ('pattern' | 'equal') and `liftPct` per tier; the card shows "Every night needs about
+N% more covers than its recent average." If any weekday has no data or a non-positive contribution it falls back to
+the equal-share split. The tier rows (single covers/night figure) are unchanged. Local dev had no core revenue in
+the window, so the weighted path was checked by recomputing from the production figures in Kit's screenshot.

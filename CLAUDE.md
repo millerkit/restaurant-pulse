@@ -284,6 +284,13 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
   on the Staffing Plan slot.
 - Toast's per-area revenue uses check totals, which can't exclude a private event at a table.
 
+## Breakeven covers/night (Covers & Spend card)
+
+`server/api/breakeven.get.ts` + `app/components/BreakevenCard.vue`. The **by-weekday** table (2026-11-14) asks every
+night to grow by the same % over its own recent average (common multiplier solved against the month's weekday counts
+and each weekday's contribution per cover), so busy nights carry more; falls back to the old equal share when a
+weekday has no recent data. See history.
+
 ## Cash & Loans Year-End Outlook
 
 Two cards (simplified 2026-11-12): **Budget** (real actuals for closed months, budget for this month and later, which

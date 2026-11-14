@@ -149,17 +149,43 @@ export default defineEventHandler((event) => {
   }
   const tiers = cumulative.map(t => ({ ...t, coversPerNight: coversNeeded(t.monthly, avgSpend) }))
 
-  const weekdays = WEEKDAYS.map((w) => {
+  // ---- By weekday: needed covers follow each night's real pattern ----------------------------
+  // Every night is asked to lift by the SAME percentage over its own recent average, so a quiet
+  // Tuesday needs a little more than it does today and a busy Friday carries most of the load,
+  // instead of every night needing an equal share. Solve for that common multiplier k:
+  //   sum over the month's nights of (k x avgCovers_w x contribution per cover_w) = monthly cost
+  // using how many of each weekday the month has (scaled to `nights`, so holidays and replaced
+  // special nights come off proportionally). If any weekday lacks recent data, fall back to the
+  // old equal-share split (monthly / nights / that weekday's contribution).
+  const weekdayStats = WEEKDAYS.map((w) => {
     const days = openDays.filter(d => d.dow === w.dow)
     const covers = days.reduce((s, d) => s + d.covers, 0)
     const revenue = days.reduce((s, d) => s + d.revenue, 0)
-    const avgCovers = days.length > 0 ? covers / days.length : null
-    const spend = covers > 0 ? revenue / covers : null
-    return {
-      key: w.key, label: w.label, short: w.short, sampleDays: days.length, avgCovers, avgSpend: spend,
-      coversNeeded: Object.fromEntries(cumulative.map(t => [t.key, coversNeeded(t.monthly, spend)]))
-    }
+    return { w, sampleDays: days.length, avgCovers: days.length > 0 ? covers / days.length : null, spend: covers > 0 ? revenue / covers : null }
   })
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  const dowCount = new Map<number, number>()
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+    dowCount.set(dow, (dowCount.get(dow) ?? 0) + 1)
+  }
+  const rawNights = weekdayStats.reduce((s, x) => s + (dowCount.get(x.w.dow) ?? 0), 0)
+  const nightScale = rawNights > 0 ? nights / rawNights : 0
+  // Monthly contribution the restaurant earns at k = 1 (i.e. at today's weekday pattern).
+  let baseContribution: number | null = 0
+  for (const x of weekdayStats) {
+    const c = contribPerCover(x.spend)
+    if (x.avgCovers == null || c == null || c <= 0) { baseContribution = null; break }
+    baseContribution += (dowCount.get(x.w.dow) ?? 0) * nightScale * x.avgCovers * c
+  }
+  const weighted = baseContribution != null && baseContribution > 0
+  const weekdays = weekdayStats.map(({ w, sampleDays, avgCovers, spend }) => ({
+    key: w.key, label: w.label, short: w.short, sampleDays, avgCovers, avgSpend: spend,
+    coversNeeded: Object.fromEntries(cumulative.map(t => [t.key,
+      weighted ? avgCovers! * (t.monthly / baseContribution!) : coversNeeded(t.monthly, spend)]))
+  }))
+  // How much every night must grow (or may shrink) vs. its recent average, per layer.
+  const liftPct = Object.fromEntries(cumulative.map(t => [t.key, weighted ? t.monthly / baseContribution! - 1 : null]))
 
   return {
     year, month, asOfDate, windowStart, sampleOpenDays: openDays.length, nights,
@@ -168,6 +194,6 @@ export default defineEventHandler((event) => {
     cogsPct, varOpexPct, contribRate, fohPerCover,
     contribPerCover: contribPerCover(avgSpend),
     components: { fixedLabor, kitchenCrew, variableLabor, fixedOpex, loanPrincipal },
-    tiers, weekdays
+    tiers, weekdays, weekdayWeighting: weighted ? 'pattern' : 'equal', liftPct
   }
 })

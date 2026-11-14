@@ -10,7 +10,7 @@ type Breakeven = {
   laborBudgeted: boolean, avgCoversPerNight: number | null, avgSpend: number | null,
   cogsPct: number | null, varOpexPct: number | null, contribRate: number | null, fohPerCover: number, contribPerCover: number | null,
   components: { fixedLabor: number, kitchenCrew: number, variableLabor: number, fixedOpex: number, loanPrincipal: number },
-  tiers: Tier[], weekdays: Weekday[], excludedNights: { date: string, covers: number, revenue: number, spend: number }[]
+  tiers: Tier[], weekdays: Weekday[], weekdayWeighting: 'pattern' | 'equal', liftPct: Record<string, number | null>, excludedNights: { date: string, covers: number, revenue: number, spend: number }[]
 }
 
 const data = ref<Breakeven | null>(null)
@@ -57,6 +57,16 @@ const weekTotals = computed(() => {
   const needs = d.weekdays.map(w => w.coversNeeded[selectedTier.value] ?? null)
   const needed = needs.every(n => n != null) ? needs.reduce((s, n) => s + n!, 0) : null
   return { covers, spend: covers > 0 ? revenue / covers : null, needed }
+})
+// One sentence on the common lift: every night grows (or could shrink) by this share.
+const liftText = computed(() => {
+  const p = data.value?.liftPct[selectedTier.value]
+  if (p == null) return null
+  const pct = Math.round(Math.abs(p) * 100)
+  if (pct === 0) return 'Recent nights are right at breakeven for this layer.'
+  return p > 0
+    ? `Every night needs about ${pct}% more covers than its recent average.`
+    : `Every night could run about ${pct}% below its recent average and still cover this layer.`
 })
 const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString()}`
 // Weekly core sales a layer needs: covers/night x avg spend x operating nights per week.
@@ -151,7 +161,11 @@ const sensitivity = computed(() => {
         </div>
         <div v-if="!data.laborBudgeted" class="be-basis warn">No labor budget is saved for {{ MONTH_NAMES[data.month - 1] }} yet — save the Staffing Plan, or the labor layers read $0.</div>
 
-        <div class="be-weekday-head">By weekday <span class="be-sub inline">— covers each night needs to carry an equal share of the selected layer</span></div>
+        <div class="be-weekday-head">By weekday
+          <span v-if="data.weekdayWeighting === 'pattern'" class="be-sub inline">— covers each night needs if every night grows by the same share, so busy nights carry more of the selected layer than quiet ones</span>
+          <span v-else class="be-sub inline">— covers each night needs to carry an equal share of the selected layer (not every weekday has recent data yet)</span>
+        </div>
+        <div v-if="data.weekdayWeighting === 'pattern' && liftText" class="be-basis">{{ liftText }}</div>
         <table class="be-table">
           <thead>
             <tr><td>night</td><td class="num">avg covers</td><td class="num">avg spend</td><td class="num">covers needed</td><td class="num">vs. needed</td></tr>
