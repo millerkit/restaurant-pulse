@@ -798,8 +798,8 @@ async function save() {
         </section>
 
 
-          <!-- Breakeven: covers/night needed to carry each layer of fixed cost -->
-          <BreakevenCard v-if="isOwner" />
+          <!-- Breakeven moved to its own tab (Planning › Breakeven); a one-line summary stays here -->
+          <BreakevenSummary v-if="isOwner" />
 
           <!-- Month by month, one at a time -->
           <section>

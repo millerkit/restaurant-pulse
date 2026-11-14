@@ -6246,3 +6246,33 @@ returns `weekdayWeighting` ('pattern' | 'equal') and `liftPct` per tier; the car
 N% more covers than its recent average." If any weekday has no data or a non-positive contribution it falls back to
 the equal-share split. The tier rows (single covers/night figure) are unchanged. Local dev had no core revenue in
 the window, so the weighted path was checked by recomputing from the production figures in Kit's screenshot.
+
+
+## Breakeven gets its own tab and counts events & retail — 2026-11-14
+
+Kit: core dine-in alone can't balance the budget (short of a Michelin star); events and retail have to close the
+gap, and the breakeven card should say how much. Built Planning › Breakeven (`app/pages/breakeven.vue`, owner-only
+by default deny; nav entry after Capacity). The Covers & Spend card (`BreakevenCard.vue`) was removed and replaced
+by `BreakevenSummary.vue` (one line: P&L-layer still short + event sales needed, link to the tab).
+
+API changes (`server/api/breakeven.get.ts`):
+- `year`/`month` query, current month through December of next year.
+- Expected covers/night: recent average for the current month; for later months the Capacity model's
+  `dayByDaySum` expected covers ÷ operating days. The recent weekday shape is scaled to that level
+  (`expectedCovers` per weekday); FOH per cover uses the expected level.
+- `dineInMargin` = Σ weekday count (scaled to operating nights) × expected covers × contribution per cover.
+- Planned events: budget leaf 41xx–42xx revenue + `plannedBuyoutIncrement` (price above a normal night) +
+  `specialNightAdditions(...).dineIn` (diners on replaced nights), all × the dine-in contribution rate
+  (1 − food & drink cost target − variable-expense target). A separate event cost % isn't measurable because
+  event food cost mostly posts to 5010. Event-only staffing isn't counted (stated on the page).
+- Planned retail: budget 43xx × (1 − retail cost % − variable %); retail cost % = actual 53xx ÷ 43xx since
+  `NEW_LOCATION_START` when retail sales ≥ $1,000, else budgeted 53xx ÷ 43xx, else the food & drink cost target.
+- Per tier: `coversPerNight` (dine-in only), `coversPerNightWithOther`, `stillShort`, `eventSalesNeeded`
+  (= still short ÷ contribution rate), `liftPct` both ways; per weekday `coversNeededWithOther`. "About N more
+  events" uses the average `event_revenue` of dated event/off-site/catering nights, when any exist.
+
+Verified locally: local QBO revenue stops 2026-07-28, so 51 synthetic 4010 rows (covers × a weekday spend
+matching the screenshot) were inserted for 2026-09-10..11-04, the page and API checked (Nov: $111,863 P&L layer −
+$103,420 dine-in − $6,820 events = $1,623 short ≈ $2,618 event sales; toggle, month switch to a forecast month,
+summary line on Covers & Spend), then those 51 rows deleted. The hydration-mismatch console warnings also
+appear on untouched pages (pre-existing).

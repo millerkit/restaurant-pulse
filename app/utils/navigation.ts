@@ -75,6 +75,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: 'Sales Plan', to: '/budget/revenue', path: '/budget/revenue' },
       { label: 'Staffing Plan', to: '/budget/labor', path: '/budget/labor' },
       { label: 'Capacity', to: '/capacity?tab=edit', path: '/capacity', tab: 'edit' },
+      { label: 'Breakeven', to: '/breakeven', path: '/breakeven' },
       { label: 'What-If', to: '/revenue-modeling', path: '/revenue-modeling' }
     ]
   }

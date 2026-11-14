@@ -232,8 +232,8 @@ Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales (a section opens on 
 and profit views), Seasonal Trends (`/historical`). Team: Kitchen Hours &
 Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
 from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
-(`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), What-If
-(`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
+(`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), Breakeven
+(`/breakeven`, owner), What-If (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
 turns, weekly area closures, holidays), staff and pay rules, people and access, connections, reservation
 upload, database updates.
 
@@ -284,12 +284,16 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
   on the Staffing Plan slot.
 - Toast's per-area revenue uses check totals, which can't exclude a private event at a table.
 
-## Breakeven covers/night (Covers & Spend card)
+## Breakeven (Planning › Breakeven, `/breakeven`, owner-only)
 
-`server/api/breakeven.get.ts` + `app/components/BreakevenCard.vue`. The **by-weekday** table (2026-11-14) asks every
-night to grow by the same % over its own recent average (common multiplier solved against the month's weekday counts
-and each weekday's contribution per cover), so busy nights carry more; falls back to the old equal share when a
-weekday has no recent data. See history.
+`server/api/breakeven.get.ts` + `app/pages/breakeven.vue` (moved out of Covers & Spend 2026-11-14; that page keeps a
+one-line `BreakevenSummary`). Month picker: current month through next December. **Gap view**: cost layer −
+dine-in margin at **expected covers** (recent average for the current month, Capacity forecast after) − planned
+events/buyouts/catering margin (budget 41xx–42xx + dated buyout increment + event-night diners, at the dine-in
+contribution rate) − planned retail margin (budget 43xx; cost % from actual 53xx÷43xx since the move once ≥ $1K,
+else budget, else the food & drink cost target) = **still short**, also as event sales needed. Event-only labor is
+not modeled. By-weekday: every night grows by the same % over expected covers (toggle: with planned events &
+retail / dine-in only). See history.
 
 ## Cash & Loans Year-End Outlook
 

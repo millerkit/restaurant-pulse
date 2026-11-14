@@ -1,6 +1,11 @@
-// Breakeven covers/night — how many covers a night core dine-in sales need to carry each
-// layer of cost that doesn't flex with volume (see CLAUDE.md's "Breakeven covers/night"
-// section for the full reasoning). Powers the card on the Capacity Pace page.
+// Breakeven — how much each layer of cost that doesn't flex with volume needs from dine-in
+// covers, planned events/buyouts/catering and retail, and what's still short after all three
+// (see CLAUDE.md's "Breakeven" section). Powers Planning › Breakeven (/breakeven, owner-only).
+//
+// The gap view (2026-11-14): costs − dine-in margin at EXPECTED covers − planned events margin −
+// planned retail margin = still short, also expressed as event sales needed. Expected covers are
+// the recent average for the current month and the Capacity forecast for later months (with the
+// recent weekday shape scaled to the forecast).
 //
 // Tiers are CUMULATIVE, each adding one more block of fixed cost on top of the last:
 //   1. Fixed labor     — supervision + overhead + growth roles (labor_position_settings.role_class),
@@ -24,6 +29,7 @@
 const RESTAURANT_TIME_ZONE = 'America/New_York'
 const WINDOW_DAYS = 56
 
+const pad = (n: number) => String(n).padStart(2, '0')
 function localToday(): { year: number, month: number } {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: RESTAURANT_TIME_ZONE, year: 'numeric', month: '2-digit' }).formatToParts(new Date())
   return { year: Number(parts.find(p => p.type === 'year')!.value), month: Number(parts.find(p => p.type === 'month')!.value) }
@@ -46,9 +52,14 @@ export default defineEventHandler((event) => {
   const db = useDb()
   const today = localToday()
   const q = getQuery(event)
-  const year = today.year
-  const month = Math.min(12, Math.max(1, Number(q.month) || today.month))
-  const mm = String(month).padStart(2, '0')
+  // Current month through December of next year.
+  let year = Number(q.year) || today.year
+  if (year < today.year) year = today.year
+  if (year > today.year + 1) year = today.year + 1
+  const minMonth = year === today.year ? today.month : 1
+  const month = Math.min(12, Math.max(minMonth, Number(q.month) || minMonth))
+  const mm = pad(month)
+  const isCurrentMonth = year === today.year && month === today.month
 
   // ---- Costs from the saved month budget ---------------------------------------------------
   const laborRows = db.prepare(`
@@ -118,24 +129,86 @@ export default defineEventHandler((event) => {
       allOpenDays.push({ date, dow, revenue, covers })
     }
   }
-  // Excluded nights are returned and listed on the card, never dropped silently.
+  // Excluded nights are returned and listed on the page, never dropped silently.
   const { kept: openDays, excluded: excludedNights } = excludeSpendOutliers(allOpenDays)
   const totalCovers = openDays.reduce((s, d) => s + d.covers, 0)
   const totalRevenue = openDays.reduce((s, d) => s + d.revenue, 0)
   const avgCoversPerNight = openDays.length > 0 ? totalCovers / openDays.length : null
   const avgSpend = totalCovers > 0 ? totalRevenue / totalCovers : null
 
-  // ---- Contribution + tiers ----------------------------------------------------------------
-  const bench = new Map((db.prepare('SELECT category, target_pct AS pct FROM category_benchmarks').all() as { category: string, pct: number }[]).map(r => [r.category, r.pct]))
-  const cogsPct = bench.get('cogs') ?? null
-  const varOpexPct = bench.get('opex_variable') ?? null
   // Holidays and special nights other than buyouts aren't normal service nights.
   const holiday = replacedNightsByMonth(db, year).get(month) ?? 0
   const nights = operatingNights(year, month, holiday)
 
+  // ---- Expected covers for the month ---------------------------------------------------------
+  // Current month: the recent average (what we're doing now). Later months: the Capacity
+  // forecast's covers per normal night, so seasonality is in (a slow January isn't judged
+  // against an October average).
+  let forecastCoversPerNight: number | null = null
+  if (!isCurrentMonth) {
+    const monthStart = `${year}-${mm}-01`
+    const monthEndIso = `${year}-${mm}-${pad(new Date(Date.UTC(year, month, 0)).getUTCDate())}`
+    const model = createCapacityModel(db, monthStart, monthEndIso)
+    const sum = model.dayByDaySum(monthStart, monthEndIso)
+    forecastCoversPerNight = sum.operatingDays > 0 ? sum.expectedCovers / sum.operatingDays : null
+  }
+  const expectedCoversPerNight = isCurrentMonth ? avgCoversPerNight : (forecastCoversPerNight ?? avgCoversPerNight)
+  const coversSource: 'recent' | 'forecast' = !isCurrentMonth && forecastCoversPerNight != null ? 'forecast' : 'recent'
+  // Recent weekday shape scaled to the expected level.
+  const expectedScale = expectedCoversPerNight != null && avgCoversPerNight ? expectedCoversPerNight / avgCoversPerNight : 1
+
+  // ---- Contribution + tiers ----------------------------------------------------------------
+  const bench = new Map((db.prepare('SELECT category, target_pct AS pct FROM category_benchmarks').all() as { category: string, pct: number }[]).map(r => [r.category, r.pct]))
+  const cogsPct = bench.get('cogs') ?? null
+  const varOpexPct = bench.get('opex_variable') ?? null
+
   const contribRate = cogsPct != null && varOpexPct != null ? 1 - cogsPct - varOpexPct : null
-  const fohPerCover = avgCoversPerNight && nights > 0 ? variableLabor / (nights * avgCoversPerNight) : 0
+  const fohPerCover = expectedCoversPerNight && nights > 0 ? variableLabor / (nights * expectedCoversPerNight) : 0
   const contribPerCover = (spend: number | null) => (spend != null && contribRate != null ? spend * contribRate - fohPerCover : null)
+
+  // ---- Planned events, buyouts, catering and retail -----------------------------------------
+  // Revenue from the saved month budget (leaf rows only): Event Sales / Catering 41xx–42xx,
+  // Retail 43xx. Future months' event budget already follows the dated special nights.
+  const budgetSum = (glob: string, category: string) => (db.prepare(`
+    SELECT COALESCE(SUM(bt.amount), 0) AS total
+    FROM budget_targets bt JOIN accounts a ON a.id = bt.account_id
+    WHERE a.category = ? AND a.account_number GLOB ? AND a.is_active = 1 AND bt.year = ? AND bt.month = ?
+      AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id)
+  `).get(category, glob, year, month) as { total: number }).total
+  const eventSales = budgetSum('4[12]*', 'revenue')
+  // Dated buyouts (price above a normal night) and the dine-in diners on nights an event replaces
+  // service — both are special-night money the covers forecast doesn't include.
+  const buyoutExtra = plannedBuyoutIncrement(db, year, month).total
+  const replacedDineIn = specialNightAdditions(db, year, month, 0.65).dineIn
+  // Event food & drink costs mostly post to the same accounts as dine-in (5010 etc.), so a
+  // separate event cost % can't be measured: events use the same food & drink cost target and
+  // variable-expense % as dine-in. Event-only labor isn't modeled (caveat shown on the page).
+  const eventsRevenue = eventSales + buyoutExtra + replacedDineIn
+  const eventsMargin = contribRate != null ? eventsRevenue * contribRate : 0
+
+  const retailSales = budgetSum('43*', 'revenue')
+  // Retail cost %: actual 53xx ÷ 43xx since the move when there's enough history ($1,000+ sales),
+  // else this month's budgeted ratio, else the food & drink cost target.
+  const actualSum = (glob: string, category: string) => (db.prepare(`
+    SELECT COALESCE(SUM(dli.amount), 0) AS total
+    FROM daily_line_items dli JOIN accounts a ON a.id = dli.account_id
+    WHERE a.category = ? AND a.account_number GLOB ? AND dli.date >= ?
+  `).get(category, glob, NEW_LOCATION_START) as { total: number }).total
+  const retailActualSales = actualSum('43*', 'revenue')
+  const retailActualCost = actualSum('53*', 'cogs')
+  const retailBudgetCost = budgetSum('53*', 'cogs')
+  let retailCostPct: number | null = cogsPct
+  let retailCostBasis: 'actual' | 'budget' | 'target' = 'target'
+  if (retailActualSales >= 1000) { retailCostPct = retailActualCost / retailActualSales; retailCostBasis = 'actual' }
+  else if (retailSales > 0 && retailBudgetCost > 0) { retailCostPct = retailBudgetCost / retailSales; retailCostBasis = 'budget' }
+  const retailMargin = retailCostPct != null && varOpexPct != null ? retailSales * (1 - retailCostPct - varOpexPct) : 0
+  const plannedOtherMargin = eventsMargin + retailMargin
+
+  // Typical event size, for "about N more events" (dated special nights with event revenue).
+  const avgEvent = (db.prepare(`
+    SELECT AVG(event_revenue) AS avg, COUNT(*) AS n FROM special_nights
+    WHERE kind IN ('event', 'offsite', 'catering') AND event_revenue > 0
+  `).get() as { avg: number | null, n: number })
 
   const cumulative = [
     { key: 'fixed_labor', label: 'Fixed labor', detail: 'supervision, overhead, growth roles, benefits & payroll taxes', monthly: fixedLabor },
@@ -143,25 +216,20 @@ export default defineEventHandler((event) => {
     { key: 'fixed_opex', label: '+ Fixed opex (P&L breakeven)', detail: 'rent, insurance, loan interest, other fixed opex', monthly: fixedLabor + kitchenCrew + fixedOpex },
     { key: 'principal', label: '+ Loan principal (cash breakeven)', detail: 'scheduled principal — not on the P&L', monthly: fixedLabor + kitchenCrew + fixedOpex + loanPrincipal }
   ]
-  const coversNeeded = (monthly: number, spend: number | null): number | null => {
-    const c = contribPerCover(spend)
-    return c != null && c > 0 && nights > 0 ? monthly / nights / c : null
-  }
-  const tiers = cumulative.map(t => ({ ...t, coversPerNight: coversNeeded(t.monthly, avgSpend) }))
 
   // ---- By weekday: needed covers follow each night's real pattern ----------------------------
-  // Every night is asked to lift by the SAME percentage over its own recent average, so a quiet
-  // Tuesday needs a little more than it does today and a busy Friday carries most of the load,
-  // instead of every night needing an equal share. Solve for that common multiplier k:
-  //   sum over the month's nights of (k x avgCovers_w x contribution per cover_w) = monthly cost
+  // Every night is asked to lift by the SAME percentage over its expected covers, so a quiet
+  // Tuesday needs a little more and a busy Friday carries most of the load. Solve for the common
+  // multiplier k:  sum over the month's nights of (k x expectedCovers_w x contribution_w) = cost
   // using how many of each weekday the month has (scaled to `nights`, so holidays and replaced
-  // special nights come off proportionally). If any weekday lacks recent data, fall back to the
-  // old equal-share split (monthly / nights / that weekday's contribution).
+  // special nights come off proportionally). If any weekday lacks recent data, fall back to an
+  // equal share per night (cost / nights / that weekday's contribution).
   const weekdayStats = WEEKDAYS.map((w) => {
     const days = openDays.filter(d => d.dow === w.dow)
     const covers = days.reduce((s, d) => s + d.covers, 0)
     const revenue = days.reduce((s, d) => s + d.revenue, 0)
-    return { w, sampleDays: days.length, avgCovers: days.length > 0 ? covers / days.length : null, spend: covers > 0 ? revenue / covers : null }
+    const avgCovers = days.length > 0 ? covers / days.length : null
+    return { w, sampleDays: days.length, avgCovers, expectedCovers: avgCovers != null ? avgCovers * expectedScale : null, spend: covers > 0 ? revenue / covers : null }
   })
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
   const dowCount = new Map<number, number>()
@@ -171,29 +239,68 @@ export default defineEventHandler((event) => {
   }
   const rawNights = weekdayStats.reduce((s, x) => s + (dowCount.get(x.w.dow) ?? 0), 0)
   const nightScale = rawNights > 0 ? nights / rawNights : 0
-  // Monthly contribution the restaurant earns at k = 1 (i.e. at today's weekday pattern).
-  let baseContribution: number | null = 0
+  // Monthly dine-in contribution at expected covers (k = 1).
+  let dineInMargin: number | null = 0
   for (const x of weekdayStats) {
     const c = contribPerCover(x.spend)
-    if (x.avgCovers == null || c == null || c <= 0) { baseContribution = null; break }
-    baseContribution += (dowCount.get(x.w.dow) ?? 0) * nightScale * x.avgCovers * c
+    if (x.expectedCovers == null || c == null || c <= 0) { dineInMargin = null; break }
+    dineInMargin += (dowCount.get(x.w.dow) ?? 0) * nightScale * x.expectedCovers * c
   }
-  const weighted = baseContribution != null && baseContribution > 0
-  const weekdays = weekdayStats.map(({ w, sampleDays, avgCovers, spend }) => ({
-    key: w.key, label: w.label, short: w.short, sampleDays, avgCovers, avgSpend: spend,
-    coversNeeded: Object.fromEntries(cumulative.map(t => [t.key,
-      weighted ? avgCovers! * (t.monthly / baseContribution!) : coversNeeded(t.monthly, spend)]))
-  }))
-  // How much every night must grow (or may shrink) vs. its recent average, per layer.
-  const liftPct = Object.fromEntries(cumulative.map(t => [t.key, weighted ? t.monthly / baseContribution! - 1 : null]))
+  const weighted = dineInMargin != null && dineInMargin > 0
+  // Flat fallback for the dine-in margin when the weekday pattern is incomplete.
+  const dineInMarginFlat = expectedCoversPerNight != null && contribPerCover(avgSpend) != null
+    ? nights * expectedCoversPerNight * contribPerCover(avgSpend)! : null
+  const dineInMarginUsed = weighted ? dineInMargin! : dineInMarginFlat
+
+  // Covers/night needed (month average) for a cost amount, at the overall average spend.
+  const coversNeeded = (monthly: number, spend: number | null): number | null => {
+    const c = contribPerCover(spend)
+    return c != null && c > 0 && nights > 0 ? Math.max(0, monthly) / nights / c : null
+  }
+  // Same in "lift" terms: multiplier on every night's expected covers.
+  const liftFor = (monthly: number) => (weighted ? Math.max(0, monthly) / dineInMargin! : null)
+
+  const tiers = cumulative.map((t) => {
+    const afterOther = t.monthly - plannedOtherMargin
+    const stillShort = dineInMarginUsed != null ? t.monthly - dineInMarginUsed - plannedOtherMargin : null
+    return {
+      ...t,
+      // Dine-in only (the "Michelin" reading) and after planned events & retail.
+      coversPerNight: coversNeeded(t.monthly, avgSpend),
+      coversPerNightWithOther: coversNeeded(afterOther, avgSpend),
+      stillShort,
+      // Event sales that would close the gap at the events margin rate.
+      eventSalesNeeded: stillShort != null && stillShort > 0 && contribRate ? stillShort / contribRate : 0,
+      liftPct: { dineInOnly: liftFor(t.monthly) != null ? liftFor(t.monthly)! - 1 : null, withOther: liftFor(afterOther) != null ? liftFor(afterOther)! - 1 : null }
+    }
+  })
+
+  const weekdays = weekdayStats.map(({ w, sampleDays, avgCovers, expectedCovers, spend }) => {
+    const needed = (monthly: number) => {
+      if (weighted) return expectedCovers! * (Math.max(0, monthly) / dineInMargin!)
+      return coversNeeded(monthly, spend)
+    }
+    return {
+      key: w.key, label: w.label, short: w.short, sampleDays, avgCovers, expectedCovers, avgSpend: spend,
+      coversNeeded: Object.fromEntries(cumulative.map(t => [t.key, needed(t.monthly)])),
+      coversNeededWithOther: Object.fromEntries(cumulative.map(t => [t.key, needed(t.monthly - plannedOtherMargin)]))
+    }
+  })
 
   return {
-    year, month, asOfDate, windowStart, sampleOpenDays: openDays.length, nights,
+    year, month, isCurrentMonth, today, asOfDate, windowStart, sampleOpenDays: openDays.length, nights,
     laborBudgeted,
     avgCoversPerNight, avgSpend, excludedNights,
+    expectedCoversPerNight, coversSource,
     cogsPct, varOpexPct, contribRate, fohPerCover,
     contribPerCover: contribPerCover(avgSpend),
     components: { fixedLabor, kitchenCrew, variableLabor, fixedOpex, loanPrincipal },
-    tiers, weekdays, weekdayWeighting: weighted ? 'pattern' : 'equal', liftPct
+    dineInMargin: dineInMarginUsed,
+    planned: {
+      eventSales, buyoutExtra, replacedDineIn, eventsRevenue, eventsMargin,
+      retailSales, retailCostPct, retailCostBasis, retailMargin,
+      avgEventSize: avgEvent.n > 0 ? avgEvent.avg : null
+    },
+    tiers, weekdays, weekdayWeighting: weighted ? 'pattern' : 'equal'
   }
 })
