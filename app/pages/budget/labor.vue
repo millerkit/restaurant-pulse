@@ -589,8 +589,8 @@ function projectedMonthDollars(account: LaborAccount): number {
   const modeled = accountMonthlyDollars(account, asOfMonth)
   return actual.hasActual ? actual.amount + (modeled - expectedToDate(account)) : modeled
 }
-// Trend indicator next to each "trailing" hint: how the modeled figure compares to the
-// trailing reference. More than 5% above → red ▲ N%; more than 5% below → green ▼ N%;
+// Trend indicator next to "projected this month": how the projection compares to this
+// month's budget (so the budget's accuracy is visible). More than 5% above → red ▲ N%; more than 5% below → green ▼ N%;
 // within ±5% → green ✓. Direction is carried by the glyph (not just color) since
 // red/green alone isn't readable for everyone. Empty when there's nothing to compare against.
 const TREND_BAND = 0.05
@@ -608,14 +608,11 @@ function trendText(modeled: number, trailing: number): string {
   const pct = Math.round(Math.abs(r) * 100)
   return r > TREND_BAND ? `▲ ${pct}%` : r < -TREND_BAND ? `▼ ${pct}%` : '✓'
 }
-// The month's real trailing-3-month weekly average, projected out across this month's own
-// Fridays — a second, trend-based reference for "projected this month" (the bold figure)
-// to be checked against, replacing the old to-date actual-vs-expected pacing comparison
-// with a full-month, trend-based one (consistent with the weekly column's own comparison,
-// and with the year-level "Projected total labor" card's same trailing-average logic).
-function trailingProjectedMonthDollars(accountId: number): number | null {
-  const weeklyAvg = trailingActuals.value[accountId]?.weeklyAvg
-  return weeklyAvg != null ? weeklyAvg * fridaysInMonth(YEAR, asOfMonth) : null
+// This month's saved budget for one labor line (the plan is frozen on the 1st, so this is
+// what the month was budgeted at). Null when the line has no budget row.
+function budgetedMonthDollars(accountId: number): number | null {
+  const row = yearBudgetData.value[asOfMonth - 1]?.accounts.find(a => a.accountId === accountId)
+  return row?.amount ?? null
 }
 
 // Unsaved-edit tracking for the year toggle's "discard changes?" prompt: a snapshot of the
@@ -848,7 +845,7 @@ async function save() {
           <table v-if="TABLE_GROUPS.includes(group)" class="labor-table">
             <thead>
               <tr class="col-labels">
-                <td>role / person</td><td class="num num-inset">$/hr</td><td class="num num-inset">hrs/wk</td><td class="num">weekly</td><td class="num">projected this month</td><td class="trend-col"></td><td class="actions-col"></td>
+                <td>role / person</td><td class="num num-inset">$/hr</td><td class="num num-inset">hrs/wk</td><td class="num">budgeted this month</td><td class="num">projected this month</td><td class="trend-col"></td><td class="actions-col"></td>
               </tr>
             </thead>
 
@@ -902,14 +899,12 @@ async function save() {
                     </div>
                   </td>
                   <td class="num muted">
-                    <span>{{ fmt(slotWeeklyDollars(acc, slot, asOfMonth)) }}</span>
-                    <div v-if="acc.slots.length === 1 && trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
+                    <span v-if="acc.slots.length === 1 && budgetedMonthDollars(acc.accountId) != null">{{ fmt(budgetedMonthDollars(acc.accountId)!) }}</span>
                   </td>
                   <td class="num">
-                    <strong class="trend-num" :class="acc.slots.length === 1 ? trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) : ''">{{ fmt(acc.slots.length === 1 ? projectedMonthDollars(acc) : slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
-                    <div v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                    <strong class="trend-num" :class="acc.slots.length === 1 ? trendClass(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!) : ''">{{ fmt(acc.slots.length === 1 ? projectedMonthDollars(acc) : slotMonthlyDollars(acc, slot, asOfMonth)) }}</strong>
                   </td>
-                  <td class="trend-col"><span v-if="acc.slots.length === 1 && trailingProjectedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</span></td>
+                  <td class="trend-col"><span v-if="acc.slots.length === 1 && budgetedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!) }}</span></td>
                   <td class="actions-col"><button type="button" class="remove-slot" title="Remove person" @click="removePerson(acc, i)">×</button></td>
                 </tr>
                 <tr v-if="unplannedFor(acc).length > 0" class="unplanned-row">
@@ -928,14 +923,12 @@ async function save() {
                     </div>
                   </td>
                   <td class="num muted">
-                    <span>{{ fmt(accountWeeklyDollars(acc, asOfMonth)) }}</span>
-                    <div v-if="trailingActuals[acc.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[acc.accountId].weeklyAvg!) }}/wk</div>
+                    <span v-if="budgetedMonthDollars(acc.accountId) != null">{{ fmt(budgetedMonthDollars(acc.accountId)!) }}</span>
                   </td>
                   <td class="num">
-                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ fmt(projectedMonthDollars(acc)) }}</strong>
-                    <div v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(acc.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!)">{{ fmt(projectedMonthDollars(acc)) }}</strong>
                   </td>
-                  <td class="trend-col"><span v-if="trailingProjectedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), trailingProjectedMonthDollars(acc.accountId)!) }}</span></td>
+                  <td class="trend-col"><span v-if="budgetedMonthDollars(acc.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!)">{{ trendText(projectedMonthDollars(acc), budgetedMonthDollars(acc.accountId)!) }}</span></td>
                   <td class="actions-col"></td>
                 </tr>
                 <tr class="add-row">
@@ -966,14 +959,12 @@ async function save() {
                     </div>
                   </td>
                   <td class="num muted">
-                    <span>{{ fmt(accountWeeklyDollars(overtimeAccountIn(group)!, asOfMonth)) }}</span>
-                    <div v-if="trailingActuals[overtimeAccountIn(group)!.accountId]?.weeklyAvg != null" class="cell-hint">trailing {{ trailingWindowLabel }}: {{ fmt(trailingActuals[overtimeAccountIn(group)!.accountId].weeklyAvg!) }}/wk</div>
+                    <span v-if="budgetedMonthDollars(overtimeAccountIn(group)!.accountId) != null">{{ fmt(budgetedMonthDollars(overtimeAccountIn(group)!.accountId)!) }}</span>
                   </td>
                   <td class="num">
-                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ fmt(projectedMonthDollars(overtimeAccountIn(group)!)) }}</strong>
-                    <div v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="cell-hint">{{ fmt(trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }} projected from {{ trailingWindowLabel }} average</div>
+                    <strong class="trend-num" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), budgetedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ fmt(projectedMonthDollars(overtimeAccountIn(group)!)) }}</strong>
                   </td>
-                  <td class="trend-col"><span v-if="trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ trendText(projectedMonthDollars(overtimeAccountIn(group)!), trailingProjectedMonthDollars(overtimeAccountIn(group)!.accountId)!) }}</span></td>
+                  <td class="trend-col"><span v-if="budgetedMonthDollars(overtimeAccountIn(group)!.accountId) != null" class="trend" :class="trendClass(projectedMonthDollars(overtimeAccountIn(group)!), budgetedMonthDollars(overtimeAccountIn(group)!.accountId)!)">{{ trendText(projectedMonthDollars(overtimeAccountIn(group)!), budgetedMonthDollars(overtimeAccountIn(group)!.accountId)!) }}</span></td>
                   <td class="actions-col"></td>
                 </tr>
               </template>
