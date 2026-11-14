@@ -227,8 +227,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 ## Navigation map
 
 Defined in `app/utils/navigation.ts`, rendered by `app/layouts/default.vue` (bottom bar on phones).
-Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales: Daily Results (`/pl/revenue-calendar`, sales
-and profit views), Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`: complete weeks only, buyout/event/closed nights left out, an area's empty night counts as 0), Seasonal Trends (`/historical`). Team: Kitchen Hours &
+Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales (a section opens on its first tab): Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`: complete weeks only, buyout/event/closed nights left out, an area's empty night counts as 0), Daily Results (`/pl/revenue-calendar`, sales
+and profit views), Seasonal Trends (`/historical`). Team: Kitchen Hours &
 Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
 from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
 (`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), What-If

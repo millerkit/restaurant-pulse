@@ -41,8 +41,8 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Sales',
     icon: 'sales',
     pages: [
-      { label: 'Daily Results', to: '/pl/revenue-calendar', path: '/pl/revenue-calendar' },
       { label: 'Covers & Spend', to: '/capacity', path: '/capacity', tab: null },
+      { label: 'Daily Results', to: '/pl/revenue-calendar', path: '/pl/revenue-calendar' },
       { label: 'Seasonal Trends', to: '/historical', path: '/historical' }
     ]
   },
