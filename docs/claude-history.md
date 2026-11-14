@@ -6227,3 +6227,8 @@ recapture uplift uses 5 base nights instead of 6) and `capacity-history.ts` (the
 baseline no longer count Chef's Counter Sundays' covers or capacity). Local check: Chef's Counter Sunday expected covers
 null (was 6–8), its fill index 1.69 → 1.82. Budget food/beverage sales for months that haven't started drop on the next
 refresh (about 4 fewer Chef's Counter nights a month). `weekly-targets.ts` (weekday shares from real history) untouched.
+
+### Follow-up (same day): Skipped-nights control in Settings
+Settings › Restaurant Setup has a "Skipped nights for one area" list under Holiday closures
+(`AreaNightExclusionsSettings.vue`, `/api/settings/area-night-exclusions` get/post/delete, owner-only by default deny).
+Trend display only; no forecast refresh. Verified locally: add and remove through the UI and the API.

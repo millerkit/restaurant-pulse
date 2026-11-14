@@ -181,6 +181,10 @@ async function save() {
       <div class="rs-block holidays">
         <HolidayClosuresSettings />
       </div>
+
+      <div class="rs-block holidays">
+        <AreaNightExclusionsSettings />
+      </div>
     </template>
   </div>
 </template>
