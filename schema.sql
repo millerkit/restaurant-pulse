@@ -971,3 +971,12 @@ CREATE TABLE forecast_snapshots (
   created_at    TEXT NOT NULL,
   PRIMARY KEY (snapshot_date, kind, year, month, source, metric)
 );
+
+-- Nights one area shouldn't count in the Covers & Spend trend (e.g. Chef's Counter used for a private,
+-- no-revenue event while the rest of the restaurant ran normally). Added by migration 0021.
+CREATE TABLE IF NOT EXISTS area_night_exclusions (
+  area_id INTEGER NOT NULL REFERENCES capacity_areas(id),
+  date    TEXT NOT NULL,
+  note    TEXT,
+  PRIMARY KEY (area_id, date)
+);

@@ -6210,3 +6210,12 @@ trailing 3-month average. The old "weekly" column is now **"budgeted this month"
 to that budget (±5% band, unchanged) so Kit can judge how accurate the budget is. Per-person rows in a
 multi-person role show no budget (it's per account); the Total row does. The trailing-average hints were removed
 from these tables (the "Recent Actuals" stat tiles still use them). Salaried/management and Other Labor tables untouched.
+
+## 2026-11-14 — Covers & Spend trend: Chef's Counter Sundays and one-off nights
+
+Chef's Counter's latest-week dip (5.8 vs 7.8) came from two zero nights counted as open: Sunday (the counter never
+operates Sundays) and Tue Nov 3 (private investor event, no revenue). `server/api/capacity/area-trends.get.ts` now
+skips Sundays for Chef's Counter (`NEVER_OPEN_DOWS`, name-matched) and any night in the new `area_night_exclusions`
+table (migration 0021, seeded with Chef's Counter 2026-11-03; no UI yet, add rows by hand). Its Tuesday closure from
+2026-12-01 was already in `closed_dows`. Only the trend table changed: the capacity model/forecast still treat Sunday
+as a normal night for Chef's Counter (not touched).

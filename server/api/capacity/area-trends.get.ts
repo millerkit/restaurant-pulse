@@ -12,10 +12,15 @@
 //   with no guests, so a missing row is 0 covers, not a skipped night (before this, Salon and Outdoor
 //   averaged only the nights they had anyone). An area is closed that night when its seasonal capacity is
 //   null (Outdoor Nov-Apr) or the weekday is in its weekly closure (closed_dows from closed_from).
+// - Chef's Counter never operates Sundays (2026-11-14), so Sundays never count for it; its Tuesday closure
+//   from 2026-12-01 comes from closed_dows. Single nights an area was used for something else (a private
+//   no-revenue event) are listed in area_night_exclusions and skipped for that area only.
 import { MIN_COVERS_FOR_OPEN_DAY } from '../../utils/core-revenue'
 import { loadPlannedNights } from '../../utils/special-nights'
 
 const TREND_WEEKS = 12
+// Weekdays (0 = Sunday) an area never operates, regardless of closed_dows.
+const NEVER_OPEN_DOWS: { match: RegExp, dows: number[] }[] = [{ match: /^chef/i, dows: [0] }]
 type AreaRow = { id: number, name: string, novApr: number | null, mayOct: number | null, closedDows: string | null, closedFrom: string | null }
 type Sum = { covers: number, nights: number }
 type AreaTrend = {
@@ -69,10 +74,17 @@ export default defineEventHandler(() => {
     .all(firstWeek, lastSunday) as { date: string, areaId: number, covers: number }[]
   for (const r of rows) coversByKey.set(`${r.date}|${r.areaId}`, r.covers)
 
+  const excluded = new Set(
+    (db.prepare('SELECT area_id AS areaId, date FROM area_night_exclusions WHERE date BETWEEN ? AND ?')
+      .all(firstWeek, lastSunday) as { areaId: number, date: string }[]).map(r => `${r.areaId}|${r.date}`)
+  )
+
   const isSummer = (d: string) => { const m = Number(d.slice(5, 7)); return m >= 5 && m <= 10 }
   const areaOpen = (a: AreaRow, d: string): boolean => {
     const cap = isSummer(d) ? a.mayOct : a.novApr
     if (cap == null || cap <= 0) return false
+    if (excluded.has(`${a.id}|${d}`)) return false
+    if (NEVER_OPEN_DOWS.some(r => r.match.test(a.name) && r.dows.includes(weekday(d)))) return false
     if (a.closedDows && a.closedFrom && d >= a.closedFrom) {
       const closed = a.closedDows.split(',').map(s => Number(s.trim()))
       if (closed.includes(weekday(d))) return false
