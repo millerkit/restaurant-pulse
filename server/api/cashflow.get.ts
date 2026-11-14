@@ -258,7 +258,7 @@ export default defineEventHandler((event) => {
     if (b) bankSync = { throughDate: b.through_date, endingBalance: b.ending_balance, importedAt: b.imported_at }
   } catch { /* migration not applied yet */ }
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
-  const giftCardPlan = db.prepare('SELECT expected_cash, cushion_pct FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number, cushion_pct: number } | undefined
+  const giftCardPlan = db.prepare('SELECT expected_cash FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number } | undefined
 
   // Real, actual transfers only — see schema.sql's reserve_transfers
   // comment for why this replaced a fixed $/week schedule assumption (two
@@ -759,14 +759,13 @@ export default defineEventHandler((event) => {
       plannedRemainingTransfers,
       weeklyTransferAmount: currentWeeklyAmountForProjection,
       breakevenNetIncome: breakevenNetIncomeForYear,
-      // Gift card cash still expected before Dec 31 — cash in, not revenue
-      // (see schema.sql's gift_card_plan comment).
-      // giftCardCash is the usable part: the expected cash less the share
-      // held back as a new-year cushion.
-      giftCardCash: (giftCardPlan?.expected_cash ?? 0) * (1 - (giftCardPlan?.cushion_pct ?? 25) / 100),
-      giftCardExpected: giftCardPlan?.expected_cash ?? 0,
-      giftCardCushionPct: giftCardPlan?.cushion_pct ?? 25,
-      giftCardCushion: (giftCardPlan?.expected_cash ?? 0) * ((giftCardPlan?.cushion_pct ?? 25) / 100)
+      // Gift card cash on hand: a pure cushion for 2026 and 2027. Cash in, not
+      // revenue; never part of breakeven, Net Income, FCF or the covenant.
+      giftCardCushion: giftCardPlan?.expected_cash ?? 0,
+      // Weekly loan-reserve funding rate the cushion's runway is measured against.
+      giftCardWeeklyRate: reserveState.sustainability && reserveState.sustainability.weeksBeforeCatchUp > 0
+        ? reserveState.sustainability.minimumDepositsBeforeCatchUp / reserveState.sustainability.weeksBeforeCatchUp
+        : (currentWeeklyAmountForProjection > 0 ? currentWeeklyAmountForProjection : null)
     },
     covenant,
     covenantScoped,

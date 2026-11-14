@@ -26,7 +26,7 @@ type ReserveSustainability = {
   operatingCashFreedPerWeek: number | null
   operatingCashFreedTotal: number | null
 }
-type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, minimumDepositsBeforeCatchUp: number | null, yearEndBufferNeeded: number | null, weeksBeforeCatchUp: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number, giftCardCash: number, giftCardExpected: number, giftCardCushionPct: number, giftCardCushion: number }
+type YearProjection = { principal: number, catchUpInterest: number, reserveFundedPrincipal: number, reserveFundedCatchUpInterest: number, depreciation: number, reserveTransfers: number, preOpeningNonCashAddBack: number, loanCashNeeded: number, remainingLoanCashNeeded: number, remainingSbaPrincipal: number, remainingTransfers: number, remainingTransferCount: number, minimumWeeklyTransfer: number | null, minimumDepositsBeforeCatchUp: number | null, yearEndBufferNeeded: number | null, weeksBeforeCatchUp: number | null, plannedRemainingTransfers: number, weeklyTransferAmount: number, breakevenNetIncome: number, giftCardCushion: number, giftCardWeeklyRate: number | null }
 type Covenant = {
   minimumRatio: number
   testYear: number
@@ -139,17 +139,12 @@ const projectedFreeCashFlowForYear = computed<number | null>(() => {
   return projectedNetIncomeForYear.value - data.value.yearProjection.breakevenNetIncome
 })
 
-// Gift card cash is cash in without revenue (a liability until redeemed),
-// so it counts toward covering the loans but never toward Net Income.
-// Net Income needed once expected gift card cash is counted as a source of
-// cash: drives the "Profit needed" card and the pace chip.
-const breakevenNetIncomeAfterGiftCards = computed<number | null>(() => {
-  if (!data.value) return null
-  return data.value.yearProjection.breakevenNetIncome - data.value.yearProjection.giftCardCash
-})
-const projectedFreeCashFlowWithGiftCards = computed<number | null>(() => {
-  if (projectedFreeCashFlowForYear.value === null || !data.value) return null
-  return projectedFreeCashFlowForYear.value + data.value.yearProjection.giftCardCash
+// Gift card cash is a pure cushion: shown beside the outlook, never part of
+// the breakeven, Net Income or Free Cash Flow.
+const giftCardRunwayWeeks = computed<number | null>(() => {
+  const yp = data.value?.yearProjection
+  if (!yp || yp.giftCardCushion <= 0 || !yp.giftCardWeeklyRate) return null
+  return yp.giftCardCushion / yp.giftCardWeeklyRate
 })
 
 // ---- Eastern Bank DSCR covenant (informational only) -------------------
@@ -249,9 +244,7 @@ const catchUpDayTotals = computed(() => {
 
 // ---- Gift card cash expected before year end ----------------------------
 const giftCardAmount = ref<number | null>(null)
-const giftCardCushionPct = ref<number | null>(null)
-watch(() => data.value?.yearProjection.giftCardExpected ?? null, (v) => { if (giftCardAmount.value === null) giftCardAmount.value = v }, { immediate: true })
-watch(() => data.value?.yearProjection.giftCardCushionPct ?? null, (v) => { if (giftCardCushionPct.value === null) giftCardCushionPct.value = v }, { immediate: true })
+watch(() => data.value?.yearProjection.giftCardCushion ?? null, (v) => { if (giftCardAmount.value === null) giftCardAmount.value = v }, { immediate: true })
 const giftCardSubmitting = ref(false)
 const giftCardError = ref<string | null>(null)
 const giftCardSaved = ref(false)
@@ -263,13 +256,9 @@ async function submitGiftCard() {
     giftCardError.value = 'Enter an amount of 0 or more'
     return
   }
-  if (giftCardCushionPct.value === null || !Number.isFinite(giftCardCushionPct.value) || giftCardCushionPct.value < 0 || giftCardCushionPct.value > 100) {
-    giftCardError.value = 'Enter a cushion from 0 to 100%'
-    return
-  }
   giftCardSubmitting.value = true
   try {
-    await $fetch('/api/cashflow/gift-card-plan', { method: 'POST', body: { expectedCash: giftCardAmount.value, cushionPct: giftCardCushionPct.value } })
+    await $fetch('/api/cashflow/gift-card-plan', { method: 'POST', body: { expectedCash: giftCardAmount.value } })
     giftCardSaved.value = true
     await load()
   } catch (err: any) {
@@ -379,8 +368,8 @@ async function submitPlan() {
             <div class="hero-top">
               <span class="period">Profit needed to cover the loans</span>
             </div>
-            <div class="figure">{{ fmt(breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) }}</div>
-            <div class="caption">Net Income needed for full-year cash left after loans to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation)<template v-if="data.yearProjection.giftCardCash > 0">, and less {{ fmt(data.yearProjection.giftCardCash) }} of expected gift card cash (cash in without revenue<template v-if="data.yearProjection.giftCardCushion > 0">, after holding back {{ data.yearProjection.giftCardCushionPct }}% as a cushion</template>)</template>.</div>
+            <div class="figure">{{ fmt(data.yearProjection.breakevenNetIncome) }}</div>
+            <div class="caption">Net Income needed for full-year cash left after loans to hit $0: the full year's loan cash outside the P&amp;L ({{ fmt(data.yearProjection.loanCashNeeded) }}, already paid plus still to come), less the non-cash expenses already inside Net Income ({{ fmt(data.yearProjection.preOpeningNonCashAddBack + data.yearProjection.depreciation) }} of pre-opening reclass entries and depreciation).</div>
           </div>
         </div>
         <div v-if="outlook" class="outlook">
@@ -392,8 +381,8 @@ async function submitPlan() {
             <div v-for="sc in outlook.scenarios" :key="sc.key" :class="['hero-card', sc.key === 'budget' && 'anchor']">
               <div class="hero-top">
                 <span class="period">{{ OUTLOOK_TITLE[sc.key] }}</span>
-                <span v-if="breakevenNetIncomeAfterGiftCards !== null" :class="['chip', sc.netIncome >= breakevenNetIncomeAfterGiftCards ? 'good' : 'critical']">
-                  {{ sc.netIncome >= breakevenNetIncomeAfterGiftCards ? `✓ ${fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards)} above needed` : `▲ ${fmt(breakevenNetIncomeAfterGiftCards - sc.netIncome)} short` }}
+                <span :class="['chip', sc.netIncome >= data.yearProjection.breakevenNetIncome ? 'good' : 'critical']">
+                  {{ sc.netIncome >= data.yearProjection.breakevenNetIncome ? `✓ ${fmt(sc.netIncome - data.yearProjection.breakevenNetIncome)} above needed` : `▲ ${fmt(data.yearProjection.breakevenNetIncome - sc.netIncome)} short` }}
                 </span>
               </div>
               <div class="outlook-kind">{{ OUTLOOK_KIND[sc.key] }}</div>
@@ -401,14 +390,14 @@ async function submitPlan() {
               <div class="caption">Net Income · {{ fmt(sc.totals.revenue) }} revenue<template v-if="sc.key !== 'budget'">
                 · {{ fmt(sc.netIncome - outlook.scenarios[0]!.netIncome) }} vs. budget</template></div>
               <div class="caption">{{ OUTLOOK_NOTE[sc.key] }}</div>
-              <div v-if="breakevenNetIncomeAfterGiftCards !== null" class="outlook-fcf">
+              <div class="outlook-fcf">
                 <div class="outlook-fcf-row">
                   <span>Projected year-end cash left after loans</span>
-                  <strong :class="sc.netIncome - breakevenNetIncomeAfterGiftCards >= 0 ? 'pos' : 'neg'">{{ fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards) }}</strong>
+                  <strong :class="sc.netIncome - data.yearProjection.breakevenNetIncome >= 0 ? 'pos' : 'neg'">{{ fmt(sc.netIncome - data.yearProjection.breakevenNetIncome) }}</strong>
                 </div>
-                <div v-if="data.yearProjection.giftCardCash > 0" class="outlook-fcf-row sub">
-                  <span>Without gift card cash</span>
-                  <span>{{ fmt(sc.netIncome - breakevenNetIncomeAfterGiftCards - data.yearProjection.giftCardCash) }}</span>
+                <div v-if="data.yearProjection.giftCardCushion > 0" class="outlook-fcf-row sub">
+                  <span>Gift card cushion (not counted)</span>
+                  <span>{{ fmt(data.yearProjection.giftCardCushion) }}<template v-if="giftCardRunwayWeeks !== null"> · {{ giftCardRunwayWeeks.toFixed(1) }} weeks of loan payments</template></span>
                 </div>
               </div>
             </div>
@@ -424,8 +413,8 @@ async function submitPlan() {
           <div class="hero-card anchor">
             <div class="hero-top">
               <span class="period">Profit projected this year</span>
-              <span :class="['chip', projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'good' : 'critical']">
-                {{ projectedNetIncomeForYear >= (breakevenNetIncomeAfterGiftCards ?? data.yearProjection.breakevenNetIncome) ? 'On pace to cover it' : 'Short of covering it' }}
+              <span :class="['chip', projectedNetIncomeForYear >= (data.yearProjection.breakevenNetIncome ?? data.yearProjection.breakevenNetIncome) ? 'good' : 'critical']">
+                {{ projectedNetIncomeForYear >= (data.yearProjection.breakevenNetIncome ?? data.yearProjection.breakevenNetIncome) ? 'On pace to cover it' : 'Short of covering it' }}
               </span>
             </div>
             <div class="figure">{{ fmt(projectedNetIncomeForYear) }}</div>
@@ -434,19 +423,15 @@ async function submitPlan() {
         </div>
         <div v-if="projectedFreeCashFlowForYear !== null" class="section-note">
           At budget, projected year-end Free Cash Flow: <strong>{{ fmt(projectedFreeCashFlowForYear) }}</strong>
-          <template v-if="data.yearProjection.giftCardCash > 0 && projectedFreeCashFlowWithGiftCards !== null">
-            — <strong>{{ fmt(projectedFreeCashFlowWithGiftCards) }}</strong> including {{ fmt(data.yearProjection.giftCardCash) }} of gift card cash<template v-if="data.yearProjection.giftCardCushion > 0"> ({{ fmt(data.yearProjection.giftCardCushion) }} held back as a {{ YEAR + 1 }} cushion)</template>
-          </template>
         </div>
         <form class="transfer-form plan-form" @submit.prevent="submitGiftCard">
           <div class="transfer-form-row">
-            <label>Gift card cash still expected before Dec 31<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
-            <label>Hold back as {{ YEAR + 1 }} cushion (%)<input type="number" step="1" min="0" max="100" v-model.number="giftCardCushionPct" required /></label>
+            <label>Gift card cash on hand<input type="number" step="0.01" min="0" v-model.number="giftCardAmount" required /></label>
             <button type="submit" :disabled="giftCardSubmitting">{{ giftCardSubmitting ? 'Saving…' : 'Update' }}</button>
             <span v-if="giftCardError" class="chip critical">{{ giftCardError }}</span>
             <span v-else-if="giftCardSaved" class="chip good">Saved</span>
           </div>
-          <div class="section-note">Gift card sales are cash in the bank but not revenue, so they don't touch Net Income or the covenant. This is a timing benefit: when the cards are redeemed (mostly {{ YEAR + 1 }}), that revenue arrives with no new cash, so don't count on it for the {{ YEAR + 1 }} reserve plan. The cushion % is the share set aside for that: only the rest counts toward covering this year's loans<template v-if="giftCardAmount && giftCardCushionPct !== null"> ({{ fmt(giftCardAmount * (1 - giftCardCushionPct / 100)) }} counted, {{ fmt(giftCardAmount * giftCardCushionPct / 100) }} held back at the values above)</template>.</div>
+          <div class="section-note">Gift card sales are cash in the bank but not revenue, so they never touch Net Income, the covenant or the numbers above. This is a pure cushion for {{ YEAR }} and {{ YEAR + 1 }}: it buffers a shortfall, but as the cards are redeemed (mostly {{ YEAR + 1 }}) the revenue arrives with no new cash, so it shrinks. Weeks of loan payments = the cushion ÷ the weekly loan-reserve funding rate.</div>
         </form>
       </section>
 

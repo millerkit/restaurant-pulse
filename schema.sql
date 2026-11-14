@@ -568,16 +568,15 @@ CREATE TABLE reserve_plan (
 -- Gift card cash still expected before year end (added 2026-10-28). Gift
 -- card sales are cash in the bank but a balance-sheet liability, not
 -- revenue, so they never reach daily_line_items or Net Income; the Cash
--- Flow tab's Year-End Projection adds this on top of projected Free Cash
--- Flow as a cash-timing benefit. The cash is borrowed from future revenue:
+-- Flow tab shows it as a separate cushion (2026-11-14: no longer added to
+-- Free Cash Flow or breakeven). The cash is borrowed from future revenue:
 -- redemptions later show up as revenue with no new cash. Single-row
 -- (id is always 1), same shape as reserve_plan.
 CREATE TABLE gift_card_plan (
   id             INTEGER PRIMARY KEY CHECK (id = 1),
   expected_cash  REAL NOT NULL,
-  -- Share (0-100) of expected_cash held back as a new-year cushion (added
-  -- 2026-10-30): redemptions bring revenue with no new cash, so only
-  -- expected_cash * (1 - cushion_pct/100) counts toward this year's loans.
+  -- RETIRED 2026-11-14 (unused; gift card cash is a pure cushion now). Kept
+  -- to avoid a migration.
   cushion_pct    REAL NOT NULL DEFAULT 25 CHECK (cushion_pct >= 0 AND cushion_pct <= 100),
   updated_at     TEXT NOT NULL
 );

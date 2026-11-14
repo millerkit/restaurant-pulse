@@ -6190,3 +6190,23 @@ matched QBO. January 2026 core dine-in is now ~$91.6K (spend ~$105/cover). The f
 unaffected (covers already included those guests). Similar ~$4.4K/night On-Site Events postings on ordinary
 weeknights exist in January 2025 (~$39K) and in February 2025/2026 ($17–23K): likely the same program, left as is
 pending Kit.
+
+
+## 2026-11-14 — Gift card cash became a pure cushion (Cash & Loans)
+
+Kit found the "hold back % for 2027" input counter-intuitive (a bigger hold-back *raised* profit needed, because
+less gift card cash counted toward the loans; the math was right, the framing wasn't). Removed the counted/held-back
+split: `giftCardCash`/`giftCardExpected`/`giftCardCushionPct` are gone from `/api/cashflow`; "Profit needed to cover
+the loans", the above/short chips and "cash left after loans" no longer include gift cards. The outlook cards show a
+muted "Gift card cushion (not counted)" row with weeks of runway = cushion ÷ weekly reserve funding rate
+(`giftCardWeeklyRate`: minimum deposits ÷ weeks before the Dec 20 catch-up, else the planned weekly transfer).
+`gift_card_plan.cushion_pct` stays in the table, unused (no migration). Gift-card POST takes `expectedCash` only.
+
+## 2026-11-14 — Staffing Plan: projection delta now measured against budget
+
+On Planning › Staffing Plan, the hourly-role tables (BOH/FOH) no longer compare "projected this month" with the
+trailing 3-month average. The old "weekly" column is now **"budgeted this month"** (the line's saved
+`budget_targets` amount for the current month, via `yearBudgetData`), and the ▲/▼/✓ chip compares the projection
+to that budget (±5% band, unchanged) so Kit can judge how accurate the budget is. Per-person rows in a
+multi-person role show no budget (it's per account); the Total row does. The trailing-average hints were removed
+from these tables (the "Recent Actuals" stat tiles still use them). Salaried/management and Other Labor tables untouched.
