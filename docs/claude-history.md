@@ -6276,3 +6276,9 @@ matching the screenshot) were inserted for 2026-09-10..11-04, the page and API c
 $103,420 dine-in − $6,820 events = $1,623 short ≈ $2,618 event sales; toggle, month switch to a forecast month,
 summary line on Covers & Spend), then those 51 rows deleted. The hydration-mismatch console warnings also
 appear on untouched pages (pre-existing).
+
+Follow-up (same day): the one-line `BreakevenSummary` on Covers & Spend was removed. It stretched to fill its grid
+slot as a mostly blank box, and with the full view on its own tab Kit didn't need it there.
+Follow-up (same day): the Breakeven month select became the app's usual `BudgetYearToggle` + Jan–Dec month tabs
+(like Budget and Sales Plan). The year is the shared budget-year selection; months already past in the current year
+are disabled, since the page looks forward from this month. `?month=` stays in the URL.

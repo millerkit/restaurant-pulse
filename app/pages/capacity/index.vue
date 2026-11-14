@@ -32,7 +32,6 @@ type Actual = { throughDate: string, covers: number | null, revenue: number | nu
 type Period = { start: string, end: string, isFuture: boolean, isCurrent: boolean, assumed: Assumed, actual: Actual }
 type AreaBreakdownRow = { areaId: number, areaName: string, assumedCoversPerNight: number, assumedPerCover: number, actualCoversPerNight: number | null, actualNights?: number, byWeekday?: Record<number, { covers: number, nights: number }>, actualPerCover: number | null }
 
-const { isOwner } = useMe()
 const { data: paceData, pending: pacePending, error: paceError, refresh: paceRefresh } = await useFetch('/api/capacity')
 const { data: trendData } = await useFetch<{ asOfAreaDate: string | null, throughDate: string | null, excludedNights: { date: string, kind: string, note: string | null }[], areaTrends: { areaId: number, areaName: string, capacity: number | null, recent4WeekCoversPerNight: number | null, prior4WeekCoversPerNight: number | null, points: { weekStart: string, nights: number, coversPerNight: number | null }[] }[] }>('/api/capacity/area-trends')
 
@@ -797,9 +796,6 @@ async function save() {
           </div>
         </section>
 
-
-          <!-- Breakeven moved to its own tab (Planning › Breakeven); a one-line summary stays here -->
-          <BreakevenSummary v-if="isOwner" />
 
           <!-- Month by month, one at a time -->
           <section>

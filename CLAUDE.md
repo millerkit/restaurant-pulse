@@ -286,8 +286,8 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Breakeven (Planning › Breakeven, `/breakeven`, owner-only)
 
-`server/api/breakeven.get.ts` + `app/pages/breakeven.vue` (moved out of Covers & Spend 2026-11-14; that page keeps a
-one-line `BreakevenSummary`). Month picker: current month through next December. **Gap view**: cost layer −
+`server/api/breakeven.get.ts` + `app/pages/breakeven.vue` (moved out of Covers & Spend 2026-11-14; nothing
+of it remains there). Year toggle (shared with the Budget pages) + Jan–Dec month tabs; past months this year are disabled. **Gap view**: cost layer −
 dine-in margin at **expected covers** (recent average for the current month, Capacity forecast after) − planned
 events/buyouts/catering margin (budget 41xx–42xx + dated buyout increment + event-night diners, at the dine-in
 contribution rate) − planned retail margin (budget 43xx; cost % from actual 53xx÷43xx since the move once ≥ $1K,

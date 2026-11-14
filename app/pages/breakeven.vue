@@ -2,7 +2,7 @@
 // Planning › Breakeven (owner-only by default deny). Fed by /api/breakeven — see that route's header
 // for how the cost layers, expected covers and planned events/retail credits are built.
 import site from '~/config/site.json'
-import { MONTH_NAMES } from '~/composables/useBudgetData'
+import { MONTH_NAMES, useBudgetYearSelection } from '~/composables/useBudgetData'
 
 useHead({ title: `${site.restaurantName} — Breakeven` })
 
@@ -36,9 +36,11 @@ type Breakeven = {
 
 const route = useRoute()
 const router = useRouter()
-const selYear = ref<number | null>(Number(route.query.year) || null)
+// Year: the same 2026/2027 toggle as Budget / Sales Plan / Staffing Plan (shared, remounts the page).
+const { year: selYear } = useBudgetYearSelection()
+// Month: ?month= in the URL; left out, the API picks the first open month (this month, or January).
 const selMonth = ref<number | null>(Number(route.query.month) || null)
-const query = computed(() => ({ ...(selYear.value ? { year: selYear.value } : {}), ...(selMonth.value ? { month: selMonth.value } : {}) }))
+const query = computed(() => ({ year: selYear.value, ...(selMonth.value ? { month: selMonth.value } : {}) }))
 const { data, pending, error, refresh } = await useFetch<Breakeven>('/api/breakeven', { query, lazy: true })
 
 // Default to the P&L breakeven (lines up with the budget), cash breakeven one click away.
@@ -46,20 +48,16 @@ const selectedTier = ref('fixed_opex')
 // "With planned events & retail" is the realistic reading; "dine-in only" is the Michelin one.
 const mode = ref<'with' | 'dinein'>('with')
 
-// Month options: current month through December of next year.
-const monthChoices = computed(() => {
+// Month tabs, Jan–Dec like the other Planning pages. Months already behind us this year are
+// disabled: the breakeven reads recent covers and the budget forward, not a closed month.
+function isPastMonth(m: number) {
   const t = data.value?.today
-  if (!t) return []
-  const out: { year: number, month: number }[] = []
-  for (let y = t.year; y <= t.year + 1; y++) for (let m = y === t.year ? t.month : 1; m <= 12; m++) out.push({ year: y, month: m })
-  return out
-})
-const selectedKey = computed(() => data.value ? `${data.value.year}-${data.value.month}` : '')
-function onMonthChange(e: Event) {
-  const [y = null, m = null] = (e.target as HTMLSelectElement).value.split('-').map(Number)
-  selYear.value = y
+  return !!t && selYear.value === t.year && m < t.month
+}
+function selectMonth(m: number) {
+  if (isPastMonth(m)) return
   selMonth.value = m
-  router.replace({ query: { ...route.query, year: y, month: m } })
+  router.replace({ query: { ...route.query, month: m } })
 }
 
 const tier = computed(() => data.value?.tiers.find(t => t.key === selectedTier.value) ?? null)
@@ -120,14 +118,18 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
     <div v-if="error" class="drill-card"><span class="chip critical">Couldn't load breakeven</span> <span class="quiet-note">{{ error.message }}</span></div>
     <div v-else-if="pending && !data" class="state-note">Loading…</div>
     <template v-else-if="data">
-      <div class="be-controls">
-        <label class="be-month">
-          Month
-          <select :value="selectedKey" @change="onMonthChange">
-            <option v-for="c in monthChoices" :key="`${c.year}-${c.month}`" :value="`${c.year}-${c.month}`">{{ MONTH_NAMES[c.month - 1] }} {{ c.year }}</option>
-          </select>
-        </label>
-        <span v-if="pending" class="quiet-note">Updating…</span>
+      <BudgetYearToggle />
+      <div class="month-tabs" role="tablist" aria-label="Month">
+        <button
+          v-for="(name, i) in MONTH_NAMES" :key="name"
+          type="button" role="tab"
+          :aria-selected="data.month === i + 1"
+          :disabled="isPastMonth(i + 1)"
+          :title="isPastMonth(i + 1) ? 'Past month — breakeven looks forward from this month' : undefined"
+          :class="['month-tab', data.month === i + 1 && 'active']"
+          @click="selectMonth(i + 1)"
+        >{{ name }}</button>
+        <span v-if="pending" class="quiet-note updating">Updating…</span>
       </div>
 
       <div v-if="data.avgSpend === null || data.contribRate === null" class="drill-card">
@@ -284,7 +286,15 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
 </template>
 
 <style scoped>
-.be-controls { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
+.month-tabs { display: flex; align-items: flex-end; gap: 2px; margin: 4px 0 16px; border-bottom: 1px solid var(--hair); overflow-x: auto; }
+.month-tab {
+  font-size: 12px; font-weight: 700; font-family: inherit; padding: 7px 16px;
+  border: 1px solid var(--hair); border-bottom: none; border-radius: 8px 8px 0 0;
+  background: var(--surface-alt); color: var(--ink-2); cursor: pointer; position: relative; top: 1px;
+}
+.month-tab.active { background: var(--surface); color: var(--ink); border-bottom: 1px solid var(--surface); }
+.month-tab:disabled { opacity: 0.45; cursor: default; }
+.updating { margin-left: 10px; align-self: center; }
 .be-card {
   background: var(--surface); border: 1px solid var(--hair); border-radius: 18px;
   box-shadow: var(--card-shadow); padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 10px;
@@ -292,8 +302,6 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
 }
 .be-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .be-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
-.be-month { font-size: 12.5px; color: var(--ink-3); display: flex; align-items: center; gap: 6px; }
-.be-month select { font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--hair); border-radius: 6px; background: var(--surface); color: var(--ink-2); }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 .be-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .be-table thead td { font-size: 11px; color: var(--ink-3); padding: 4px 8px; vertical-align: bottom; }
@@ -313,6 +321,7 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
 .seg button + button { border-left: 1px solid var(--hair); }
 .seg button.on { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--ink); font-weight: 600; }
 @media (max-width: 640px) {
+  .month-tab { padding: 7px 11px; }
   .be-table { font-size: 12px; }
   .be-table thead td, .be-table tbody td, .be-table tfoot td { padding-left: 4px; padding-right: 4px; }
 }
