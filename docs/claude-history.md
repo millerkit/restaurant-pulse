@@ -6219,3 +6219,11 @@ skips Sundays for Chef's Counter (`NEVER_OPEN_DOWS`, name-matched) and any night
 table (migration 0021, seeded with Chef's Counter 2026-11-03; no UI yet, add rows by hand). Its Tuesday closure from
 2026-12-01 was already in `closed_dows`. Only the trend table changed: the capacity model/forecast still treat Sunday
 as a normal night for Chef's Counter (not touched).
+
+### Follow-up (same day): forecast model skips Chef's Counter Sundays
+`server/utils/area-hours.ts` (`neverOpenDows`, name-matched, Chef's Counter = Sunday) is now shared by the trend route,
+`capacity-model.ts` (`closureOn`: Sunday always dark; stored covers are per *operating* night, so the Tuesday-closure
+recapture uplift uses 5 base nights instead of 6) and `capacity-history.ts` (the per-area fill index and the data
+baseline no longer count Chef's Counter Sundays' covers or capacity). Local check: Chef's Counter Sunday expected covers
+null (was 6–8), its fill index 1.69 → 1.82. Budget food/beverage sales for months that haven't started drop on the next
+refresh (about 4 fewer Chef's Counter nights a month). `weekly-targets.ts` (weekday shares from real history) untouched.

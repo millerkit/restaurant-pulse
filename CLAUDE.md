@@ -37,7 +37,7 @@ Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends
 - **Owner pay**: Executive Chef and Business Manager accounts are `is_owner_compensation` (Settings ›
   Staff & Pay Rules); the GM is a hired market-rate role (not owner pay).
 - **Areas** (`capacity_areas`): Dining Room, Bar, Salon, Chef's Counter (6 seats × 2 turns, max 12; $190
-  prix fixe Tue–Sat; **closed Tuesdays from 2026-12-01**, 85% recapture), Outdoor (closed Nov–Apr).
+  prix fixe Tue–Sat; **closed Tuesdays from 2026-12-01**, 85% recapture; **never opens Sundays**, `server/utils/area-hours.ts`), Outdoor (closed Nov–Apr). One-off nights an area shouldn't count in the Covers & Spend trend go in `area_night_exclusions` (no UI; SQL).
   Toast table names map to areas: banquette 1–7 and 20s → Dining Room, 30s/40s → Salon, 50s → Outdoor,
   B# → Bar, C# → Chef's Counter.
 - **Loans**: 10 loans in `loan_schedule` (Eastern Bank SBA, QBO account 2740, plus 9 investor notes; the

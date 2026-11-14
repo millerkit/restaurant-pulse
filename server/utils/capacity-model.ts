@@ -5,6 +5,7 @@
 // food/beverage sales with exactly the same math as the Capacity pages.
 import type Database from 'better-sqlite3'
 import { loadReplacedNights } from './special-nights'
+import { neverOpenDows } from './area-hours'
 
 type Db = Database.Database
 
@@ -21,16 +22,22 @@ const SERVICE_NIGHTS_PER_WEEK = 6
 // Before closed_from, or with no closure configured, uplift is 1 and nothing changes.
 // After it, the area is dark on its closed weekdays and its other nights carry
 // recapture% of the closed nights' covers: with `closed` closed nights a week,
-// weekly covers become base*(6 - closed*(1-r)), spread over the 6-closed open nights.
+// weekly covers become base*(6 - closed*(1-r)), spread over the 6-closed open nights
+// (6 is 6 minus the area's never-open weekdays, see area-hours.ts).
 function closureOn(area: AreaRow, iso: string, dow: number): { closedToday: boolean, uplift: number } {
-  if (!area.closed_from || iso < area.closed_from || !area.closed_dows) return { closedToday: false, uplift: 1 }
-  const closed = new Set(area.closed_dows.split(',').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6 && n !== 1))
-  if (closed.size === 0) return { closedToday: false, uplift: 1 }
-  const open = SERVICE_NIGHTS_PER_WEEK - closed.size
+  // Never-open weekdays (Chef's Counter Sundays): always dark, and the stored covers are per
+  // *operating* night, so they shrink the week's base nights but never get recaptured.
+  const never = neverOpenDows(area.name)
+  const baseNights = SERVICE_NIGHTS_PER_WEEK - never.size
+  const neverToday = never.has(dow)
+  if (!area.closed_from || iso < area.closed_from || !area.closed_dows) return { closedToday: neverToday, uplift: 1 }
+  const closed = new Set(area.closed_dows.split(',').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6 && n !== 1 && !never.has(n)))
+  if (closed.size === 0) return { closedToday: neverToday, uplift: 1 }
+  const open = baseNights - closed.size
   const r = Math.min(1, Math.max(0, (area.closure_recapture_pct ?? 0) / 100))
   return {
-    closedToday: closed.has(dow),
-    uplift: open > 0 ? (SERVICE_NIGHTS_PER_WEEK - closed.size * (1 - r)) / open : 1
+    closedToday: neverToday || closed.has(dow),
+    uplift: open > 0 ? (baseNights - closed.size * (1 - r)) / open : 1
   }
 }
 type AreaMonthRow = { area_id: number, month: number, expected_covers: number }

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { neverOpenOn } from './area-hours'
 import { CORE_REVENUE_ACCOUNT_NUMBERS, MIN_COVERS_FOR_OPEN_DAY } from './core-revenue'
 
 type Db = Database.Database
@@ -284,10 +285,16 @@ export function loadCapacityHistory(db: Db) {
   // use May-Oct capacity for every day, so winter days were judged against summer
   // seating that didn't exist, which understated the baseline (and so every
   // winter month "Set by History" produced) by roughly a fifth.
-  const areaCapacityRows = db.prepare('SELECT id, capacity_nov_apr AS capacityNovApr, capacity_may_oct AS capacityMayOct FROM capacity_areas').all() as { id: number; capacityNovApr: number | null; capacityMayOct: number | null }[]
+  const areaCapacityRows = db.prepare('SELECT id, name, capacity_nov_apr AS capacityNovApr, capacity_may_oct AS capacityMayOct FROM capacity_areas').all() as { id: number; name: string; capacityNovApr: number | null; capacityMayOct: number | null }[]
   const areaCapForMonth = (a: { capacityNovApr: number | null; capacityMayOct: number | null }, month: number) =>
     (month >= 5 && month <= 10 ? a.capacityMayOct : a.capacityNovApr) ?? 0
-  const totalCapForMonth = (month: number) => areaCapacityRows.reduce((sum, a) => sum + areaCapForMonth(a, month), 0)
+  // An area's capacity on a given date: 0 on its never-open weekdays (Chef's Counter Sundays), so those
+  // nights neither add capacity nor count covers toward its fill rate (area-hours.ts).
+  const dowOf = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay()
+  const areaCapOn = (a: { name: string; capacityNovApr: number | null; capacityMayOct: number | null }, iso: string) =>
+    neverOpenOn(a.name, dowOf(iso)) ? 0 : areaCapForMonth(a, Number(iso.slice(5, 7)))
+  const totalCapOn = (iso: string) => areaCapacityRows.reduce((sum, a) => sum + areaCapOn(a, iso), 0)
+  const areaNameById = new Map(areaCapacityRows.map(a => [a.id, a.name]))
 
   // Only open days since the move (same open-day rule as the rest of this file).
   const moveStart = LOCATION_MOVE_PERIODS[1]!.start
@@ -302,13 +309,13 @@ export function loadCapacityHistory(db: Db) {
   let totalCapDays = 0
   for (const r of areaDayRows) {
     if (!openDateSet.has(r.date)) continue
+    if (neverOpenOn(areaNameById.get(r.areaId) ?? '', dowOf(r.date))) continue
     areaCovers.set(r.areaId, (areaCovers.get(r.areaId) ?? 0) + r.covers)
     totalAreaCovers += r.covers
   }
   for (const d of openDaysSinceMove) {
-    const month = Number(d.date.slice(5, 7))
-    for (const a of areaCapacityRows) areaCapDays.set(a.id, (areaCapDays.get(a.id) ?? 0) + areaCapForMonth(a, month))
-    totalCapDays += totalCapForMonth(month)
+    for (const a of areaCapacityRows) areaCapDays.set(a.id, (areaCapDays.get(a.id) ?? 0) + areaCapOn(a, d.date))
+    totalCapDays += totalCapOn(d.date)
   }
   const blendedFill = totalCapDays > 0 ? totalAreaCovers / totalCapDays : 0
   const areaFillIndex = (totalAreaCovers > 0 && blendedFill > 0)
@@ -332,7 +339,7 @@ export function loadCapacityHistory(db: Db) {
     const idx = monthlyIndex.find(m => m.month === month)?.indexPct
     if (idx == null) continue
     dataBaselineActual += r.covers
-    dataBaselineExpected += totalCapForMonth(month) * (idx / 100)
+    dataBaselineExpected += totalCapOn(r.date) * (idx / 100)
   }
   const dataAnnualFillPct = dataBaselineExpected > 0 ? dataBaselineActual / dataBaselineExpected : null
 

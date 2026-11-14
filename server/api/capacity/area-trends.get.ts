@@ -16,11 +16,10 @@
 //   from 2026-12-01 comes from closed_dows. Single nights an area was used for something else (a private
 //   no-revenue event) are listed in area_night_exclusions and skipped for that area only.
 import { MIN_COVERS_FOR_OPEN_DAY } from '../../utils/core-revenue'
+import { neverOpenOn } from '../../utils/area-hours'
 import { loadPlannedNights } from '../../utils/special-nights'
 
 const TREND_WEEKS = 12
-// Weekdays (0 = Sunday) an area never operates, regardless of closed_dows.
-const NEVER_OPEN_DOWS: { match: RegExp, dows: number[] }[] = [{ match: /^chef/i, dows: [0] }]
 type AreaRow = { id: number, name: string, novApr: number | null, mayOct: number | null, closedDows: string | null, closedFrom: string | null }
 type Sum = { covers: number, nights: number }
 type AreaTrend = {
@@ -84,7 +83,7 @@ export default defineEventHandler(() => {
     const cap = isSummer(d) ? a.mayOct : a.novApr
     if (cap == null || cap <= 0) return false
     if (excluded.has(`${a.id}|${d}`)) return false
-    if (NEVER_OPEN_DOWS.some(r => r.match.test(a.name) && r.dows.includes(weekday(d)))) return false
+    if (neverOpenOn(a.name, weekday(d))) return false
     if (a.closedDows && a.closedFrom && d >= a.closedFrom) {
       const closed = a.closedDows.split(',').map(s => Number(s.trim()))
       if (closed.includes(weekday(d))) return false
