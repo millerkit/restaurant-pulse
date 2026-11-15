@@ -1,5 +1,6 @@
 import { refreshForecasts } from './capacity-forecast'
 import { takeForecastSnapshots } from './forecast-snapshots'
+import { syncGiftCardActivity, GIFT_CARD_TRACKING_START } from './qbo-gift-card-sync'
 
 // Single entry point for "run a sync" — called identically by the nightly
 // scheduler plugin (server/plugins/qbo-nightly-sync.ts) and the manual
@@ -130,6 +131,16 @@ export async function runNightlySync(dateOverride?: string) {
     // own comment on why one giant range isn't reliable at that size).
     const plResult = await syncPlForDateRange(qboStartDate, endDate)
 
+    // Gift cards sold/redeemed on 2440 (balance sheet, so not in the P&L
+    // above). Re-pulls the whole tracking window; a failure only logs.
+    let giftCardResult: Awaited<ReturnType<typeof syncGiftCardActivity>> | null = null
+    try {
+      giftCardResult = await syncGiftCardActivity(endDate)
+      if (!giftCardResult.skipped) console.log(`gift cards: ${giftCardResult.days} days, sold ${giftCardResult.sold}, redeemed ${giftCardResult.redeemed} (${GIFT_CARD_TRACKING_START} – ${endDate})`)
+    } catch (err) {
+      console.warn(`gift card sync failed: ${err instanceof Error ? err.message : err}`)
+    }
+
     // Toast is a separate POS system, not a QBO endpoint, but folded into
     // the same nightly run/sync_runs row rather than a second scheduler —
     // one "as of" freshness signal for the whole dashboard, not two. Only
@@ -204,7 +215,7 @@ export async function runNightlySync(dateOverride?: string) {
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'success', rows_synced = ? WHERE id = ?`)
       .run(new Date().toISOString(), rowsSynced, runId)
 
-    return { accountResult, plResult, toastResult, forecastResult, rowsSynced }
+    return { accountResult, plResult, giftCardResult, toastResult, forecastResult, rowsSynced }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     db.prepare(`UPDATE sync_runs SET finished_at = ?, status = 'error', error_message = ? WHERE id = ?`)

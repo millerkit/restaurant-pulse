@@ -6282,3 +6282,29 @@ slot as a mostly blank box, and with the full view on its own tab Kit didn't nee
 Follow-up (same day): the Breakeven month select became the app's usual `BudgetYearToggle` + Jan–Dec month tabs
 (like Budget and Sales Plan). The year is the shared budget-year selection; months already past in the current year
 are disabled, since the page looks forward from this month. `?month=` stays in the URL.
+
+## 2026-11-15 — Gift card sales synced from QBO 2440
+
+Kit asked to track holiday gift card sales (Nov–Dec) automatically instead of typing "gift card cash on hand". Toast's
+nightly POS journal entry credits **2440 Customer Deposits & Deferred Revenue:Gift Cards Outstanding** for cards sold
+("Gift Cards Sold") and debits it for cards redeemed ("Gift Cards Redeemed"); the redeemed amount rings into 40xx
+revenue with no new cash.
+- **Sync** (`server/utils/qbo-gift-card-sync.ts`, called from `runNightlySync()` after the P&L, try/catch log-only):
+  looks 2440 up by `AcctNum` in a QBO Account query (balance-sheet accounts aren't in the local `accounts` table;
+  refuses ≠ 1 match), then pulls `reports/GeneralLedger?account=<id>&accounting_method=Accrual&columns=tx_date,txn_type,
+  doc_num,memo,debt_amt,credt_amt,subt_nat_amount` from `GIFT_CARD_TRACKING_START` (2026-11-01) to the sync's end date
+  and **replaces** that whole window in `gift_card_activity` (per day: sold = credits, redeemed = debits), so QBO
+  corrections are picked up (unlike the forward-only P&L sync). Parser: `server/utils/qbo-gl-parse.mjs` (columns by
+  ColKey; falls back to the signed amount column if debit/credit are absent). Migration 0022 adds `gift_card_activity`
+  and the single-row `gift_card_sync` (window + synced_at). No backfill needed: the first sync pulls Nov 1 onward.
+- **Why net, not gross**: the year-end outlook's Net Income already includes revenue from redeemed cards (any card,
+  including older ones), which brought no cash; sold − redeemed is the cash gift cards actually added since Nov 1.
+- **Cash & Loans**: `yearProjection.giftCards` = {startDate, throughDate, syncedAt, sold, redeemed, net};
+  `giftCardCushion` = net. Each outlook card shows "Gift card cash since Nov 1 +$X" and "With gift card cash" (cash
+  left after loans + net) under the existing figure; the ✓/▲ chip and every profit figure stay gift-card-free. A
+  "Holiday Gift Cards" strip replaces the manual form (sold, redeemed, net, weeks of loan payments). Removed
+  `POST /api/cashflow/gift-card-plan`; `gift_card_plan.expected_cash` is no longer read.
+- **Verified**: parser against a sample GL report (two lines on one JE kept separate; "Beginning Balance" row skipped;
+  amount fallback); migration locally; page rendered with temporary local rows (removed). The live GeneralLedger response
+  shape was **not** checked against production before deploy (local QBO is the sandbox): check the "gift cards: …" line in
+  the first production sync log, or "gift card sync failed" if the columns differ.

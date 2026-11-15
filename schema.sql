@@ -580,6 +580,33 @@ CREATE TABLE gift_card_plan (
   cushion_pct    REAL NOT NULL DEFAULT 25 CHECK (cushion_pct >= 0 AND cushion_pct <= 100),
   updated_at     TEXT NOT NULL
 );
+-- (2026-11-15: expected_cash is no longer read; gift card cash now comes from
+-- gift_card_activity below.)
+
+-- Gift card activity on QBO account 2440 (Gift Cards Outstanding), synced
+-- nightly from the GeneralLedger report (server/utils/qbo-gift-card-sync.ts,
+-- migration 0022). One row per day with any posting: sold = credits (cards
+-- sold), redeemed = debits (cards redeemed; that revenue is in the P&L with
+-- no new cash). Each sync replaces the whole window from the tracking start
+-- (GIFT_CARD_TRACKING_START), so corrections in QBO are picked up. Net
+-- (sold - redeemed) is the cash cushion on Cash & Loans: never in Net Income,
+-- breakeven, Free Cash Flow or the covenant.
+CREATE TABLE gift_card_activity (
+  date      TEXT PRIMARY KEY,
+  sold      REAL NOT NULL DEFAULT 0,
+  redeemed  REAL NOT NULL DEFAULT 0,
+  lines     INTEGER NOT NULL DEFAULT 0
+);
+
+-- Single row (id is always 1): the window and time of the last gift card sync.
+CREATE TABLE gift_card_sync (
+  id              INTEGER PRIMARY KEY CHECK (id = 1),
+  qbo_account_id  TEXT NOT NULL,
+  account_name    TEXT,
+  start_date      TEXT NOT NULL,
+  through_date    TEXT NOT NULL,
+  synced_at       TEXT NOT NULL
+);
 
 -- The user's currently-declared "good week" revenue benchmark — a single
 -- dollar target for one full operating week (Tue-Sun), added 2026-08-19 to

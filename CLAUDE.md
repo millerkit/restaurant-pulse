@@ -53,9 +53,12 @@ Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends
   depreciation (currently $0). Open questions with the bank are under "Not yet done".
 - **Pre-opening non-cash reclasses** (rent 6505 $60K, insurance catch-up 6752 Jan–May, serviceware 6785 on
   2026-06-20) are added back in Free Cash Flow only (`PRE_OPENING_NONCASH_ADJUSTMENTS`), not in Net Income.
-- **Gift cards** are a balance-sheet liability: gift card cash on hand is a pure cushion (since 2026-11-14), shown beside the Cash & Loans
-  outlook with weeks-of-loan-payments runway; never in Net Income, breakeven, Free Cash Flow or the covenant
-  (`gift_card_plan`; `cushion_pct` retired).
+- **Gift cards** are a balance-sheet liability (QBO **2440** Gift Cards Outstanding; Toast's nightly JE credits it for
+  cards sold, debits it for cards redeemed). Since 2026-11-15 the nightly sync re-pulls 2440's GeneralLedger from
+  `GIFT_CARD_TRACKING_START` (2026-11-01) every run into `gift_card_activity` (`server/utils/qbo-gift-card-sync.ts`,
+  non-fatal). Cash & Loans shows sold, redeemed and **net** (sold − redeemed: redemptions are revenue with no new cash)
+  as a pure cushion: each outlook card adds a "With gift card cash" line under cash left after loans, plus weeks of loan
+  payments; never in Net Income, breakeven, Free Cash Flow or the covenant. The manual `gift_card_plan` input is retired.
 - **Old-location assets**: catch-up depreciation JE imported 2025-12-31 via Retained Earnings; Section 179
   on the new location is undecided until 2026 tax prep (see history).
 

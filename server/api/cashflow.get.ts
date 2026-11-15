@@ -258,7 +258,17 @@ export default defineEventHandler((event) => {
     if (b) bankSync = { throughDate: b.through_date, endingBalance: b.ending_balance, importedAt: b.imported_at }
   } catch { /* migration not applied yet */ }
   const plan = db.prepare('SELECT weekly_amount FROM reserve_plan WHERE id = 1').get() as { weekly_amount: number } | undefined
-  const giftCardPlan = db.prepare('SELECT expected_cash FROM gift_card_plan WHERE id = 1').get() as { expected_cash: number } | undefined
+  // Gift cards sold/redeemed on QBO 2440 since the tracking start (nightly sync).
+  let giftCards: { startDate: string, throughDate: string, syncedAt: string, sold: number, redeemed: number, net: number } | null = null
+  try {
+    const gs = db.prepare('SELECT start_date, through_date, synced_at FROM gift_card_sync WHERE id = 1').get() as { start_date: string, through_date: string, synced_at: string } | undefined
+    if (gs) {
+      const t = db.prepare('SELECT COALESCE(SUM(sold), 0) AS sold, COALESCE(SUM(redeemed), 0) AS redeemed FROM gift_card_activity WHERE date >= ? AND date <= ?')
+        .get(gs.start_date, gs.through_date) as { sold: number, redeemed: number }
+      const r2 = (n: number) => Math.round(n * 100) / 100
+      giftCards = { startDate: gs.start_date, throughDate: gs.through_date, syncedAt: gs.synced_at, sold: r2(t.sold), redeemed: r2(t.redeemed), net: r2(t.sold - t.redeemed) }
+    }
+  } catch { /* migration not applied yet */ }
 
   // Real, actual transfers only — see schema.sql's reserve_transfers
   // comment for why this replaced a fixed $/week schedule assumption (two
@@ -759,9 +769,11 @@ export default defineEventHandler((event) => {
       plannedRemainingTransfers,
       weeklyTransferAmount: currentWeeklyAmountForProjection,
       breakevenNetIncome: breakevenNetIncomeForYear,
-      // Gift card cash on hand: a pure cushion for 2026 and 2027. Cash in, not
-      // revenue; never part of breakeven, Net Income, FCF or the covenant.
-      giftCardCushion: giftCardPlan?.expected_cash ?? 0,
+      // Gift card cash: net of cards sold minus redeemed since the tracking
+      // start (redemptions are P&L revenue with no new cash). A pure cushion;
+      // never part of breakeven, Net Income, FCF or the covenant.
+      giftCardCushion: giftCards?.net ?? 0,
+      giftCards,
       // Weekly loan-reserve funding rate the cushion's runway is measured against.
       giftCardWeeklyRate: reserveState.sustainability && reserveState.sustainability.weeksBeforeCatchUp > 0
         ? reserveState.sustainability.minimumDepositsBeforeCatchUp / reserveState.sustainability.weeksBeforeCatchUp
