@@ -102,11 +102,11 @@ function formatStamp(s: string) {
           <summary>Columns to select in OpenTable</summary>
           <ul>
             <li>Visit Date</li>
+            <li>Created Date</li>
+            <li>Canceled Date</li>
             <li>Size</li>
             <li>Status</li>
             <li>Source</li>
-            <li>Created Date (and Created Time, if it's a separate column)</li>
-            <li>Canceled Date</li>
           </ul>
           <p class="quiet-note">Nothing else is needed. Guest names, phones, emails and notes are never read, so leave them out.</p>
         </details>
