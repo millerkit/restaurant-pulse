@@ -278,6 +278,16 @@ const variableShortfallCallout = computed(() => {
 
 const rates = computed(() => marginData.value?.rates ?? null)
 
+// Days the restaurant was closed (Mondays, holidays) that still had money land
+// in QuickBooks — left out of the nightly view server-side, listed here.
+const skippedClosedDays = computed(() => (marginData.value?.margin[period.value]?.skipped ?? []) as { date: string, revenue: number, reason: string }[])
+const skippedClosedNote = computed(() => {
+  const list = skippedClosedDays.value
+  if (!list.length) return ''
+  const items = list.map(d => `${formatWeekdayDate(d.date)} (${fmtMoney0(d.revenue)}${d.reason === 'Closed Mondays' ? '' : `, ${d.reason}`})`).join(', ')
+  return `Left out — the restaurant was closed, so this money wasn't a night's service: ${items}.`
+})
+
 // ============================== Shared =====================================
 const tooltip = useHoverTooltip<TipRow[]>()
 function setTooltipEl(el: unknown) {
@@ -468,6 +478,7 @@ function refreshBoth() {
               <span class="legend-chip severe">⚠ Didn't cover variable labor + food &amp; drink cost</span>
               <span class="legend-chip no-data">No data / closed</span>
             </div>
+            <p v-if="skippedClosedNote" class="quiet-note skipped-closed-note">{{ skippedClosedNote }}</p>
           </div>
           <div v-else class="drill-card quiet">
             <span class="chip warning">No data</span>
@@ -551,6 +562,7 @@ function refreshBoth() {
 }
 .quiet-inline { display: flex; align-items: center; gap: 10px; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.skipped-closed-note { margin-top: 10px; }
 .drill-card .callout {
   font-size: 12.5px;
   color: var(--ink-2);

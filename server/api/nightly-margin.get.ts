@@ -41,7 +41,17 @@
 // for the same reason (only one continuous, stable-regime stretch of real
 // data exists so far; blending in the old, smaller location's wage/COGS
 // levels would distort the rates).
+//
+// Closed days (added 2026-11-15, Kit): the restaurant is closed Mondays, and on
+// Settings holiday closures. Money that lands on such a day (a gift card sale,
+// a deposit, a QBO entry dated that day) isn't a night's service revenue, so
+// those days are left out of the nightly view and listed in `skipped` instead.
+// A dated special night (Sales Plan) on that date — e.g. a Monday event — still
+// counts as a real night.
+import { loadHolidayClosures, loadSpecialNights } from '../utils/special-nights'
+
 type Period = 'month' | 'year'
+type SkippedDay = { date: string, revenue: number, reason: string }
 
 type MarginDay = {
   date: string
@@ -121,16 +131,29 @@ export default defineEventHandler((event) => {
   }
 
   const PERIODS: Period[] = ['month', 'year']
-  const margin: Record<Period, { days: MarginDay[] }> = {} as any
+  const margin: Record<Period, { days: MarginDay[], skipped: SkippedDay[] }> = {} as any
+  const yearStart = `${asOfYear}-01-01`
+  const holidays = loadHolidayClosures(db, yearStart, asOfDate)
+  const specialNights = loadSpecialNights(db, yearStart, asOfDate)
+  function closedReason(date: string): string | null {
+    if (specialNights.has(date)) return null
+    const holiday = holidays.get(date)
+    if (holiday) return holiday.name
+    if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1) return 'Closed Mondays'
+    return null
+  }
 
   for (const p of PERIODS) {
     const { start, end } = periodRange(p)
     const days: MarginDay[] = []
+    const skipped: SkippedDay[] = []
     if (ratesAvailable) {
       for (const [date, revenue] of revenueByDate) {
         if (date < start || date > end) continue
         if (date < NEW_LOCATION_START) continue // no reliable rate basis before the move — see header comment
         if (!revenue || revenue <= 0) continue // not a real open night
+        const reason = closedReason(date)
+        if (reason) { skipped.push({ date, revenue, reason }); continue }
         const toastRow = toastByDate.get(date)
         if (!toastRow) continue // no synced Toast data for this date yet — can't estimate labor
         const estVariableLabor = toastRow.laborHours * hourlyLaborRate!
@@ -158,7 +181,8 @@ export default defineEventHandler((event) => {
       }
     }
     days.sort((a, b) => a.date.localeCompare(b.date))
-    margin[p] = { days }
+    skipped.sort((a, b) => a.date.localeCompare(b.date))
+    margin[p] = { days, skipped }
   }
 
   const lastSyncRow = db.prepare('SELECT status, finished_at AS finishedAt FROM sync_runs ORDER BY id DESC LIMIT 1').get() as { status: string, finishedAt: string | null } | undefined

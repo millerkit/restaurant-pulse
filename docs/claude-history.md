@@ -6283,6 +6283,16 @@ Follow-up (same day): the Breakeven month select became the app's usual `BudgetY
 (like Budget and Sales Plan). The year is the shared budget-year selection; months already past in the current year
 are disabled, since the page looks forward from this month. `?month=` stays in the URL.
 
+## 2026-11-15 — Daily Results profit view skips closed days
+
+Kit noticed Mon Nov 9 showing as a −$1,604 (−204%) night on the profit calendar. The restaurant is closed Mondays;
+the money that landed that day wasn't service revenue, and the night was charged a full fixed-labor share plus that
+day's Toast hours (prep). `server/api/nightly-margin.get.ts` now leaves out Mondays and Settings holiday closures
+(unless a Sales Plan special night is dated there, e.g. a Monday event) and returns them per period as `skipped`
+(`{date, revenue, reason}`); the page lists them under the legend. Trailing rates (hourly $/hr, COGS %, fixed labor
+per night) are unchanged: they already counted only nights with ≥ 15 covers for the fixed share. Verified locally with
+a temporary Monday revenue row (moved to `skipped`, note shown, row removed).
+
 ## 2026-11-15 — Gift card sales synced from QBO 2440
 
 Kit asked to track holiday gift card sales (Nov–Dec) automatically instead of typing "gift card cash on hand". Toast's
