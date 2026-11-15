@@ -6318,3 +6318,7 @@ revenue with no new cash.
   amount fallback); migration locally; page rendered with temporary local rows (removed). The live GeneralLedger response
   shape was **not** checked against production before deploy (local QBO is the sandbox): check the "gift cards: …" line in
   the first production sync log, or "gift card sync failed" if the columns differ.
+- **Fix, same day**: the first production sync logged "GeneralLedger report has no tx_date column". A read-only peek
+  showed production's GeneralLedger names columns only in `ColType` (no `MetaData` ColKey), omits Credit even when
+  `credt_amt` is requested, and returns Debit plus a signed Amount (sold +, redeemed −), one row per JE line. The parser
+  now reads `ColType` too and uses the signed amount. Nov 1–14 in QBO: $3,175.00 sold, $2,251.90 redeemed, net $923.10.

@@ -12,7 +12,10 @@
 
 function colKeys(report) {
   const cols = report?.Columns?.Column ?? []
-  return cols.map(c => (c.MetaData ?? []).find(m => m.Name === 'ColKey')?.Value ?? null)
+  // Production (2026-11-15) names GeneralLedger columns only in ColType (no
+  // MetaData), and returns Debit + a signed Amount but no Credit column even
+  // when credt_amt is requested: the amount fallback below handles that.
+  return cols.map(c => (c.MetaData ?? []).find(m => m.Name === 'ColKey')?.Value ?? c.ColType ?? null)
 }
 
 function collectDataRows(rows, out) {
