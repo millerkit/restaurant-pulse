@@ -1019,7 +1019,8 @@ const yearLiveNetIncome = computed(() => netIncome(yearHybridTotals.value))
 // closed months from August 2026 on × that month's budgeted sales — see
 // server/utils/budget-forecast.ts for the rules (closed months only, no opening
 // stock-up months, catering-heavy months flagged). A line typed over is pinned.
-type CostForecast = { months: string[], pctByCost: Record<string, number | null>, mixedMonths: { month: string, share: number }[] }
+// toastFeePct / stripeFeeRate: the processing fee lines (6220 / 6210), automatic the same way.
+type CostForecast = { months: string[], pctByCost: Record<string, number | null>, mixedMonths: { month: string, share: number }[], toastFeePct: number | null, stripeFeeRate: number }
 const costForecast = ref<CostForecast | null>(null)
 onMounted(async () => {
   try {
@@ -1560,6 +1561,19 @@ function exportForQuickBooks() {
                     </div>
                     <div v-if="!selectedMonthIsAuto && !selectedMonthClosed" class="section-note">
                       {{ MONTH_NAMES[editMonth - 1] }}'s plan froze when the month started; food &amp; drink cost is kept as entered.
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="cat === 'opex' && selectedMonthIsAuto && costForecast" class="cogs-avg-row">
+                  <td :colspan="selectedMonthIsCurrent ? 4 : 2">
+                    <div class="section-note">
+                      <span>
+                      <strong>Automatic:</strong> processing fees follow the sales they're charged on.
+                      <template v-if="costForecast.toastFeePct != null">Toast Fees <strong>{{ (costForecast.toastFeePct * 100).toFixed(1) }}%</strong> of dine-in sales<template v-if="costWindowLabel"> ({{ costWindowLabel }} actuals)</template>; buyouts are invoiced through Toast and count here.</template>
+                      <template v-else>Toast Fees are kept as entered until a closed month from August 2026 on has synced.</template>
+                      Stripe Fees <strong>{{ Math.round(costForecast.stripeFeeRate * 100) }}%</strong> of event and catering sales, which are paid ahead through Stripe (Chef's Counter is now paid on site).
+                      Type over a line to pin it; ↺ sends it back to automatic.
+                      </span>
                     </div>
                   </td>
                 </tr>

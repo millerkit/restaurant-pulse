@@ -15,6 +15,15 @@
 // - Food & drink cost (5010, 5110/5120/5125/5130) = each line's real cost % of its
 //   paired sales account over the last (up to) three closed, fully synced months
 //   from August 2026 on × that month's sales line.
+// - Processing fees (2026-11-17): Toast Fees (6220) = its real % of dine-in sales
+//   (4010 + 4022-4028) over the same window × that month's budgeted dine-in sales.
+//   Buyouts count in the Toast base: they are billed through Toast invoicing, often paid by ACH (no
+//   card fee), sometimes by card, so the measured % blends that mix in over time.
+//   Stripe Fees (6210) = STRIPE_FEE_RATE × money taken ahead through Stripe: budgeted
+//   Event Sales / Catering (41xx/42xx leaf lines). Stripe history can't give a clean % (until early Nov
+//   2026 it also carried Chef's Counter prepaid tickets, now paid on site), so its rate
+//   is fixed. Cash basis: Stripe's fee really posts when the deposit or ticket is paid,
+//   usually a month or so before the event; the budget puts it in the event's month.
 //
 // The current month and earlier are never touched: a month's plan freezes on the
 // 1st, and the night-by-night projection is the live forecast for it. A line typed
@@ -54,7 +63,13 @@ export const EVENT_ACCOUNTS: Record<'event' | 'offsite' | 'catering', { food: st
   catering: { food: '4230', beverage: '4210' }
 }
 export const EVENT_ACCOUNT_NUMBERS = Object.values(EVENT_ACCOUNTS).flatMap(a => [a.food, a.beverage])
-export const MANAGED_ACCOUNT_NUMBERS = [FOOD_SALES, ...BEVERAGE_SALES, ...COST_PAIRS.map(p => p.cost), ...EVENT_ACCOUNT_NUMBERS]
+export const STRIPE_FEES = '6210'
+export const TOAST_FEES = '6220'
+// Stripe's standard card rate, 2.9% + 30¢, rounds to 3% on event-sized payments. The
+// month-start lumps on 6210 (Aug-Nov 2026) ran at about 2.9-3% of the deposits behind them.
+export const STRIPE_FEE_RATE = 0.03
+export const FEE_ACCOUNT_NUMBERS = [STRIPE_FEES, TOAST_FEES]
+export const MANAGED_ACCOUNT_NUMBERS = [FOOD_SALES, ...BEVERAGE_SALES, ...COST_PAIRS.map(p => p.cost), ...EVENT_ACCOUNT_NUMBERS, ...FEE_ACCOUNT_NUMBERS]
 
 // First steady month at the new location: June/July food cost reflects the opening
 // stock-up (purchase-based cost, no inventory accounting). Same rule the Budget
@@ -74,7 +89,8 @@ function monthEnd(year: number, month: number): string {
 // mixedMonths: window months whose catering/event sales (41xx/42xx) were over 5% of
 // core dining sales. Catering purchases can't be separated from Food Costs, so the
 // food % reads a little high for a month with no catering. Shown, not corrected.
-export type CostWindow = { months: string[], pctByCost: Record<string, number | null>, mixedMonths: { month: string, share: number }[] }
+// toastFeePct: Toast Fees ÷ dine-in sales over the same months.
+export type CostWindow = { months: string[], pctByCost: Record<string, number | null>, mixedMonths: { month: string, share: number }[], toastFeePct: number | null, stripeFeeRate: number }
 const CATERING_MIX_THRESHOLD = 0.05
 
 // The (up to) three most recent closed months, from August 2026 on, whose
@@ -93,7 +109,7 @@ export function costWindow(db: Db, today: string): CostWindow {
   const pctByCost: Record<string, number | null> = {}
   if (months.length === 0) {
     for (const p of COST_PAIRS) pctByCost[p.cost] = null
-    return { months, pctByCost, mixedMonths: [] }
+    return { months, pctByCost, mixedMonths: [], toastFeePct: null, stripeFeeRate: STRIPE_FEE_RATE }
   }
   const from = `${months[0]}-01`
   const last = months[months.length - 1]!
@@ -109,6 +125,8 @@ export function costWindow(db: Db, today: string): CostWindow {
     const sales = total([p.sales, ...(p.extraSales ?? [])])
     pctByCost[p.cost] = sales > 0 ? cost / sales : null
   }
+  const toastBase = total([FOOD_SALES, ...BEVERAGE_SALES])
+  const toastFeePct = toastBase > 0 ? total([TOAST_FEES]) / toastBase : null
   const mixFor = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN a.account_number IN ('${FOOD_SALES}', ${BEVERAGE_SALES.map(n => `'${n}'`).join(', ')}) THEN dli.amount END), 0) AS core,
@@ -122,7 +140,7 @@ export function costWindow(db: Db, today: string): CostWindow {
     const share = r.core > 0 ? r.catering / r.core : 0
     if (share > CATERING_MIX_THRESHOLD) mixedMonths.push({ month: ym, share })
   }
-  return { months, pctByCost, mixedMonths }
+  return { months, pctByCost, mixedMonths, toastFeePct, stripeFeeRate: STRIPE_FEE_RATE }
 }
 
 // Real food/beverage split and beer/liquor/wine/N-A mix since the move.
@@ -210,6 +228,13 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
   const mix = salesMix(db)
   const window = costWindow(db, today)
 
+  // Event Sales / Catering leaf lines (41xx/42xx), the base for Stripe Fees.
+  const advanceSalesNums = (db.prepare(`
+    SELECT a.account_number AS num FROM accounts a
+    WHERE a.is_active = 1 AND a.category = 'revenue' AND (a.account_number LIKE '41%' OR a.account_number LIKE '42%')
+      AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id AND c.is_active = 1)
+  `).all() as { num: string }[]).map(r => r.num)
+
   const existing = db.prepare('SELECT amount, pinned FROM budget_targets WHERE year = ? AND month = ? AND account_id = ?')
   // Hand-budgeted lines (event/catering food sales, catering food cost), by account number.
   const budgetedStmt = db.prepare(`
@@ -251,8 +276,8 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
         if (amount === 0 && row && row.autoAmount == null) continue
         values.set(num, amount)
       }
-      // Cost follows event/catering food sales as budgeted: a pinned line's own amount, else
-      // what the forecast just worked out.
+      // A sales line as budgeted: a pinned line's own amount, else what the forecast just
+      // worked out, else (a line the forecast doesn't write) whatever is budgeted.
       const eventSalesFor = (num: string) => {
         const accountId = idByNum.get(num)
         const row = accountId == null ? undefined : existing.get(year, month, accountId) as { amount: number, pinned: number } | undefined
@@ -272,6 +297,13 @@ export function refreshBudgetForecast(db: Db, today: string): BudgetForecastResu
         const extraCost = (p.extraCost ?? []).reduce((sum, n) => sum + budgetedAmount(n, year, month), 0)
         values.set(p.cost, Math.max(0, pct * (salesAmount + extraSales) - extraCost))
       }
+      // Processing fees follow the sales they're charged on, as budgeted.
+      if (window.toastFeePct != null) {
+        const dineIn = [FOOD_SALES, ...BEVERAGE_SALES].reduce((sum, n) => sum + eventSalesFor(n), 0)
+        values.set(TOAST_FEES, Math.max(0, window.toastFeePct * dineIn))
+      }
+      const advance = advanceSalesNums.reduce((sum, n) => sum + eventSalesFor(n), 0)
+      values.set(STRIPE_FEES, Math.max(0, STRIPE_FEE_RATE * advance))
       for (const [num, value] of values) {
         const accountId = idByNum.get(num)
         if (accountId == null) continue

@@ -170,8 +170,13 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   the move; food & drink cost 5010/5110/5120/5125/5130 = each line's actual % of its sales over the last
   (up to) three closed months from Aug 2026 × the budgeted sales. **Food cost % is measured over all food
   sales** (4010 + event food 4150/4180 + catering food 4230; costs 5010 + 5220) and applied to all budgeted
-  food sales, minus 5220's own budget. Pins: `budget_targets.pinned` / `auto_amount`. Everything else in
-  the budget is entered by hand (Staffing Plan for labor).
+  food sales, minus 5220's own budget. **Processing fees** (2026-11-17): Toast Fees 6220 = its real % of
+  dine-in sales (4010 + 4022–4028) over the same window (3.0% Aug–Oct 2026) × budgeted dine-in sales;
+  buyouts count there (billed by Toast invoice, often paid by ACH with no card fee, sometimes by card; the
+  measured % absorbs the mix). Stripe Fees 6210 = fixed `STRIPE_FEE_RATE` 3% × budgeted 41xx/42xx leaf lines
+  (event and catering money paid ahead). Chef's Counter prepaid tickets (Stripe) stopped ~2026-11-06 and now
+  go through Toast, so the Toast % should drift up as the window rolls. See history. Pins:
+  `budget_targets.pinned` / `auto_amount`. Everything else in the budget is entered by hand (Staffing Plan for labor).
 - **Special nights and holidays**: holidays are dated (`holiday_closures`, Settings); buyouts, closures,
   off-site and event nights are dated `special_nights` (Sales Plan). A non-buyout night replaces a normal
   night with its own expected dine-in revenue; a buyout stays a normal night and adds (its price − that

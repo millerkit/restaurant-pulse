@@ -6442,3 +6442,24 @@ tentative until production has more; sales-based points need the server-sales ba
 Built a small segmented `PageTabs.vue` and `usePageTab` (URL `?show=`, so a view can be linked and survives reload): FOH = Productivity (default) / Hours /
 Trends (week picker hidden on Trends); Kitchen = Hours (default, the BOH report) / Cost (summary cards, week by week chart/table, footnotes). Sub-nav tabs and
 routes are unchanged. Verified in the browser on both pages (each view shows only its own content; URL updates; default leaves the URL clean).
+
+**Processing fees follow the forecast (2026-11-17)**: Kit: Stripe and Toast fees shouldn't be budgeted by hand (Nov showed Stripe
+$5,000 budget vs. $2,907 projected, Toast $5,500 vs. $6,642). Production actuals: Toast Fees ran 3.17% / 3.09% / 2.93% / 3.07% / 3.05%
+of dine-in sales (4010 + 4022-4028) Jul-Nov, 3.04% over Aug-Oct, and Oct's $27K of on-site event sales didn't move it (events aren't
+paid through Toast). Stripe Fees had two patterns: small daily charges ($9.65 per Chef's Counter prepaid booking), which fell to almost
+nothing after ~Nov 6 (Kit: Chef's Counter is now paid on site), and a lump around the 1st of each month (Aug 2 $1,013, Aug 31 $1,083,
+Oct 1 $2,025, Nov 1 $1,392) consistent with ~2.9-3% of event/catering/buyout deposits taken ahead (e.g. Oct 1 vs. Sep catering $68.3K
+= 2.96%). History can't give a clean Stripe % (prepaid Chef's Counter is mixed in), so its rate is a fixed 3% (Stripe's 2.9% + 30¢).
+Built in `refreshBudgetForecast`: 6210/6220 joined `MANAGED_ACCOUNT_NUMBERS` (automatic, pinnable, ↺), `costWindow` returns
+`toastFeePct` and `stripeFeeRate`, and the Budget page shows a note under Operating Expenses. Buyouts are treated as paid ahead through
+Stripe (an assumption for Kit to confirm): their full price comes out of the Toast base and goes into the Stripe base. Cash-basis timing
+differs: Stripe's fee really posts when the deposit is paid (often a month or more before the event); the budget puts it in the event's month.
+Verified on a token-stripped copy of production data (deleted afterwards): only 6210/6220 changed. Dec 2026: Stripe $2,000 -> $960
+(3% x (NYE $20K + BRG buyout $12K)), Toast $6,400 -> $6,539. 2027: Stripe ~$1.5-2.6K/month -> $0 except Feb $645 and Dec $600, since only
+Valentine's and NYE have event sales budgeted in 2027; Toast +$500-950/month. Every other budget line identical to the old code. November
+(frozen) unchanged. Caveat: the 3.04% was measured with prepaid Chef's Counter money (~15% of dine-in) in the base though Toast didn't
+process it; with Chef's Counter now on Toast the true rate may be nearer 3.4-3.5%, which the trailing window picks up by about February 2027.
+Same day, Kit corrected the buyout assumption: buyouts are not paid through Stripe. They're billed through Toast invoicing, often
+paid by ACH (no card fee) and sometimes by card. So buyouts left the Stripe base and stay in the Toast base at the measured Toast %
+(the trailing % blends in the ACH/card mix as buyout months enter the window; slightly high for an ACH-paid buyout, e.g. ~$365 on a
+$12K one). Expected effect vs. the first version: Dec 2026 Stripe $960 -> $600 (NYE only), Toast ~$6,539 -> ~$6,904 (BRG buyout x 3.04%).
