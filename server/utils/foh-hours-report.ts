@@ -108,7 +108,7 @@ export interface FohHoursReport {
   productivity: FohProductivity
   autoClockOuts: { people: number, shifts: number }
   // covers/coversByDay: Toast guests on open nights (blank for closed days and nights not synced yet).
-  totals: { all: number, overtime: number, byDay: Record<string, number>, covers: number, coversByDay: Record<string, number> }
+  totals: { all: number, overtime: number, byDay: Record<string, number>, covers: number, coversByDay: Record<string, number>, guestsPerHourByDay: Record<string, number> }
   // Guests per FOH hour for the days so far this week, last week's full week, and the average of the 4 weeks before.
   guestsPerHour: { current: number | null, lastWeek: number | null, trailingAvg: number | null }
   // Same stretch of the prior week (same number of days elapsed), its full total, and the average
@@ -233,7 +233,7 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
     return {
       ...base, hasData: false, weekStart: emptyWeek, weekEnd: addDays(emptyWeek, 6), asOf: null, weekComplete: false,
       days: emptyDays(emptyWeek), people: [], productivity: { available: false, rows: [], total: null }, autoClockOuts: { people: 0, shifts: 0 },
-      totals: { all: 0, overtime: 0, byDay: {}, covers: 0, coversByDay: {} }, guestsPerHour: noGuests,
+      totals: { all: 0, overtime: 0, byDay: {}, covers: 0, coversByDay: {}, guestsPerHourByDay: {} }, guestsPerHour: noGuests,
       comparison: { priorSamePoint: null, priorFullWeek: null, trailingAvgFullWeek: null, trailingWeeks: 0 },
       includedJobs: [], notCounted: [], excludedLogins: [], prevWeek: null, nextWeek: null
     }
@@ -315,6 +315,10 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   }
   const coversByDay = Object.fromEntries(coversOn(weekStart, weekEnd, dayClass))
   const coversTotal = Object.values(coversByDay).reduce((s, v) => s + v, 0)
+  // Per night: that night's guests ÷ that night's FOH hours, normal-service nights only. Compare the same weekday
+  // across weeks: a slow Tuesday always runs lower than a Friday because a minimum crew is needed either way.
+  const guestsPerHourByDay: Record<string, number> = {}
+  for (const [d, c] of Object.entries(coversByDay)) if ((byDay[d] ?? 0) > 0) guestsPerHourByDay[d] = round1(c / byDay[d]!)
   // Guests ÷ FOH hours, counting only the normal-service nights that have both.
   const perHour = (from: string, to: string): number | null => {
     const covers = coversOn(from, to, from === weekStart ? dayClass : classifyDays(db, from, to, dataThrough))
@@ -374,7 +378,7 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
     productivity,
     autoClockOuts: { people: people.filter(p => p.autoShifts > 0).length, shifts: people.reduce((s, p) => s + p.autoShifts, 0) },
     // Summed from raw rows, not the rounded per-person totals, so rounding can't drift the headline.
-    totals: { all: round1(sum(fohRows)), overtime: round1(fohRows.reduce((s, r) => s + r.overtime, 0)), byDay, covers: coversTotal, coversByDay },
+    totals: { all: round1(sum(fohRows)), overtime: round1(fohRows.reduce((s, r) => s + r.overtime, 0)), byDay, covers: coversTotal, coversByDay, guestsPerHourByDay },
     guestsPerHour: {
       current: asOf ? perHour(weekStart, weekEnd) : null,
       lastWeek: hasPrior ? perHour(priorStart, addDays(priorStart, 6)) : null,
@@ -418,6 +422,7 @@ export function renderFohHoursHtml(r: FohHoursReport): string {
   }).join('')
   const dayTotals = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${fmtH(r.totals.byDay[d.date] ?? 0)}</td>`).join('')
   const dayCovers = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${r.totals.coversByDay[d.date] ?? '–'}</td>`).join('')
+  const dayGph = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${r.totals.guestsPerHourByDay[d.date]?.toFixed(1) ?? '–'}</td>`).join('')
   const cmp: string[] = []
   if (r.comparison.priorSamePoint !== null && r.asOf && !r.weekComplete) cmp.push(`${delta(r.totals.all, r.comparison.priorSamePoint)} the same days last week (${r.comparison.priorSamePoint.toFixed(1)})`)
   if (r.comparison.priorFullWeek !== null) cmp.push(`last week's full total: ${r.comparison.priorFullWeek.toFixed(1)}`)
@@ -457,7 +462,7 @@ ${r.autoClockOuts.shifts ? `<div class="card"><div class="l">Auto clock-outs</di
 <div class="tbl"><table>
 <thead><tr><th>Employee</th><th class="n">Total</th>${head}</tr></thead>
 <tbody>${body || `<tr><td colspan="${cols}" class="closed">No front-of-house hours recorded yet.</td></tr>`}</tbody>
-<tfoot><tr><th scope="row">All FOH</th><td class="n total">${r.totals.all.toFixed(1)}</td>${dayTotals}</tr><tr><th scope="row">Guests</th><td class="n total">${r.totals.covers || '–'}</td>${dayCovers}</tr></tfoot>
+<tfoot><tr><th scope="row">All FOH</th><td class="n total">${r.totals.all.toFixed(1)}</td>${dayTotals}</tr><tr><th scope="row">Guests</th><td class="n total">${r.totals.covers || '–'}</td>${dayCovers}</tr><tr><th scope="row">Guests per FOH hour</th><td class="n total">${r.guestsPerHour.current !== null ? r.guestsPerHour.current.toFixed(1) : '–'}</td>${dayGph}</tr></tfoot>
 </table></div>
 <p class="foot">Counts hours worked as ${esc(r.includedJobs.join(', ') || 'front-of-house jobs')}. Each person is grouped by the job they worked most. Managers (General Manager, Floor Manager, Wine Director) are not included. "Near 40" = ${r.thresholds.close}+ hours or overtime logged in Toast. Hours come from Toast clock-ins. Closed days (Mondays, holidays), buyout, event and off-site nights, and nights with under ${r.thresholds.minOrders} orders are marked under the date; their hours are listed but they are left out of Guests, guests per FOH hour and the productivity table. ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. Generated ${esc(new Date(r.generatedAt).toLocaleString('en-US', { timeZone: RESTAURANT_TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' }))}.</p>
 ${productivity}

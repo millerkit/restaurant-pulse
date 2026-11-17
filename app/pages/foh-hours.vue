@@ -153,6 +153,11 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
               <td class="total">{{ data.totals.covers || '–' }}</td>
               <td v-for="d in data.days" :key="d.date" :class="{ closed: d.isClosedDay }">{{ data.totals.coversByDay[d.date] ?? '–' }}</td>
             </tr>
+            <tr class="guests-row">
+              <th scope="row">Guests per FOH hour</th>
+              <td class="total">{{ data.guestsPerHour.current !== null ? data.guestsPerHour.current.toFixed(1) : '–' }}</td>
+              <td v-for="d in data.days" :key="d.date" :class="{ closed: d.isClosedDay }">{{ data.totals.guestsPerHourByDay[d.date]?.toFixed(1) ?? '–' }}</td>
+            </tr>
           </tfoot>
         </table>
       </div>
