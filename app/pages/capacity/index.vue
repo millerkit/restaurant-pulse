@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import site from '~/config/site.json'
 import { MONTH_NAMES, YEAR, paceStatus } from '~/composables/useBudgetData'
+import { areaClosedDows, areaClosureUplift, areaOpenNightsPerWeek, neverOpenOn } from '#shared/utils/area-hours'
 
 
 // Combines the old separate Capacity Pace (app/pages/capacity/index.vue)
@@ -182,16 +183,26 @@ type SeasonalityRow = { month: number, holiday_closures: number }
 type AreaSeasonalityRow = { area_id: number, month: number, expected_covers: number, pinned: number, auto_covers: number | null, auto_basis: string | null }
 
 type ReplacedNight = { date: string, kind: string, expectedRevenue: number, name: string | null }
-const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[], replacedNights: ReplacedNight[], forecast: { currentMonth: number, refreshedOn: string | null } }>('/api/capacity/settings', { query: { year: YEAR } })
-// Holidays + special nights other than buyouts in YEAR, by date (2026-11-08):
+const { data: editData, pending: editPending, error: editError, refresh: editRefresh } = await useFetch<{ areas: AreaRow[], seasonality: SeasonalityRow[], areaSeasonality: AreaSeasonalityRow[], replacedNights: ReplacedNight[], forecast: { currentYear: number, currentMonth: number, refreshedOn: string | null } }>('/api/capacity/settings')
+// Each row is that month's NEXT occurrence (2026-11-17): the current month and later
+// are this year, earlier months are next year, the same months the budget forecast
+// writes. Before this the grid always used this calendar year, so January's Projected
+// Revenue was January 2026 (two holidays, no Chef's Counter closure) and didn't match
+// the Sales Plan's January 2027.
+function rowYear(month: number): number {
+  const f = editData.value?.forecast
+  const y = f?.currentYear ?? YEAR
+  return f && month < f.currentMonth ? y + 1 : y
+}
+// Holidays + special nights other than buyouts (this year and next), by date (2026-11-08):
 // those nights have no regular covers and are worth their own expected revenue.
 const replacedByDate = computed(() => new Map((editData.value?.replacedNights ?? []).map(n => [n.date, n])))
 function replacedInMonth(month: number): ReplacedNight[] {
-  const prefix = `${YEAR}-${String(month).padStart(2, '0')}`
+  const prefix = `${rowYear(month)}-${String(month).padStart(2, '0')}`
   return (editData.value?.replacedNights ?? []).filter(n => n.date.startsWith(prefix))
 }
 function replacedTitle(month: number): string {
-  return replacedInMonth(month).map(n => `${n.date.slice(5)} ${n.name ?? n.kind}`).join(', ') || 'None'
+  return replacedInMonth(month).map(n => `${n.date} ${n.name ?? n.kind}`).join(', ') || 'None'
 }
 
 // Real per-area actuals (this month / last month), added 2026-08-13 once
@@ -407,17 +418,14 @@ function areaCapacityForMonth(a: AreaDraft, month: number): number {
   if (cap == null || !Number.isFinite(cap)) return 0
   return cap
 }
-// Operating nights for a month, anchored to YEAR (the same "current year"
-// convention useBudgetData's other figures use) — Tue-Sun (the standing
-// Monday closure) minus that row's own Closures input. This is the same
-// definition capacity.get.ts's isOperatingDow/holidayAdjustment apply to
-// real dates, just computed generically for month 1-12 rather than a real
-// calendar range, since this table's rows aren't tied to any specific year.
+// Operating nights for the row's month (its next occurrence, rowYear) — Tue-Sun (the
+// standing Monday closure) minus that month's dated closures.
 function operatingNightsInMonth(s: MonthlyDraft): number {
-  const dim = new Date(Date.UTC(YEAR, s.month, 0)).getUTCDate()
+  const y = rowYear(s.month)
+  const dim = new Date(Date.UTC(y, s.month, 0)).getUTCDate()
   let nights = 0
   for (let day = 1; day <= dim; day++) {
-    if (new Date(Date.UTC(YEAR, s.month - 1, day)).getUTCDay() !== 1) nights++
+    if (new Date(Date.UTC(y, s.month - 1, day)).getUTCDay() !== 1) nights++
   }
   const closures = intNum(s.holidayClosuresInput)
   return Math.max(0, nights - (Number.isFinite(closures) ? closures : 0))
@@ -439,27 +447,32 @@ function monthDerived(s: MonthlyDraft) {
   }
 }
 
-// ---- weekly area closures (mirrors server/api/capacity.get.ts closureOn) ----
-// The covers grid holds each area's PRE-closure per-Tue-Sun-night baseline. From
+// ---- weekly area closures (mirrors server/utils/capacity-model.ts closureOn) ----
+// The covers grid holds each area's PRE-closure per-operating-night baseline. From
 // an area's closure start date, it is dark on its closed weekdays and its other
-// nights carry the recaptured share of the closed nights' covers.
+// nights carry the recaptured share of the closed nights' covers. Never-open
+// weekdays (Chef's Counter Sundays, shared/utils/area-hours.ts) are always dark.
 function closureUplift(a: AreaDraft): number {
-  return closureUpliftFor(a.closedDows.length, Number(a.recapturePct) || 0)
+  return areaClosureUplift(a.name, a.closedDows, Number(a.recapturePct) || 0)
 }
 function closureOnDate(a: AreaDraft, iso: string, dow: number): { closed: boolean, uplift: number } {
-  if (!a.closedFrom || iso < a.closedFrom || a.closedDows.length === 0) return { closed: false, uplift: 1 }
-  return { closed: a.closedDows.includes(dow), uplift: closureUplift(a) }
+  const never = neverOpenOn(a.name, dow)
+  const closed = areaClosedDows(a.name, a.closedDows)
+  if (!a.closedFrom || iso < a.closedFrom || closed.length === 0) return { closed: never, uplift: 1 }
+  return { closed: never || closed.includes(dow), uplift: closureUplift(a) }
 }
-// Revenue for a full calendar month of YEAR, night by night, so a closure that
-// starts partway through the year (or the month) is applied only from its date.
-// Holidays and non-buyout special nights are worth their own expected revenue, same as the server.
+// Revenue for the row's month (its next occurrence, rowYear), night by night, so a
+// closure that starts partway through the year (or the month) is applied only from its
+// date. Holidays and non-buyout special nights are worth their own expected revenue.
+// Same math as createCapacityModel, so it matches the Sales Plan's food + beverage.
 function projectedRevenueForMonth(s: MonthlyDraft): number {
-  const dim = new Date(Date.UTC(YEAR, s.month, 0)).getUTCDate()
+  const y = rowYear(s.month)
+  const dim = new Date(Date.UTC(y, s.month, 0)).getUTCDate()
   let total = 0
   for (let day = 1; day <= dim; day++) {
-    const dow = new Date(Date.UTC(YEAR, s.month - 1, day)).getUTCDay()
+    const dow = new Date(Date.UTC(y, s.month - 1, day)).getUTCDay()
     if (dow === 1) continue
-    const iso = `${YEAR}-${String(s.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    const iso = `${y}-${String(s.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
     const planned = replacedByDate.value.get(iso)
     if (planned) { total += planned.expectedRevenue; continue }
     let night = 0
@@ -479,7 +492,7 @@ const DOW_SHORT: Record<number, string> = { 0: 'Sun', 2: 'Tue', 3: 'Wed', 4: 'Th
 function closureSummary(a: AreaDraft): string {
   if (a.closedDows.length === 0) return 'Open all service nights'
   const u = closureUplift(a)
-  const open = SERVICE_NIGHTS_PER_WEEK - a.closedDows.length
+  const open = areaOpenNightsPerWeek(a.name, a.closedDows)
   return `${open} nights a week; covers on open nights × ${u.toFixed(2)}`
 }
 // Rounded to the nearest whole percent / dollar for quick readability

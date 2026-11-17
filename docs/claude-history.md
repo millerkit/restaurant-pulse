@@ -6463,3 +6463,25 @@ Same day, Kit corrected the buyout assumption: buyouts are not paid through Stri
 paid by ACH (no card fee) and sometimes by card. So buyouts left the Stripe base and stay in the Toast base at the measured Toast %
 (the trailing % blends in the ACH/card mix as buyout months enter the window; slightly high for an ACH-paid buyout, e.g. ~$365 on a
 $12K one). Expected effect vs. the first version: Dec 2026 Stripe $960 -> $600 (NYE only), Toast ~$6,539 -> ~$6,904 (BRG buyout x 3.04%).
+
+
+## 2026-11-17 — Capacity Projected Revenue now matches the Sales Plan
+
+Kit saw January's Projected Revenue on Planning › Capacity at $177,487 while the Sales Plan's January 2027 food +
+beverage was $160,963. Both use the same covers and spend per guest; the grid (app/pages/capacity/index.vue) computed it
+differently from the server model (createCapacityModel), which the budget forecast uses:
+- **Wrong year.** The grid always walked the calendar of `YEAR` (2026), so its January was January 2026: two holiday
+  closures (Jan 1-2) instead of 2027's three (Jan 1-3), and no Chef's Counter Tuesday closure (it starts 2026-12-01).
+- **Chef's Counter Sundays.** The grid didn't know the counter never opens Sundays (area-hours.ts was server-only), and
+  its closure uplift counted Sunday as a closed-and-recaptured night: ×1.40 instead of the server's ×1.20 with
+  closed_dows "0,2" and 80% recapture (Settings' closure summary showed the same wrong 1.40).
+Reproduced from production inputs to the dollar: grid 25 nights × $7,099.47 = $177,487; server 24 nights × $5,136.11
+non-counter + 16 counter nights × 9.6 covers × $245.42 = $160,963. Of the $16,524 gap, $5,136 is the Jan 3 holiday and
+$11,388 the counter's Tuesdays/Sundays.
+Fix: `area-hours.ts` moved to `shared/utils/` with `areaClosedDows` / `areaClosureUplift` / `areaOpenNightsPerWeek`, used by
+capacity-model.ts's closureOn, the Capacity grid and Settings › Restaurant Setup (`closureUpliftFor` removed from
+app/utils/capacityRules.ts). `/api/capacity/settings` returns replaced nights for this year and next plus
+`forecast.currentYear` (the `?year=` query is gone); the grid's `rowYear(month)` = this year for the current month and
+later, next year for earlier months (the months the budget forecast writes). Verified locally: Jan $144,530 and Dec
+$239,856 on the grid equal the budget's 4010 + 4022-4028 sums. No forecast or budget number changed; only the grid's
+display (and the Settings summary text) did.

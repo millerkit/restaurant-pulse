@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { neverOpenOn } from './area-hours'
+import { neverOpenOn } from '#shared/utils/area-hours'
 import { CORE_REVENUE_ACCOUNT_NUMBERS, MIN_COVERS_FOR_OPEN_DAY } from './core-revenue'
 
 type Db = Database.Database

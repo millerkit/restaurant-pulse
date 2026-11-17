@@ -37,7 +37,7 @@ Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends
 - **Owner pay**: Executive Chef and Business Manager accounts are `is_owner_compensation` (Settings ›
   Staff & Pay Rules); the GM is a hired market-rate role (not owner pay).
 - **Areas** (`capacity_areas`): Dining Room, Bar, Salon, Chef's Counter (6 seats × 2 turns, max 12; $190
-  prix fixe Tue–Sat; **closed Tuesdays from 2026-12-01**, 85% recapture; **never opens Sundays**, `server/utils/area-hours.ts`), Outdoor (closed Nov–Apr). One-off nights an area shouldn't count in the Covers & Spend trend go in `area_night_exclusions` (Settings › Restaurant Setup › Skipped nights).
+  prix fixe Tue–Sat; **closed Tuesdays from 2026-12-01**, 85% recapture; **never opens Sundays**, `shared/utils/area-hours.ts`, which also holds the closure-uplift math used by the server and the Capacity/Settings pages), Outdoor (closed Nov–Apr). One-off nights an area shouldn't count in the Covers & Spend trend go in `area_night_exclusions` (Settings › Restaurant Setup › Skipped nights).
   Toast table names map to areas: banquette 1–7 and 20s → Dining Room, 30s/40s → Salon, 50s → Outdoor,
   B# → Bar, C# → Chef's Counter.
 - **Loans**: 10 loans in `loan_schedule` (Eastern Bank SBA, QBO account 2740, plus 9 investor notes; the
@@ -162,6 +162,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
   reused every year (a closed month's row is next year's forecast). Pins: `capacity_areas.follow_actuals`
   (1 = automatic), `capacity_area_seasonality.pinned`. Chef's Counter spend per guest is pinned at
   $190/$50; covers Jan–Apr pinned at 7 (re-check after February 2027 actuals).
+- **Capacity grid rows are each month's next occurrence** (this month and later = this year, earlier = next year), so
+  its Projected Revenue equals the Sales Plan's food + beverage budget for that month (fixed 2026-11-17; see history).
 - **Covers values are per Tue–Sun night before any weekly area closure**; a closure (e.g. Chef's Counter
   Tuesdays) zeroes those nights and lifts the others by the recapture %, capped at capacity.
 - **Budget lines that follow the forecast** (`server/utils/budget-forecast.ts`), for every month after

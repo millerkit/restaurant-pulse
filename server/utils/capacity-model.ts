@@ -5,7 +5,7 @@
 // food/beverage sales with exactly the same math as the Capacity pages.
 import type Database from 'better-sqlite3'
 import { loadReplacedNights } from './special-nights'
-import { neverOpenDows } from './area-hours'
+import { areaClosedDows, areaClosureUplift, neverOpenDows } from '#shared/utils/area-hours'
 
 type Db = Database.Database
 
@@ -16,8 +16,6 @@ export type AreaRow = {
   closed_dows: string | null, closed_from: string | null, closure_recapture_pct: number
 }
 
-// Tue-Sun: the restaurant's regular service nights (Monday is the standing closure).
-const SERVICE_NIGHTS_PER_WEEK = 6
 // Weekly closure of one area (capacity_areas.closed_dows/closed_from — see schema.sql).
 // Before closed_from, or with no closure configured, uplift is 1 and nothing changes.
 // After it, the area is dark on its closed weekdays and its other nights carry
@@ -27,17 +25,14 @@ const SERVICE_NIGHTS_PER_WEEK = 6
 function closureOn(area: AreaRow, iso: string, dow: number): { closedToday: boolean, uplift: number } {
   // Never-open weekdays (Chef's Counter Sundays): always dark, and the stored covers are per
   // *operating* night, so they shrink the week's base nights but never get recaptured.
-  const never = neverOpenDows(area.name)
-  const baseNights = SERVICE_NIGHTS_PER_WEEK - never.size
-  const neverToday = never.has(dow)
+  const neverToday = neverOpenDows(area.name).has(dow)
   if (!area.closed_from || iso < area.closed_from || !area.closed_dows) return { closedToday: neverToday, uplift: 1 }
-  const closed = new Set(area.closed_dows.split(',').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6 && n !== 1 && !never.has(n)))
-  if (closed.size === 0) return { closedToday: neverToday, uplift: 1 }
-  const open = baseNights - closed.size
-  const r = Math.min(1, Math.max(0, (area.closure_recapture_pct ?? 0) / 100))
+  const raw = area.closed_dows.split(',').map(Number)
+  const closed = areaClosedDows(area.name, raw)
+  if (closed.length === 0) return { closedToday: neverToday, uplift: 1 }
   return {
-    closedToday: neverToday || closed.has(dow),
-    uplift: open > 0 ? (baseNights - closed.size * (1 - r)) / open : 1
+    closedToday: neverToday || closed.includes(dow),
+    uplift: areaClosureUplift(area.name, raw, area.closure_recapture_pct ?? 0)
   }
 }
 type AreaMonthRow = { area_id: number, month: number, expected_covers: number }

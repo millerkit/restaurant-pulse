@@ -16,7 +16,7 @@
 //   from 2026-12-01 comes from closed_dows. Single nights an area was used for something else (a private
 //   no-revenue event) are listed in area_night_exclusions and skipped for that area only.
 import { MIN_COVERS_FOR_OPEN_DAY } from '../../utils/core-revenue'
-import { neverOpenOn } from '../../utils/area-hours'
+import { neverOpenOn } from '#shared/utils/area-hours'
 import { loadPlannedNights } from '../../utils/special-nights'
 
 const TREND_WEEKS = 12

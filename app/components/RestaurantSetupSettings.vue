@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { areaClosureUplift, areaOpenNightsPerWeek } from '#shared/utils/area-hours'
 // Settings › Restaurant setup (moved from Planning › Capacity, 2026-11-08):
 // the room's physical setup — seats and turns per area (nightly capacity is
 // derived) and weekly area closures; holiday closures are their own list
@@ -61,8 +62,9 @@ function fillDefaultWeights(a: AreaDraft) {
 }
 function summary(a: AreaDraft) {
   if (a.closedDows.length === 0) return 'Open every service night'
-  const u = closureUpliftFor(a.closedDows.length, Number(a.recapturePct) || 0)
-  return `Open ${SERVICE_NIGHTS_PER_WEEK - a.closedDows.length} nights a week; covers on open nights × ${u.toFixed(2)}`
+  // Never-open weekdays (Chef's Counter Sundays) don't count as closed or recaptured.
+  const u = areaClosureUplift(a.name, a.closedDows, Number(a.recapturePct) || 0)
+  return `Open ${areaOpenNightsPerWeek(a.name, a.closedDows)} nights a week; covers on open nights × ${u.toFixed(2)}`
 }
 function weightsPayload(a: AreaDraft): Record<string, number> | null {
   const entries = openDows(a).map(d => [String(d.dow), Number(a.recaptureWeights[d.dow]) || 0] as const)

@@ -22,14 +22,7 @@ export const SERVICE_NIGHTS_PER_WEEK = 6
 // Default split of recaptured covers when an area closes one night (Wed/Thu heavy).
 export const RECAPTURE_DEFAULTS: Record<number, number> = { 3: 35, 4: 35, 5: 15, 6: 15 }
 
-// How much each open night's covers grow when `closed` nights are dark and
-// `recapturePct` (0-100) of their covers move to the open nights.
-export function closureUpliftFor(closed: number, recapturePct: number): number {
-  const open = SERVICE_NIGHTS_PER_WEEK - closed
-  if (closed === 0 || open <= 0) return 1
-  const r = Math.min(1, Math.max(0, (recapturePct || 0) / 100))
-  return (SERVICE_NIGHTS_PER_WEEK - closed * (1 - r)) / open
-}
+// Closure uplift (with never-open weekdays) lives in shared/utils/area-hours.ts.
 
 export function parseClosedDows(s: string | null): number[] {
   return (s ?? '').split(',').filter(x => x !== '').map(Number).filter(n => Number.isInteger(n) && n !== 1)
