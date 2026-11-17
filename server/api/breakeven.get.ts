@@ -16,6 +16,8 @@
 //   4. + Loan principal — scheduled principal from loan_schedule, which QBO's P&L never shows
 //                        => the cash breakeven (interest is already inside fixed opex via 7020)
 //
+// Labor is restated to an average payroll month by default (wages × the year's paychecks ÷ 12 ÷ this
+// month's paychecks); ?payroll=month keeps the month's real paychecks.
 // Everything labor/opex comes from the saved month budget (budget_targets), so it reflects what
 // the Labor/Edit Budget tabs currently say; spend per cover and covers/night come from a trailing
 // 8-week window of real data (Toast covers, core dine-in QBO revenue), using the same open-day
@@ -26,6 +28,8 @@
 // and variable opex% taken from category_benchmarks (the app's own standards), not recent actuals.
 // Only CORE dine-in revenue is modeled: events/catering/retail margin lowers the covers needed
 // further but isn't part of this per-cover framing.
+import { fridaysInMonth } from '#shared/utils/labor-model'
+
 const RESTAURANT_TIME_ZONE = 'America/New_York'
 const WINDOW_DAYS = 56
 
@@ -92,9 +96,26 @@ export default defineEventHandler((event) => {
     }
   }
   const taxRate = subject > 0 ? taxTotal / subject : 0
-  const fixedLabor = (fixedWages + otherFlat) * (1 + taxRate) + benefits
-  const kitchenCrew = kitchenWages * (1 + taxRate)
-  const variableLabor = variableWages * (1 + taxRate)
+  // Payroll posts every Friday (cash basis), so a 5-Friday month carries ~25% more wages than a
+  // 4-Friday one. "Average payroll month" (the default, 2026-11-17) restates wages and their payroll
+  // taxes at the year's paychecks ÷ 12, so a month is judged on a normal month's labor, not on paycheck
+  // timing; ?payroll=month shows the month's real paychecks (what Budget and Cash & Loans use).
+  // Benefits and flat monthly pay don't depend on paydays and are never restated.
+  const payrollMode: 'average' | 'month' = q.payroll === 'month' ? 'month' : 'average'
+  const monthPaychecks = fridaysInMonth(year, month)
+  const averagePaychecks = Array.from({ length: 12 }, (_, i) => fridaysInMonth(year, i + 1)).reduce((s, n) => s + n, 0) / 12
+  const payrollFactor = payrollMode === 'average' && monthPaychecks > 0 ? averagePaychecks / monthPaychecks : 1
+  const laborWith = (f: number) => ({
+    fixedLabor: (fixedWages * f + otherFlat) * (1 + taxRate) + benefits,
+    kitchenCrew: kitchenWages * f * (1 + taxRate),
+    variableLabor: variableWages * f * (1 + taxRate)
+  })
+  const { fixedLabor, kitchenCrew, variableLabor } = laborWith(payrollFactor)
+  // How much more (or less) the month's real paychecks cost than an average payroll month.
+  const cashLabor = laborWith(1)
+  const averageLabor = laborWith(monthPaychecks > 0 ? averagePaychecks / monthPaychecks : 1)
+  const paycheckTimingDifference = (cashLabor.fixedLabor + cashLabor.kitchenCrew + cashLabor.variableLabor)
+    - (averageLabor.fixedLabor + averageLabor.kitchenCrew + averageLabor.variableLabor)
 
   const fixedOpex = (db.prepare(`
     SELECT COALESCE(SUM(bt.amount), 0) AS total
@@ -290,6 +311,7 @@ export default defineEventHandler((event) => {
   return {
     year, month, isCurrentMonth, today, asOfDate, windowStart, sampleOpenDays: openDays.length, nights,
     laborBudgeted,
+    payroll: { mode: payrollMode, monthPaychecks, averagePaychecks, paycheckTimingDifference },
     avgCoversPerNight, avgSpend, excludedNights,
     expectedCoversPerNight, coversSource,
     cogsPct, varOpexPct, contribRate, fohPerCover,

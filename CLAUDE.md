@@ -353,7 +353,9 @@ events/buyouts/catering margin (budget 41xx–42xx + dated buyout increment + ev
 contribution rate) − planned retail margin (budget 43xx; cost % from actual 53xx÷43xx since the move once ≥ $1K,
 else budget, else the food & drink cost target) = **still short**, also as event sales needed. Event-only labor is
 not modeled. By-weekday: every night grows by the same % over expected covers (toggle: with planned events &
-retail / dine-in only). See history.
+retail / dine-in only). **Payroll** (2026-11-17): labor defaults to an *average payroll month* (wages, OT and
+their payroll taxes × the year's paychecks ÷ 12 ÷ the month's Fridays; benefits and flat pay unchanged);
+"This month's N paychecks" (`?payroll=month`) is the cash view the Budget and Cash & Loans use. See history.
 
 ## Cash & Loans Year-End Outlook
 

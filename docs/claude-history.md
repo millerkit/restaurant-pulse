@@ -6525,3 +6525,21 @@ nights, so don't also date Tasting Collective nights as special nights. The rest
 (36 accounts on a full-year diff, e.g. 6082 Employer FICA $39,430 missing); not repaired, Kit chose January revenue only.
 Caveat: Cambridge St's level comes from its first five months, which may include opening buzz.
 `dataAnnualFillPct` was replaced by `coversPerNightLevel`; `monthlyIndex` now carries its weighted observations.
+
+
+## 2026-11-17 — Breakeven: average payroll month
+
+After the seasonality rebuild, January 2027 Breakeven still read $43,481 short at the P&L layer. Two cost effects:
+kitchen crew rose $46,980 -> $60,005 because the labor forecast scales direct hours to forecast covers (January
+went from the -15% clamp at 69 covers to about +9% at 96), and January 2027 has five payroll Fridays (1, 8, 15, 22,
+29) against 53/12 = 4.42 on average in 2027. Payroll posts every Friday on a cash basis, so every wage line carries
+five paychecks (fixed labor runs about $14,100 per paycheck all year).
+`server/api/breakeven.get.ts` now restates wages (hourly, salary, OT) and their payroll taxes by
+(year's Fridays / 12) / month's Fridays by default (`payroll.mode = 'average'`); benefits (6060) and flat monthly
+pay are untouched. `?payroll=month` keeps the real paychecks. The response carries `payroll: { mode, monthPaychecks,
+averagePaychecks, paycheckTimingDifference }` (cash minus average labor incl. FOH), and the page shows a toggle on
+the gap card plus a one-line note. Production January 2027 (from its saved budget): fixed labor $70,353 -> $62,456,
+kitchen $60,005 -> $53,004, FOH $19,089 -> $16,862; $17,125 of timing, so P&L "still short" ~ $43,481 -> ~$26,350.
+Four-paycheck months move the other way (February 2027 +$12,055 of labor). Budget, Cash & Loans and the labor
+forecast are unchanged. Verified with production numbers via a read-only script and in the browser with a mocked
+production-shaped response (local data has no recent revenue, so the page shows "Not enough data yet" locally).

@@ -20,7 +20,9 @@ type Weekday = {
 type Breakeven = {
   year: number, month: number, isCurrentMonth: boolean, today: { year: number, month: number },
   asOfDate: string | null, windowStart: string | null, sampleOpenDays: number, nights: number,
-  laborBudgeted: boolean, avgCoversPerNight: number | null, avgSpend: number | null,
+  laborBudgeted: boolean,
+  payroll: { mode: 'average' | 'month', monthPaychecks: number, averagePaychecks: number, paycheckTimingDifference: number },
+  avgCoversPerNight: number | null, avgSpend: number | null,
   expectedCoversPerNight: number | null, coversSource: 'recent' | 'forecast',
   cogsPct: number | null, varOpexPct: number | null, contribRate: number | null, fohPerCover: number, contribPerCover: number | null,
   components: { fixedLabor: number, kitchenCrew: number, variableLabor: number, fixedOpex: number, loanPrincipal: number },
@@ -40,7 +42,15 @@ const router = useRouter()
 const { year: selYear } = useBudgetYearSelection()
 // Month: ?month= in the URL; left out, the API picks the first open month (this month, or January).
 const selMonth = ref<number | null>(Number(route.query.month) || null)
-const query = computed(() => ({ year: selYear.value, ...(selMonth.value ? { month: selMonth.value } : {}) }))
+// Payroll: an average payroll month by default (wages restated to the year's paychecks ÷ 12), or
+// this month's real paychecks (?payroll=month), the cash view the Budget and Cash & Loans use.
+const payrollMode = ref<'average' | 'month'>(route.query.payroll === 'month' ? 'month' : 'average')
+function setPayrollMode(m: 'average' | 'month') {
+  payrollMode.value = m
+  const { payroll: _drop, ...rest } = route.query
+  router.replace({ query: m === 'month' ? { ...rest, payroll: 'month' } : rest })
+}
+const query = computed(() => ({ year: selYear.value, ...(selMonth.value ? { month: selMonth.value } : {}), ...(payrollMode.value === 'month' ? { payroll: 'month' } : {}) }))
 const { data, pending, error, refresh } = await useFetch<Breakeven>('/api/breakeven', { query, lazy: true })
 
 // Default to the P&L breakeven (lines up with the budget), cash breakeven one click away.
@@ -104,6 +114,19 @@ const liftText = computed(() => {
     ? `Every night needs about ${n}% more covers than expected.`
     : `Every night could run about ${n}% below expected and still cover this layer.`
 })
+const paychecks = (n: number) => `${Number.isInteger(n) ? n : n.toFixed(1)} paycheck${n === 1 ? '' : 's'}`
+// One line on paycheck timing, only when the month's paychecks differ from an average month's.
+const payrollNote = computed(() => {
+  const d = data.value
+  if (!d) return null
+  const diff = d.payroll.paycheckTimingDifference
+  if (Math.abs(diff) < 1) return null
+  const month = MONTH_NAMES[d.month - 1]
+  const more = diff > 0 ? 'more' : 'less'
+  return d.payroll.mode === 'average'
+    ? `Labor is shown for an average payroll month (${paychecks(d.payroll.averagePaychecks)} in ${d.year}). ${month} actually pays ${paychecks(d.payroll.monthPaychecks)}: ${fmtMoney(Math.abs(diff))} ${more} in cash, which evens out over the year.`
+    : `Labor is ${month}'s real ${paychecks(d.payroll.monthPaychecks)}: ${fmtMoney(Math.abs(diff))} ${more} than an average payroll month (${paychecks(d.payroll.averagePaychecks)} in ${d.year}).`
+})
 const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? 'forecast covers' : 'recent avg covers')
 </script>
 
@@ -141,7 +164,13 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
 
         <!-- ============ The gap ============ -->
         <section class="be-card">
-          <div class="be-title">Closing the gap — {{ monthName }}</div>
+          <div class="be-head">
+            <div class="be-title">Closing the gap — {{ monthName }}</div>
+            <div class="seg" role="group" aria-label="Payroll">
+              <button type="button" :class="{ on: payrollMode === 'average' }" :aria-pressed="payrollMode === 'average'" @click="setPayrollMode('average')">Average payroll month</button>
+              <button type="button" :class="{ on: payrollMode === 'month' }" :aria-pressed="payrollMode === 'month'" @click="setPayrollMode('month')">This month's {{ paychecks(data.payroll.monthPaychecks) }}</button>
+            </div>
+          </div>
           <table v-if="tier" class="be-table gap">
             <tbody>
               <tr>
@@ -185,6 +214,7 @@ const expectedLabel = computed(() => data.value?.coversSource === 'forecast' ? '
               </tr>
             </tfoot>
           </table>
+          <div v-if="payrollNote" class="be-basis">{{ payrollNote }}</div>
           <div class="be-basis"><NuxtLink to="/budget/revenue">Add events and buyouts on the Sales Plan →</NuxtLink></div>
         </section>
 
