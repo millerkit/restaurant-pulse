@@ -6322,3 +6322,39 @@ revenue with no new cash.
   showed production's GeneralLedger names columns only in `ColType` (no `MetaData` ColKey), omits Credit even when
   `credt_amt` is requested, and returns Debit plus a signed Amount (sold +, redeemed −), one row per JE line. The parser
   now reads `ColType` too and uses the signed amount. Nov 1–14 in QBO: $3,175.00 sold, $2,251.90 redeemed, net $923.10.
+
+## 2026-11-17 — Home › Summary: a plain-language page for every role
+
+Kit asked for a high-level, text-based summary for the Home tab, light on charts and numbers, open to every manager.
+Decisions (Kit): Summary opens first for all roles; the GM's version mentions profit; the Sous Chef's includes guests and
+food cost; after comparing plain and softer wording side by side (mockup), the **softer tone for everyone, good news
+first**.
+- **Routing**: `app/pages/index.vue` is now Summary; This Week moved to `app/pages/this-week.vue` (`/this-week`).
+  Home's sub-tabs are Summary + This Week (owner/GM) or Summary + `/kitchen-week` (Sous Chef). `roleHome()` returns `/`
+  for every role. `shared/utils/access.ts`: `/` for the kitchen role, `/this-week` for the GM, `/api/home-summary` in
+  `COMMON_GET`. The owners' note POST is not listed, so default deny keeps it owner-only (an owner previewing as GM or Sous
+  Chef is refused too).
+- **Engine** (`server/utils/home-summary.ts`, `buildHomeSummary(db, role, today, cash)`): fixed rules produce facts
+  `{section, tone, weight, roles, text, headline?, primary?}`. The role filter runs first; sections, ordering and the
+  headline (biggest good clause, then "though" + biggest concern, from last week only) are built from what's left.
+  - Last week = the Tue–Sun ending on the Sunday on/before the latest Toast date. Guests per ordinary open night vs. the
+    4 weeks before (±5% = steady); busiest night; the night furthest under its weekday's expected covers (≤ −10%);
+    special nights (event sales only from 41xx; a buyout counts that night's dine-in); dine-in sales vs. the weekly goal
+    (same targets as This Week, event income on event nights) and spend per guest vs. the targets' typical (owner/GM, only
+    when QBO is synced through that Sunday).
+  - This month: guests on regular nights vs. expected covers (all roles); dine-in projection
+    (`computeRevenueProjection`) vs. the month's core budget (owner/GM). Last closed, fully synced month: profit vs.
+    budget, food & drink cost and labor % vs. `category_benchmarks` (owner/GM); food cost % for the Sous Chef.
+  - Cash and loans (owner): `server/api/home-summary.get.ts` calls the Cash & Loans handler with the same event, so the
+    reserve's on-pace/shortfall, payments due in 30 days and gift card net are Cash & Loans' own numbers.
+  - Looking ahead: dated special nights/holidays in the next 14 days (dollars only for owner/GM), booking pace from a
+    fresh upload only (nights from today on; a stale upload gives the owner a note instead), busiest regular night in the
+    next 7 (booking estimate, else expected covers), weekly area closures starting within 30 days.
+- **Page**: headline, data notes, owners' note (owner edits inline), six-night strip (sales vs. goal for owner/GM when
+  synced, else guests vs. expected; ✓ ▲ ▼ ★ ◦ always with the value), one progress bar with a target tick, sections with
+  ✓ / • / ⚠ markers (icon + color, screen-reader label) and a link to a page that role may open.
+- **Verified**: API as owner, GM and Sous Chef (view_as cookie) on local data (QBO stale → dollar sentences dropped with
+  a data note); the money path on a scratch copy trimmed to July with a test event night and fake cash inputs (each role
+  got only its facts; GM no Cash and loans; Sous Chef no dollars); 403 for GM/Sous Chef on the note POST; Sous Chef
+  redirected from `/this-week` and 403 on `/api/dashboard`; browser check desktop + phone, note save, `/this-week`.
+  Typecheck 300 errors, none in new/changed files. Not checked against production data before deploy.

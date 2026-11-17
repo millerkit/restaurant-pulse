@@ -4,7 +4,7 @@ import { paceStatus } from '~/composables/useBudgetData'
 
 // This Week for the Sous Chef (kitchen role): covers and bookings only, no dollars.
 // Data: /api/kitchen-week, which selects only guest counts (see that route). The owner/GM
-// version of this page is pages/index.vue; the kitchen role can't call its API.
+// version of this page is pages/this-week.vue; the kitchen role can't call its API.
 useHead({ title: `${site.restaurantName} — This Week (Kitchen)` })
 
 type Special = { kind: 'buyout' | 'closed' | 'offsite' | 'event' | 'catering', note: string | null, holiday: string | null } | null

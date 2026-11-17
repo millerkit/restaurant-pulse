@@ -4,6 +4,8 @@
 //
 // Roles:
 //   owner   - everything, including Settings and every write.
+//   all     - Home › Summary (/, /api/home-summary): its text is built per role from only the facts
+//             that role may see (server/utils/home-summary.ts). The owners' note on it is owner-only.
 //   gm      - read-only: This Week (with cost pace and budget runway), Daily Results (sales and
 //             profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
 //             with dollars. Owner compensation is withheld server-side (see the redactions).
@@ -23,13 +25,13 @@ export const ROLE_LABELS: Record<Role, string> = {
 }
 
 const PAGES: Record<Exclude<Role, 'owner'>, string[]> = {
-  gm: ['/', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/budget'],
-  kitchen: ['/kitchen-week', '/kitchen-labor']
+  gm: ['/', '/this-week', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/budget'],
+  kitchen: ['/', '/kitchen-week', '/kitchen-labor']
 }
 
 // Read-only API prefixes (matched exactly or as a path prefix). Anything with a
 // method other than GET/HEAD is denied unless listed in API_WRITES.
-const COMMON_GET = ['/api/me', '/api/sync-status']
+const COMMON_GET = ['/api/me', '/api/sync-status', '/api/home-summary']
 const API_GET: Record<Exclude<Role, 'owner'>, string[]> = {
   gm: [
     ...COMMON_GET,
@@ -70,6 +72,7 @@ export function roleCanCallApi(role: Role, path: string, method: string): boolea
   return m === 'POST' && API_WRITES[role].includes(p)
 }
 
-export function roleHome(role: Role): string {
-  return role === 'kitchen' ? '/kitchen-week' : '/'
+// Every role lands on Home › Summary (2026-11-17).
+export function roleHome(_role: Role): string {
+  return '/'
 }

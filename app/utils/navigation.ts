@@ -32,7 +32,8 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Home',
     icon: 'home',
     pages: [
-      { label: 'This Week', to: '/', path: '/', onlyFor: ['owner', 'gm'] },
+      { label: 'Summary', to: '/', path: '/' },
+      { label: 'This Week', to: '/this-week', path: '/this-week', onlyFor: ['owner', 'gm'] },
       { label: 'This Week', to: '/kitchen-week', path: '/kitchen-week', onlyFor: ['kitchen'] }
     ]
   },

@@ -99,7 +99,7 @@ Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends
   `Cf-Access-Jwt-Assertion` JWT, never just the Host header. The raw `restaurant-pulse.fly.dev` hostname
   keeps shared Basic Auth as an owner backstop. Cloudflare's allow-list is edited in Cloudflare.
 - **Roles** (`user_roles`, `shared/utils/access.ts`, default deny, enforced on pages and API routes):
-  `owner` = everything; `gm` = read-only This Week (incl. cost pace/budget runway), Daily Results, Covers &
+  Everyone lands on Home › Summary (`/`, `roleHome`). `owner` = everything; `gm` = read-only This Week (incl. cost pace/budget runway), Daily Results, Covers &
   Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost with dollars, plus "Sync now"; `kitchen` =
   Kitchen This Week (`/kitchen-week`, covers only) and Kitchen Hours & Cost as percentages/hours only.
   Owner pay is merged or zeroed server-side for non-owners. Owners can "Preview as" GM/Sous Chef
@@ -231,7 +231,7 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 ## Navigation map
 
 Defined in `app/utils/navigation.ts`, rendered by `app/layouts/default.vue` (bottom bar on phones).
-Home: This Week (`/`; kitchen role: `/kitchen-week`). Sales (a section opens on its first tab): Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`: complete weeks only, buyout/event/closed nights left out, an area's empty night counts as 0), Daily Results (`/pl/revenue-calendar`, sales
+Home: Summary (`/`, every role; see below), This Week (`/this-week`; kitchen role: `/kitchen-week`). Sales (a section opens on its first tab): Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`: complete weeks only, buyout/event/closed nights left out, an area's empty night counts as 0), Daily Results (`/pl/revenue-calendar`, sales
 and profit views; the profit view leaves out Mondays and holiday closures unless a special night is dated there, listing any money that landed on them), Seasonal Trends (`/historical`). Team: Kitchen Hours &
 Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
 from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
@@ -264,6 +264,19 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
   date. No snapshot (everything before the deploy) falls back to the model. Per-area figures are not snapshotted.
 - Forecast math files were not touched. Details and verification: `docs/claude-history.md`.
 
+
+## Home › Summary (`/`, every role) — built 2026-11-17
+
+A few plain sentences on how we've been doing: last complete Tue–Sun week, this month so far, Cash and loans (owner
+only), looking ahead (next 2 weeks), plus a six-night strip, one progress bar and an optional owners' note
+(`home_summary_note`, migration 0023, owner-only `POST /api/home-summary/note`). Rules-based, not an AI writer
+(`server/utils/home-summary.ts`): each finding is a fact with a tone, a size and the **roles allowed to see it, filtered
+before any sentence or headline is built**. Kit's decisions: the softer tone for everyone, **good news first** (each
+section sorts good → neutral → concern, main facts before details); the GM sees profit (same figure as the owner: owner
+pay is folded into labor for non-owners, never removed); the Sous Chef sees guests and the last closed month's food
+cost % (5010+5220 over all food sales, vs. plan, else the month before), never dollars. Profit and cost % only for a
+closed, fully synced month. Booking sentences only from a fresh OpenTable upload. Owner's reserve figures come from
+calling the Cash & Loans handler directly. Stale Toast/QBO data adds a "Data note" and drops the affected sentences.
 
 ## Not yet done
 
@@ -316,6 +329,7 @@ Forecast Accuracy.
 - Budget pages: [`app/pages/budget/edit.vue`](app/pages/budget/edit.vue), [`revenue.vue`](app/pages/budget/revenue.vue), [`labor.vue`](app/pages/budget/labor.vue), [`index.vue`](app/pages/budget/index.vue) (Budget Check); shared [`app/composables/useBudgetData.ts`](app/composables/useBudgetData.ts), [`app/utils/laborModel.ts`](app/utils/laborModel.ts), [`app/utils/revenueProjection.ts`](app/utils/revenueProjection.ts); routes in [`server/api/budget/`](server/api/budget/)
 - Capacity: [`app/pages/capacity/index.vue`](app/pages/capacity/index.vue), [`server/api/capacity.get.ts`](server/api/capacity.get.ts), [`server/api/capacity/`](server/api/capacity/)
 - Cash & Loans: [`app/pages/cashflow.vue`](app/pages/cashflow.vue), [`server/api/cashflow.get.ts`](server/api/cashflow.get.ts), [`app/utils/yearOutlook.ts`](app/utils/yearOutlook.ts), [`server/utils/bank-register-import.mjs`](server/utils/bank-register-import.mjs)
-- This Week / Daily Results: [`app/pages/index.vue`](app/pages/index.vue), [`server/api/dashboard.get.ts`](server/api/dashboard.get.ts), [`app/pages/pl/revenue-calendar.vue`](app/pages/pl/revenue-calendar.vue), [`server/api/pl.get.ts`](server/api/pl.get.ts), [`server/api/nightly-margin.get.ts`](server/api/nightly-margin.get.ts)
+- Home Summary: [`app/pages/index.vue`](app/pages/index.vue), [`server/utils/home-summary.ts`](server/utils/home-summary.ts), [`server/api/home-summary.get.ts`](server/api/home-summary.get.ts)
+- This Week / Daily Results: [`app/pages/this-week.vue`](app/pages/this-week.vue), [`server/api/dashboard.get.ts`](server/api/dashboard.get.ts), [`app/pages/pl/revenue-calendar.vue`](app/pages/pl/revenue-calendar.vue), [`server/api/pl.get.ts`](server/api/pl.get.ts), [`server/api/nightly-margin.get.ts`](server/api/nightly-margin.get.ts)
 - Team: [`app/pages/kitchen-labor.vue`](app/pages/kitchen-labor.vue), [`app/pages/kitchen-week.vue`](app/pages/kitchen-week.vue), [`app/pages/staff-hours.vue`](app/pages/staff-hours.vue)
 - Settings and navigation: [`app/pages/settings.vue`](app/pages/settings.vue), [`app/utils/navigation.ts`](app/utils/navigation.ts), [`app/layouts/default.vue`](app/layouts/default.vue); styles [`app/assets/css/main.css`](app/assets/css/main.css)

@@ -1007,3 +1007,13 @@ CREATE TABLE IF NOT EXISTS area_night_exclusions (
   note    TEXT,
   PRIMARY KEY (area_id, date)
 );
+
+-- Home › Summary owners' note (migration 0023, 2026-11-17): one optional free-text note typed by
+-- an owner on the Summary page (POST /api/home-summary/note, owner-only by default deny) and shown
+-- to every role above the automatic summary. Single row (id is always 1); an empty note deletes it.
+CREATE TABLE home_summary_note (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  body        TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  updated_by  TEXT
+);
