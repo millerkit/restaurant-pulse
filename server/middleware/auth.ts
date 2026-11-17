@@ -73,12 +73,12 @@ function resolveRole(email: string | null): { role: Role, email: string | null, 
 
 // "View as" (2026-11-09): a real owner can preview what the GM or Sous Chef sees. The choice is
 // kept in an httpOnly cookie set by POST /api/view-as and is honored ONLY when the signed-in
-// person is really an owner, and only ever downgrades (to gm or kitchen), so it can't be used to
+// person is really an owner, and only ever downgrades (to gm, kitchen or floor), so it can't be used to
 // gain access. The real role is kept in `realRole` so the owner can always switch back.
 function applyViewAs(event: H3Event, auth: { role: Role, email: string | null, name: string | null }) {
   if (auth.role !== 'owner') return auth
   const want = parseCookies(event)['view_as']
-  if (want !== 'gm' && want !== 'kitchen') return auth
+  if (want !== 'gm' && want !== 'kitchen' && want !== 'floor') return auth
   return { ...auth, role: want as Role, realRole: 'owner' as Role }
 }
 

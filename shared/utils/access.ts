@@ -9,6 +9,9 @@
 //   gm      - read-only: This Week (with cost pace and budget runway), Daily Results (sales and
 //             profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
 //             with dollars. Owner compensation is withheld server-side (see the redactions).
+//   floor   - the Floor Manager (2026-11-17): exactly what kitchen sees (Summary, This Week for the
+//             kitchen), except FOH Hours (/foh-hours, hours per person, no dollars) in place of Kitchen
+//             Hours & Cost. Not allowed on /api/dashboard, /api/kitchen-labor or anything with pay.
 //   kitchen - read-only: This Week for the kitchen (covers and bookings only, /kitchen-week) and
 //             Kitchen Hours & Cost, percentages and hours only (forced server-side, see
 //             server/api/kitchen-labor.get.ts). Kitchen is deliberately NOT allowed on
@@ -16,17 +19,19 @@
 //             revenue); /api/kitchen-week selects only covers, so there is nothing to redact.
 // Default deny: anything not listed here is owner-only.
 
-export type Role = 'owner' | 'gm' | 'kitchen'
-export const ROLES: Role[] = ['owner', 'gm', 'kitchen']
+export type Role = 'owner' | 'gm' | 'kitchen' | 'floor'
+export const ROLES: Role[] = ['owner', 'gm', 'kitchen', 'floor']
 export const ROLE_LABELS: Record<Role, string> = {
   owner: 'Owner (everything)',
   gm: 'General Manager',
-  kitchen: 'Kitchen (Sous Chef)'
+  kitchen: 'Kitchen (Sous Chef)',
+  floor: 'Floor Manager'
 }
 
 const PAGES: Record<Exclude<Role, 'owner'>, string[]> = {
-  gm: ['/', '/this-week', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/budget'],
-  kitchen: ['/', '/kitchen-week', '/kitchen-labor']
+  gm: ['/', '/this-week', '/pl/revenue-calendar', '/capacity', '/historical', '/kitchen-labor', '/foh-hours', '/budget'],
+  kitchen: ['/', '/kitchen-week', '/kitchen-labor'],
+  floor: ['/', '/kitchen-week', '/foh-hours']
 }
 
 // Read-only API prefixes (matched exactly or as a path prefix). Anything with a
@@ -36,17 +41,19 @@ const API_GET: Record<Exclude<Role, 'owner'>, string[]> = {
   gm: [
     ...COMMON_GET,
     '/api/dashboard', '/api/booking-pace', '/api/pl', '/api/capacity',
-    '/api/kitchen-labor', '/api/nightly-margin',
+    '/api/kitchen-labor', '/api/foh-hours', '/api/nightly-margin',
     // Budget Check
     '/api/budget/targets', '/api/budget/actuals', '/api/budget/overspending-detail'
   ],
-  kitchen: [...COMMON_GET, '/api/kitchen-labor', '/api/kitchen-week']
+  kitchen: [...COMMON_GET, '/api/kitchen-labor', '/api/kitchen-week'],
+  floor: [...COMMON_GET, '/api/kitchen-week', '/api/foh-hours']
 }
 // Writes a non-owner may make: the "Sync now" button in the page header (not for the Sous Chef,
 // 2026-11-09), and /api/view-as, whose handler itself only honors a real owner.
 const API_WRITES: Record<Exclude<Role, 'owner'>, string[]> = {
   gm: ['/api/qbo/sync', '/api/view-as'],
-  kitchen: ['/api/view-as']
+  kitchen: ['/api/view-as'],
+  floor: ['/api/view-as']
 }
 
 function norm(p: string) {

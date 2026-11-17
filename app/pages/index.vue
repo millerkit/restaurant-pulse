@@ -21,7 +21,7 @@ type Payload = {
   progress: { label: string, actual: number, target: number, status: 'up' | 'on' | 'down', note: string } | null
   note: { body: string, updatedAt: string, updatedBy: string | null } | null
   canEditNote: boolean
-  role: 'owner' | 'gm' | 'kitchen'
+  role: 'owner' | 'gm' | 'kitchen' | 'floor'
 }
 const { data, pending, error, refresh } = await useFetch<Payload>('/api/home-summary', { lazy: true })
 
@@ -163,7 +163,7 @@ async function saveNote() {
 
         <p class="footnote">
           Written automatically each night from QuickBooks, Toast and OpenTable.
-          {{ data.role === 'kitchen' ? 'Food cost' : 'Profit and cost percentages' }} use{{ data.role === 'kitchen' ? 's' : '' }} the last closed month,
+          {{ data.role === 'kitchen' || data.role === 'floor' ? 'Food cost' : 'Profit and cost percentages' }} use{{ data.role === 'kitchen' || data.role === 'floor' ? 's' : '' }} the last closed month,
           since this month's bills haven't all landed yet.
         </p>
       </div>

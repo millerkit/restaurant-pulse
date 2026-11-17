@@ -71,7 +71,9 @@ export type CashInputs = {
   giftCards: { startDate: string, sold: number, net: number } | null
 }
 
-const ALL: Role[] = ['owner', 'gm', 'kitchen']
+const ALL: Role[] = ['owner', 'gm', 'kitchen', 'floor']
+// Roles that never see dollars and share the Sous Chef's view: guest counts and food cost %, no dollars.
+const GUESTS_ONLY: Role[] = ['kitchen', 'floor']
 const MONEY: Role[] = ['owner', 'gm']
 const OWNER: Role[] = ['owner']
 
@@ -161,6 +163,7 @@ function netIncomeOf(t: Record<string, number>) {
 export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashInputs | null): HomeSummary {
   const facts: Fact[] = []
   const notices: string[] = []
+  const guestsOnly = GUESTS_ONLY.includes(role)
 
   const toastThrough = (db.prepare('SELECT MAX(date) AS d FROM daily_toast_metrics').get() as { d: string | null }).d
   const salesThrough = (db.prepare('SELECT MAX(date) AS d FROM daily_line_items').get() as { d: string | null }).d
@@ -188,7 +191,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
   if (toastThrough && toastThrough < addDays(today, -3)) {
     notices.push(`Guest counts are only synced through ${shortDate(toastThrough)}.`)
   }
-  if (role !== 'kitchen' && salesThrough && salesThrough < addDays(today, -3)) {
+  if (!guestsOnly && salesThrough && salesThrough < addDays(today, -3)) {
     notices.push(`Sales from QuickBooks are only synced through ${shortDate(salesThrough)}, so dollar figures are left out until they catch up.`)
   }
 
@@ -274,7 +277,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       const label = n.plan?.note ? n.plan.note : n.plan?.kind === 'buyout' ? 'buyout' : n.plan?.kind === 'offsite' ? 'off-site event' : n.plan?.kind === 'catering' ? 'catering' : 'event'
       const guests = n.covers && n.covers >= MIN_COVERS_FOR_OPEN_DAY ? `, with ${n.covers} guests` : ''
       // Without synced sales, owner and GM get the same dollar-free sentence as the kitchen.
-      facts.push({ id: `special-${n.date}`, section: 'week', tone: 'neutral', weight: 0, roles: salesSynced ? ['kitchen'] : ALL, text: `${day} was the ${label}${guests}.` })
+      facts.push({ id: `special-${n.date}`, section: 'week', tone: 'neutral', weight: 0, roles: salesSynced ? GUESTS_ONLY : ALL, text: `${day} was the ${label}${guests}.` })
       if (salesSynced) {
         // Event sales (41xx) only; a buyout's price rings into dine-in, so that night's dine-in counts.
         const brought = n.plan?.kind === 'buyout' ? (n.core ?? 0) : n.event
@@ -312,7 +315,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
     }
 
     // The six-night strip: sales vs. goal for owner/GM (when synced), guests vs. expected otherwise.
-    const basis: 'sales' | 'covers' = role !== 'kitchen' && salesSynced ? 'sales' : 'covers'
+    const basis: 'sales' | 'covers' = !guestsOnly && salesSynced ? 'sales' : 'covers'
     nightsOut = {
       basis,
       items: nights.map((n) => {
@@ -353,14 +356,14 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       if (r >= STEADY_PCT) facts.push({ id: 'month-guests', primary: true, section: 'month', tone: 'good', weight: r, roles: ALL, text: `${monthName} is running ${pctWhole(r)} ahead of expected guests so far, with ${over}.` })
       else if (r <= -STEADY_PCT) facts.push({ id: 'month-guests', primary: true, section: 'month', tone: 'concern', weight: -r, roles: ALL, text: `${monthName} is running ${pctWhole(r)} below expected guests so far, with ${over}.` })
       else facts.push({ id: 'month-guests', primary: true, section: 'month', tone: 'neutral', weight: 0, roles: ALL, text: `${monthName} is on pace for expected guests so far, with ${over}.` })
-      if (role === 'kitchen' || !salesThrough || salesThrough < addDays(today, -3)) {
+      if (guestsOnly || !salesThrough || salesThrough < addDays(today, -3)) {
         progress = { label: `${monthName} guests so far vs. expected`, actual: guests, target: expected, status: r >= STEADY_PCT ? 'up' : r > -STEADY_PCT ? 'on' : 'down', note: 'Regular nights only; buyouts, events and closures are left out.' }
       }
     }
   }
 
   // Dine-in sales projection for the month vs. its frozen plan (owner and GM).
-  if (role !== 'kitchen' && salesThrough && salesThrough >= addDays(today, -3)) {
+  if (!guestsOnly && salesThrough && salesThrough >= addDays(today, -3)) {
     try {
       const proj = computeRevenueProjection(db, ty, tm)
       const plan = sumByAccounts(db, CORE_REVENUE_ACCOUNT_NUMBERS, monthStart, monthEndIso(ty, tm), 'budget')
@@ -430,7 +433,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       // Judged against the plan when there is one, else against the month before.
       const gap = fcPlan != null ? vsPlan : d
       const tone: Tone = gap >= 0.01 ? 'concern' : gap <= -0.005 ? 'good' : 'neutral'
-      facts.push({ id: 'food-cost', primary: true, section: 'month', tone, weight: Math.abs(vsPlan || d), roles: ['kitchen'], text })
+      facts.push({ id: 'food-cost', primary: true, section: 'month', tone, weight: Math.abs(vsPlan || d), roles: GUESTS_ONLY, text })
     }
   }
 
@@ -474,7 +477,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       case 'catering': base = `${w}: catering${note} alongside dinner.`; break
       default: base = `${w}: ${p.note ?? 'event night'}.`
     }
-    facts.push({ id: `ahead-${p.date}`, section: 'ahead', tone: 'neutral', weight: 0, order: order++, roles: ['kitchen'], text: base })
+    facts.push({ id: `ahead-${p.date}`, section: 'ahead', tone: 'neutral', weight: 0, order: order++, roles: GUESTS_ONLY, text: base })
     const dollars = p.kind === 'buyout' ? p.expectedRevenue : p.eventRevenue
     const withMoney = dollars > 0 && p.kind !== 'closed' ? base.replace(/\.$/, `, ${money(dollars)} expected.`) : base
     facts.push({ id: `ahead-$-${p.date}`, section: 'ahead', tone: 'neutral', weight: 0, order: order++, roles: MONEY, text: withMoney })
@@ -530,10 +533,10 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
 
   const link = (to: string, label: string) => (roleCanViewPage(role, to) ? { to, label } : null)
   const sectionDefs: { key: SectionKey, title: string, link: { to: string, label: string } | null }[] = [
-    { key: 'week', title: week ? `Last week (${shortDate(week.start)} – ${shortDate(week.end)})` : 'Last week', link: role === 'kitchen' ? link('/kitchen-week', 'This Week') : link('/pl/revenue-calendar', 'Daily Results') },
+    { key: 'week', title: week ? `Last week (${shortDate(week.start)} – ${shortDate(week.end)})` : 'Last week', link: guestsOnly ? link('/kitchen-week', 'This Week') : link('/pl/revenue-calendar', 'Daily Results') },
     { key: 'month', title: `${monthName} so far`, link: link('/budget', 'Budget Check') },
     { key: 'cash', title: 'Cash and loans', link: link('/cashflow', 'Cash & Loans') },
-    { key: 'ahead', title: 'Looking ahead', link: role === 'kitchen' ? link('/kitchen-week', 'Next 7 nights') : link('/this-week', 'Next 7 nights') }
+    { key: 'ahead', title: 'Looking ahead', link: guestsOnly ? link('/kitchen-week', 'Next 7 nights') : link('/this-week', 'Next 7 nights') }
   ]
   const sections = sectionDefs
     .map(s => ({ ...s, items: sorted(s.key).map(f => ({ tone: f.tone, text: f.text })) }))

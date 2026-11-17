@@ -5,7 +5,7 @@ export default defineEventHandler(async (event) => {
   const email = String(body?.email ?? '').trim().toLowerCase()
   const role = body?.role
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw createError({ statusCode: 400, statusMessage: 'Enter a valid email address.' })
-  if (role !== 'owner' && role !== 'gm' && role !== 'kitchen') throw createError({ statusCode: 400, statusMessage: 'Pick a role.' })
+  if (role !== 'owner' && role !== 'gm' && role !== 'kitchen' && role !== 'floor') throw createError({ statusCode: 400, statusMessage: 'Pick a role.' })
   const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : null
   const db = useDb()
   const existing = db.prepare('SELECT role FROM user_roles WHERE email = ?').get(email) as { role: string } | undefined

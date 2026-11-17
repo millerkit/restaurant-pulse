@@ -11,7 +11,7 @@
 // don't clock in, so they usually don't appear.
 import site from '../../app/config/site.json'
 
-const RESTAURANT_TIME_ZONE = 'America/New_York'
+export const RESTAURANT_TIME_ZONE = 'America/New_York'
 export const BOH_JOB_PATTERN = /^(line cook|prep cook|pastry|sous chef|junior sous|executive chef|chef de partie|garde manger|dishwasher|porter|culinary intern)/i
 const PORTER_JOB_PATTERN = /^porter/i
 // Toast starts overtime after 40 hours in the week; "close" is a heads-up band.
@@ -57,20 +57,20 @@ export interface BohHoursReport {
   generatedAt: string
 }
 
-function addDays(iso: string, n: number): string {
+export function addDays(iso: string, n: number): string {
   const [y, m, d] = iso.split('-').map(Number) as [number, number, number]
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
 }
-function mondayOf(iso: string): string {
+export function mondayOf(iso: string): string {
   const dow = new Date(`${iso}T00:00:00Z`).getUTCDay() // 0=Sun
   return addDays(iso, -((dow + 6) % 7))
 }
-function localToday(): string {
+export function localToday(): string {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: RESTAURANT_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
   const get = (t: string) => parts.find(p => p.type === t)!.value
   return `${get('year')}-${get('month')}-${get('day')}`
 }
-const round1 = (n: number) => Math.round(n * 10) / 10
+export const round1 = (n: number) => Math.round(n * 10) / 10
 
 interface JobHourRow { date: string; guid: string; title: string; regular: number; overtime: number; autoShifts: number; autoHours: number }
 
@@ -199,9 +199,31 @@ export function buildBohHoursReport(requestedWeek?: string | null): BohHoursRepo
   }
 }
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-const fmtH = (n: number) => (n === 0 ? '–' : n.toFixed(1))
-const fmtDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+export const fmtH = (n: number) => (n === 0 ? '–' : n.toFixed(1))
+export const fmtDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+// Shared with the FOH report (foh-hours-report.ts).
+export const HOURS_REPORT_CSS = `:root{--bg:#f6f5f2;--surface:#fff;--ink:#1d1d1b;--ink2:#4a4a46;--ink3:#7a7a74;--hair:#e4e2dc;--warn:#9a5b00;--warnbg:#fdf0d5;--crit:#a62a2a;--critbg:#fbe3e3}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--surface:#202020;--ink:#f0efea;--ink2:#c3c2bb;--ink3:#8d8c85;--hair:#34342f;--warn:#f1c066;--warnbg:#3a2e12;--crit:#ff9b9b;--critbg:#431b1b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 2px}.sub{color:var(--ink3);font-size:13px;margin:0 0 16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:12px 14px}
+.card .l{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink3)}.card .v{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}.card .s{font-size:12px;color:var(--ink2)}
+.tbl{background:var(--surface);border:1px solid var(--hair);border-radius:14px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th,td{padding:9px 10px;border-bottom:1px solid var(--hair);text-align:left;white-space:nowrap}
+thead th{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em}
+.n{text-align:right;font-variant-numeric:tabular-nums}.closed{color:var(--ink3)}.total{font-weight:700}
+.job{display:block;font-weight:400;font-size:12px;color:var(--ink3)}
+tbody th{font-weight:600}tr.sec th{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em;background:var(--bg)}
+tfoot td,tfoot th{font-weight:700;border-bottom:none}
+.chip{display:inline-block;margin-top:3px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px}
+.chip.auto{background:var(--warnbg);color:var(--warn);display:block;width:fit-content}.aw{color:var(--warn);margin-left:3px;font-size:12px}
+.chip.over{background:var(--critbg);color:var(--crit)}.chip.close{background:var(--warnbg);color:var(--warn)}
+.foot{color:var(--ink2);font-size:12px;margin:10px 2px 0}`
 
 // Standalone page for sending (Slack etc.): inline CSS, no scripts, no app
 // chrome, readable on a phone, light and dark.
@@ -233,26 +255,7 @@ export function renderBohHoursHtml(r: BohHoursReport): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <style>
-:root{--bg:#f6f5f2;--surface:#fff;--ink:#1d1d1b;--ink2:#4a4a46;--ink3:#7a7a74;--hair:#e4e2dc;--warn:#9a5b00;--warnbg:#fdf0d5;--crit:#a62a2a;--critbg:#fbe3e3}
-@media (prefers-color-scheme:dark){:root{--bg:#161615;--surface:#202020;--ink:#f0efea;--ink2:#c3c2bb;--ink3:#8d8c85;--hair:#34342f;--warn:#f1c066;--warnbg:#3a2e12;--crit:#ff9b9b;--critbg:#431b1b}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-main{max-width:980px;margin:0 auto;padding:20px 16px 40px}
-h1{font-size:22px;margin:0 0 2px}.sub{color:var(--ink3);font-size:13px;margin:0 0 16px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
-.card{background:var(--surface);border:1px solid var(--hair);border-radius:14px;padding:12px 14px}
-.card .l{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink3)}.card .v{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}.card .s{font-size:12px;color:var(--ink2)}
-.tbl{background:var(--surface);border:1px solid var(--hair);border-radius:14px;overflow-x:auto}
-table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
-th,td{padding:9px 10px;border-bottom:1px solid var(--hair);text-align:left;white-space:nowrap}
-thead th{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em}
-.n{text-align:right;font-variant-numeric:tabular-nums}.closed{color:var(--ink3)}.total{font-weight:700}
-.job{display:block;font-weight:400;font-size:12px;color:var(--ink3)}
-tbody th{font-weight:600}tr.sec th{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em;background:var(--bg)}
-tfoot td,tfoot th{font-weight:700;border-bottom:none}
-.chip{display:inline-block;margin-top:3px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px}
-.chip.auto{background:var(--warnbg);color:var(--warn);display:block;width:fit-content}.aw{color:var(--warn);margin-left:3px;font-size:12px}
-.chip.over{background:var(--critbg);color:var(--crit)}.chip.close{background:var(--warnbg);color:var(--warn)}
-.foot{color:var(--ink2);font-size:12px;margin:10px 2px 0}
+${HOURS_REPORT_CSS}
 </style></head><body><main>
 <h1>BOH hours — week of ${esc(fmtDate(r.weekStart))}</h1>
 <p class="sub">${esc(r.restaurantName)} · Mon ${esc(fmtDate(r.weekStart))} – Sun ${esc(fmtDate(r.weekEnd))} · ${esc(through)} · from Toast time entries</p>

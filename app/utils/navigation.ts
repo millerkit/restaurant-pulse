@@ -34,7 +34,7 @@ export const NAV_SECTIONS: NavSection[] = [
     pages: [
       { label: 'Summary', to: '/', path: '/' },
       { label: 'This Week', to: '/this-week', path: '/this-week', onlyFor: ['owner', 'gm'] },
-      { label: 'This Week', to: '/kitchen-week', path: '/kitchen-week', onlyFor: ['kitchen'] }
+      { label: 'This Week', to: '/kitchen-week', path: '/kitchen-week', onlyFor: ['kitchen', 'floor'] }
     ]
   },
   {
@@ -53,6 +53,7 @@ export const NAV_SECTIONS: NavSection[] = [
     icon: 'team',
     pages: [
       { label: 'Kitchen Hours', to: '/kitchen-labor', path: '/kitchen-labor' },
+      { label: 'FOH Hours', to: '/foh-hours', path: '/foh-hours' },
       { label: 'Benefits Eligibility', to: '/staff-hours', path: '/staff-hours' }
     ]
   },

@@ -112,7 +112,7 @@ async function syncNow() {
         <template v-else>Never synced</template>
       </div>
       <div class="sync-now-row">
-        <button v-if="role !== 'kitchen'" class="mini-btn" :disabled="onCooldown || triggerState === 'syncing'" :title="onCooldown ? `Synced recently — available again in ${cooldownRemainingMin}m` : 'Trigger a sync from QuickBooks/Toast now'" @click="syncNow">
+        <button v-if="role === 'owner' || role === 'gm'" class="mini-btn" :disabled="onCooldown || triggerState === 'syncing'" :title="onCooldown ? `Synced recently — available again in ${cooldownRemainingMin}m` : 'Trigger a sync from QuickBooks/Toast now'" @click="syncNow">
           {{ triggerState === 'syncing' ? 'Syncing…' : 'Sync now' }}
         </button>
         <span v-if="onCooldown && triggerState !== 'syncing'" class="cooldown-note">available in {{ cooldownRemainingMin }}m</span>

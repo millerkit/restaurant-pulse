@@ -100,9 +100,11 @@ Benefits Eligibility, Cash Flow → Cash & Loans, Historical → Seasonal Trends
   keeps shared Basic Auth as an owner backstop. Cloudflare's allow-list is edited in Cloudflare.
 - **Roles** (`user_roles`, `shared/utils/access.ts`, default deny, enforced on pages and API routes):
   Everyone lands on Home › Summary (`/`, `roleHome`). `owner` = everything; `gm` = read-only This Week (incl. cost pace/budget runway), Daily Results, Covers &
-  Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost with dollars, plus "Sync now"; `kitchen` =
-  Kitchen This Week (`/kitchen-week`, covers only) and Kitchen Hours & Cost as percentages/hours only.
-  Owner pay is merged or zeroed server-side for non-owners. Owners can "Preview as" GM/Sous Chef
+  Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost with dollars, FOH Hours, plus "Sync now"; `kitchen` =
+  Kitchen This Week (`/kitchen-week`, covers only) and Kitchen Hours & Cost as percentages/hours only;
+  `floor` (Floor Manager, 2026-11-17) = exactly the kitchen view (Summary, Kitchen This Week) with FOH Hours
+  (`/foh-hours`) in place of Kitchen Hours & Cost; no Sync now.
+  Owner pay is merged or zeroed server-side for non-owners. Owners can "Preview as" GM/Sous Chef/Floor Manager
   (downgrade-only cookie). An unknown verified email is refused until added in Settings › People & Access.
 
 ## Data sources and sync
@@ -233,7 +235,7 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 Defined in `app/utils/navigation.ts`, rendered by `app/layouts/default.vue` (bottom bar on phones).
 Home: Summary (`/`, every role; see below), This Week (`/this-week`; kitchen role: `/kitchen-week`). Sales (a section opens on its first tab): Covers & Spend (`/capacity`; includes the weekly covers/night trend by area, `/api/capacity/area-trends`: complete weeks only, buyout/event/closed nights left out, an area's empty night counts as 0), Daily Results (`/pl/revenue-calendar`, sales
 and profit views; the profit view leaves out Mondays and holiday closures unless a special night is dated there, listing any money that landed on them), Seasonal Trends (`/historical`). Team: Kitchen Hours &
-Cost (`/kitchen-labor`), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
+Cost (`/kitchen-labor`), FOH Hours (`/foh-hours`, GM/Floor Manager; hours per person, no dollars; `server/utils/foh-hours-report.ts`, see "FOH Hours" below), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
 from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
 (`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), Breakeven
 (`/breakeven`, owner), What-If (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
@@ -277,6 +279,16 @@ pay is folded into labor for non-owners, never removed); the Sous Chef sees gues
 cost % (5010+5220 over all food sales, vs. plan, else the month before), never dollars. Profit and cost % only for a
 closed, fully synced month. Booking sentences only from a fresh OpenTable upload. Owner's reserve figures come from
 calling the Cash & Loans handler directly. Stale Toast/QBO data adds a "Data note" and drops the affected sentences.
+
+## FOH Hours (Team › FOH Hours, `/foh-hours`) — built 2026-11-17
+
+Same shape as the BOH report on Kitchen Hours, for the GM and the Floor Manager (new `floor` role, migration 0024).
+Hours only, no dollars: Toast time entries by job (`daily_toast_job_hours`), grouped Floor / Bar / Management by the job
+each person worked most that week; "near 40" and auto clock-out flags; a Guests row and guests per FOH hour (open nights
+only). FOH jobs are matched by title (`FOH_JOB_PATTERN`); a job that is neither FOH nor BOH is listed as not counted.
+Shared station logins (staff override "excluded", e.g. Service Bar) are left out and named at the bottom. Download:
+`/api/foh-hours/report`. **Ideas not built** (Toast data the sync downloads but doesn't keep): covers and sales per server
+per night, clock-in/out times, tips/voids/comps per person; scheduled vs. actual hours needs a new Toast API scope. See history.
 
 ## Not yet done
 

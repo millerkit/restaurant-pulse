@@ -429,7 +429,7 @@ CREATE TABLE staff_overrides (
 -- Roles and what they can see: shared/utils/access.ts. Edited in Settings > People & Access.
 CREATE TABLE user_roles (
   email       TEXT PRIMARY KEY,
-  role        TEXT NOT NULL CHECK (role IN ('owner', 'gm', 'kitchen')),
+  role        TEXT NOT NULL CHECK (role IN ('owner', 'gm', 'kitchen', 'floor')),
   name        TEXT,
   updated_at  TEXT NOT NULL
 );

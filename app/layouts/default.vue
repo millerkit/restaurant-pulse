@@ -70,7 +70,7 @@ const subPages = computed(() => {
     </nav>
 
     <div v-if="me?.viewingAs" class="viewas-banner" role="status">
-      <span>Previewing as <strong>{{ role === 'gm' ? 'General Manager' : 'Sous Chef' }}</strong>. This is what they see; nothing here changes their account.</span>
+      <span>Previewing as <strong>{{ role === 'gm' ? 'General Manager' : role === 'floor' ? 'Floor Manager' : 'Sous Chef' }}</strong>. This is what they see; nothing here changes their account.</span>
       <button type="button" class="viewas-exit" @click="exitViewAs">Exit preview</button>
     </div>
 

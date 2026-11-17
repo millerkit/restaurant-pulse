@@ -6358,3 +6358,34 @@ first**.
   got only its facts; GM no Cash and loans; Sous Chef no dollars); 403 for GM/Sous Chef on the note POST; Sous Chef
   redirected from `/this-week` and 403 on `/api/dashboard`; browser check desktop + phone, note save, `/this-week`.
   Typecheck 300 errors, none in new/changed files. Not checked against production data before deploy.
+
+## 2026-11-17 — FOH Hours page and the Floor Manager role
+
+**Asked for**: a FOH Hours page like Kitchen Hours (Team tab) for the GM and the Floor Manager; cost is not a concern
+(tracking hours per employee), overtime hardly happens in FOH. Kit decided the Floor Manager's other pages should match the
+Sous Chef's: only difference is FOH Hours instead of Kitchen Hours & Cost.
+
+**Role**: `floor` ("Floor Manager") added to `shared/utils/access.ts` (pages `/`, `/kitchen-week`, `/foh-hours`; APIs
+`/api/kitchen-week`, `/api/foh-hours`, common GETs; no writes, no Sync now). GM also gets `/foh-hours`. Migration 0024
+rebuilds `user_roles` (SQLite can't alter a CHECK); `schema.sql`, People & Access (role list, "Preview as Floor Manager"),
+`view-as.post.ts`, `applyViewAs` in `server/middleware/auth.ts` and the nav (This Week → `/kitchen-week` for kitchen and
+floor) were updated. Home Summary: `GUESTS_ONLY = ['kitchen','floor']` replaces the old kitchen-only checks in
+`server/utils/home-summary.ts`; the Floor Manager's Summary text is identical to the Sous Chef's (including food cost %).
+
+**Report** (`server/utils/foh-hours-report.ts`, `server/api/foh-hours.get.ts`, `server/api/foh-hours/report.get.ts`,
+`app/pages/foh-hours.vue`): reuses the BOH report's date helpers and downloadable-page CSS (now exported from
+`boh-hours-report.ts`; the BOH output is byte-for-byte the same). Differences from BOH: groups instead of porters; no
+overtime-hours card (a "near 40" count instead); station logins excluded via `staff_overrides` kind `excluded` (local data:
+"Service Bar", ~63 hrs/week, would otherwise show as a fake person); a Guests row and guests per FOH hour from
+`daily_toast_metrics` (open nights ≥ 15 covers). Kitchen role cannot call it.
+
+**Verified** (local data): API for owner; role matrix via the `view_as` cookie (gm/kitchen/floor, pages and APIs);
+floor Summary text equals kitchen's and has no dollars; BOH report still loads; HTML download; migration applied and a
+floor user could be added and removed; browser check of the page, the Floor Manager preview and the Team tab. Typecheck
+300 errors (baseline), none in new files. **Not done**: production deploy (migration 0024 runs on deploy); the Floor
+Manager's email must be added in Settings › People & Access and on the Cloudflare Access allow-list.
+
+**Toast data not yet stored** (the nightly sync already downloads orders and time entries and keeps only daily totals):
+covers and sales per server per night (order `server`, guests, check amount), clock-in/out times (shift length, who
+closed, staffing vs. covers by hour), tips, voids and comps per person; scheduled shifts need Toast's Scheduling API
+scope. Suggested next step if wanted: a per-server-per-night table filled by the same sync plus a backfill script.

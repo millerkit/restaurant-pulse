@@ -35,7 +35,7 @@ async function add() {
 }
 // Preview the app as the GM or Sous Chef (owner only; server/api/view-as.post.ts). Full reload so
 // every page and request starts fresh under the previewed role.
-async function previewAs(role: 'gm' | 'kitchen') {
+async function previewAs(role: 'gm' | 'kitchen' | 'floor') {
   busy.value = true
   try {
     await $fetch('/api/view-as', { method: 'POST', body: { role } })
@@ -65,8 +65,8 @@ async function remove(p: Person) {
     <h3 class="pa-h">People &amp; Access</h3>
     <p class="pa-note">
       Pick what each person can see. <strong>Owner</strong>: everything. <strong>General Manager</strong>: This Week, Daily Results (sales), Covers &amp; Spend,
-      Seasonal Trends and Kitchen Hours &amp; Cost with dollars (the Executive Chef's pay is left out). <strong>Kitchen</strong>: Kitchen Hours &amp; Cost with
-      percentages and hours only. Everyone except owners is read-only. A new person's email must also be added to the Cloudflare Access allow-list or they can't sign in.
+      Seasonal Trends, FOH Hours and Kitchen Hours &amp; Cost with dollars (the Executive Chef's pay is left out). <strong>Kitchen</strong>: Kitchen Hours &amp; Cost with
+      percentages and hours only. <strong>Floor Manager</strong>: the same as Kitchen, but with FOH Hours instead of Kitchen Hours &amp; Cost. Everyone except owners is read-only. A new person's email must also be added to the Cloudflare Access allow-list or they can't sign in.
     </p>
     <ul class="pa-list">
       <li v-for="p in data?.people ?? []" :key="p.email">
@@ -92,6 +92,7 @@ async function remove(p: Person) {
       <span class="pa-note" style="margin:0">See what they see:</span>
       <button type="button" class="pa-remove" :disabled="busy" @click="previewAs('gm')">Preview as General Manager</button>
       <button type="button" class="pa-remove" :disabled="busy" @click="previewAs('kitchen')">Preview as Sous Chef</button>
+      <button type="button" class="pa-remove" :disabled="busy" @click="previewAs('floor')">Preview as Floor Manager</button>
     </div>
     <div v-if="message" :class="['chip', message.kind === 'ok' ? 'good' : 'critical']" class="pa-msg">{{ message.text }}</div>
   </div>
