@@ -9,7 +9,7 @@
 import site from '~/config/site.json'
 import type { FohHoursReport, FohProductivityRow, FohTrendPoint } from '../../server/utils/foh-hours-report'
 
-useHead({ title: `${site.restaurantName} — FOH Hours` })
+useHead({ title: `${site.restaurantName} — FOH Hours & Productivity` })
 
 const week = ref<string | null>(null)
 const query = computed(() => (week.value ? { week: week.value } : {}))
@@ -112,8 +112,8 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 <template>
   <div>
     <PageHeader
-      page-name="FOH Hours"
-      description="Front-of-house hours worked per person, by week"
+      page-name="FOH Hours & Productivity"
+      description="Hours, sales per server and weekly trends for the front of house"
       :as-of-label="data?.asOf ? fmtDate(data.asOf) : undefined"
       @synced="refresh()"
     />
