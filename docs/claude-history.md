@@ -6485,3 +6485,38 @@ app/utils/capacityRules.ts). `/api/capacity/settings` returns replaced nights fo
 later, next year for earlier months (the months the budget forecast writes). Verified locally: Jan $144,530 and Dec
 $239,856 on the grid equal the budget's 4010 + 4022-4028 sums. No forecast or budget number changed; only the grid's
 display (and the Settings summary text) did.
+
+
+## 2026-11-17 — Seasonality rebuilt (covers index, forecast level, Seasonal Trends)
+
+Kit asked for the most accurate seasonal scaling possible, with January-May 2026 (last Mass Ave months) weighted
+more than 2025. Review of production data (Toast covers + QBO core revenue, 2024-07-28 to 2026-11-16) found:
+- **Covers nights were dropped for lack of same-day QBO revenue.** QBO is cash basis and early-2025 deposits were
+  batched, so January 2025 kept only 9 of its 18 real nights (35/night instead of 41.2); its index read 84% instead
+  of ~106%. February 2025 lost 3 nights. The covers index no longer needs revenue that day.
+- **The move year was skipped**, so the forecast used only 2025. Now each month is divided by the centered 12-month
+  average at the same location (classical ratio-to-moving-average: removes trend, never mixes the two rooms), so
+  Jan-May 2026 are measured against Jun 2025-May 2026. Observations are weighted 0.5^(years older than the newest),
+  i.e. Jan-May 2/3 on 2026, Aug-Dec 2/3 on 2025 and 1/3 on 2024, then scaled to average 100. A month needs 15
+  regular nights to count (Cambridge St's opening June has 9).
+- **Event nights counted as demand.** Mass Ave's Sunday openings (all private events, e.g. 2025-06-22, 171 covers),
+  dated holidays and special nights, and party nights (> 1.75x the month's median; Oct 18, Dec 13 and Dec 20 2025)
+  are left out.
+- **Covers scaled with seats.** The old forecast was baseline fill % × index × the month's capacity, so Outdoor's
+  Nov-Apr closure cut winter covers by ~20% on top of the seasonal index. November 2026 ran 89.6/night against
+  October's 89.0: guests moved indoors. Now covers = Cambridge St's de-seasonalized level (90.3/night in production)
+  × index; the area split is proportional to capacity × fill index (the old split overshot the total by ~10% in
+  winter because the fill indexes average 1 only with Outdoor included).
+- Checked Mass Ave wasn't capacity-capped (which would flatten its seasonality): Fri/Sat nights mostly 40-55, peaking
+  60-70 in May-Jul, so its pattern is demand.
+- Day-of-week mix adjustment was tested and moved results < 1 point; not used.
+Production effect (new vs. old automatic covers/night): Jan 70 -> 98, Feb 76 -> 95, Mar 70 -> 80, Apr 81 -> 86,
+May 103 -> 94, Jun 112 -> 114, Jul 92 -> 92, Aug 91 -> 87, Sep 85 -> 83, Oct 87 -> 84, Dec 98 -> 89. In-sample fit to
+Cambridge St Jul-Nov 2026 actuals is within ~4/night except November (83 vs 90; old method 66). Indexes per month:
+Jan 108, Feb 105, Mar 89, Apr 95, May 104, Jun 126, Jul 101, Aug 96, Sep 92, Oct 93, Nov 91, Dec 99.
+Seasonal Trends charts use the same centered reference (Cambridge St months vs its average so far, `partial`);
+revenue per open night and spend per cover now come from monthly QBO totals instead of per-day revenue.
+Known data gap: January 2025 QBO core revenue is only $39,944 for 741 covers ($54/cover vs $77-102 around it), so
+that month's revenue and spend bars read low; covers and the forecast are unaffected.
+Caveat: Cambridge St's level comes from its first five months, which may include opening buzz.
+`dataAnnualFillPct` was replaced by `coversPerNightLevel`; `monthlyIndex` now carries its weighted observations.

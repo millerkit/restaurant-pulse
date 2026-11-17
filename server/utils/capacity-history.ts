@@ -4,53 +4,72 @@ import { CORE_REVENUE_ACCOUNT_NUMBERS, MIN_COVERS_FOR_OPEN_DAY } from './core-re
 
 type Db = Database.Database
 
-// Historical seasonality reference (moved here from server/api/capacity/history.get.ts
-// 2026-11-11 so the nightly capacity forecast refresh can use it too), derived from real Toast covers + QBO
-// revenue history — backs the Historical page's three seasonality charts
-// (revenue, covers, spend-per-cover) and the Edit Capacity page's
-// "Set by History" action.
+// Seasonality from real history: backs the Seasonal Trends page (revenue, covers and spend
+// charts) and the automatic capacity forecast (server/utils/capacity-forecast.ts), which
+// projects expected covers per night = the location's demand level × this month's covers index.
+// Moved here from server/api/capacity/history.get.ts 2026-11-11; rebuilt 2026-11-17 (see
+// docs/claude-history.md, "Seasonality rebuilt"). Covers come from Toast (daily_toast_metrics),
+// revenue from QuickBooks core dine-in accounts (CORE_REVENUE_ACCOUNT_NUMBERS, by account_number).
 //
-// Rebuilt 2026-08-12 around two separate indexes instead of one blended
-// revenue index, at the user's request: the original "per-open-day core
-// dine-in revenue, indexed to own average" conflated two different things
-// — how many covers came through the door, and how much each cover spent
-// — into one number that isn't how a restaurateur actually thinks about
-// seasonality. Splitting them also fixes a real problem with using
-// Mass Ave's history to forecast the new (much larger) Cambridge St space:
-// a raw fill % isn't transferable across two differently-sized rooms (95%
-// full in a small room and 75% full in a big room can reflect the exact
-// same demand), but an index of covers relative to *that location's own*
-// typical night sidesteps the comparison entirely — it's demand-shape, not
-// an absolute occupancy level.
-//
-// Covers come from Toast (daily_toast_metrics); spend-per-cover divides
-// QBO's own core dine-in revenue by those same covers, rather than trusting
-// Toast's own dollar totals — QBO is already the trusted, cash-basis,
-// sign-corrected revenue source everywhere else in this app.
-//
-// Restricted to core dine-in food/beverage accounts only (4000 Restaurant
-// Sales, 4010 Food, 4020 Beverage, 4022/4024/4026/4028 Beer/Liquor/Wine/
-// Non-Alcoholic) — matched by account_number, never a raw id (see
-// CLAUDE.md's local/prod account-drift section). Event Sales (4100s),
-// Catering (4200s), Retail (4300s), and Other Service Income (4400) are
-// deliberately excluded, same reasoning as the original revenue index: a
-// private-event booking swing isn't regular dine-in demand seasonality.
-// Extracted to server/utils/core-revenue.ts 2026-08-19 so the Dashboard's
-// Weekly Performance section can reuse this exact list/reasoning instead of
-// re-deriving it.
+// How the covers index is built:
+// - **Regular nights only.** A night counts when it has >= MIN_COVERS_FOR_OPEN_DAY covers, falls on
+//   one of the location's own service nights (Mass Ave Tue-Sat, Cambridge St Tue-Sun: Mass Ave's
+//   few Sunday openings were private events), isn't a dated holiday closure or special night
+//   (buyout / event / off-site; catering runs alongside a normal night and stays), and isn't a
+//   private party: covers over PARTY_NIGHT_MULTIPLE × that month's median regular night.
+//   It does NOT need same-day QuickBooks revenue: QuickBooks is cash basis, deposits were
+//   batched in early 2025, and requiring revenue that day dropped half of January 2025's real
+//   nights (9 of 18) and understated its index by ~15 points.
+// - **Each month against the year around it, at the same location.** A month's covers per
+//   night ÷ the average of the 12 full months centered on it (a centered moving average, the
+//   classic way to separate seasonality from a trend), never mixing Mass Ave and Cambridge St.
+//   A month needs MIN_NIGHTS_FOR_FULL_MONTH regular nights to be "full" (Cambridge St's
+//   opening June has 9). So the move year is no longer skipped: January-May 2026 at Mass Ave
+//   are measured against June 2025-May 2026, and Cambridge St months join automatically once
+//   it has 12 full months (from mid-2027).
+// - **Recent years count more.** Each calendar month averages its observations with weight
+//   RECENCY_WEIGHT^(years older than the newest one): January-May lean 2/3 on 2026, 1/3 on
+//   2025; August-December 2/3 on 2025, 1/3 on 2024. Then the 12 values are scaled to average 100.
 
-// A month needs at least this many open days in a given year to produce a
-// trustworthy per-open-day average — guards against a month that's mostly
-// outside the data window being treated as a real, if extreme, data point.
-const MIN_OPEN_DAYS_FOR_MONTH_INDEX = 3
+const MIN_COVERS = MIN_COVERS_FOR_OPEN_DAY
+// A month with fewer regular nights than this isn't used for the index or its 12-month reference.
+const MIN_NIGHTS_FOR_FULL_MONTH = 15
+// A month needs this many nights to show as a bar on the charts.
+const MIN_NIGHTS_FOR_CHART_POINT = 3
+// A night with more covers than this × the month's median regular night is a private party.
+const PARTY_NIGHT_MULTIPLE = 1.75
+// Weight of an observation one year older than the newest one for the same calendar month.
+const RECENCY_WEIGHT = 0.5
 
-// A day needs at least this many Toast covers to count as genuinely open —
-// see server/utils/core-revenue.ts's MIN_COVERS_FOR_OPEN_DAY (extracted
-// from here 2026-08-19) for the full "verify the real distribution, find
-// the clean gap" reasoning.
+type LocationKey = 'massAve' | 'cambridgeSt'
+// The two rooms. Mass Ave closed 2026-05-30 (open Tue-Sat); Cambridge St opened 2026-06-20
+// (Tue-Sun; friends & family nights before that are left out).
+const LOCATIONS: { key: LocationKey, start: string, end: string, serviceDows: number[] }[] = [
+  { key: 'massAve', start: '0000-01-01', end: '2026-05-31', serviceDows: [2, 3, 4, 5, 6] },
+  { key: 'cambridgeSt', start: '2026-06-20', end: '9999-12-31', serviceDows: [0, 2, 3, 4, 5, 6] }
+]
+export const CAMBRIDGE_ST_START = LOCATIONS[1]!.start
 
-type DailyRevenueRow = { date: string, revenue: number }
-type DailyCoversRow = { date: string, covers: number }
+type Metric = 'covers' | 'spend' | 'revenue'
+// One location-month: regular nights (the covers index) and every open night (revenue / spend).
+type MonthStats = {
+  loc: LocationKey, ym: string, year: number, month: number,
+  regularNights: number, regularCovers: number,
+  openNights: number, openCovers: number, revenue: number
+}
+export type MonthlyIndexPoint = { month: number, indexPct: number | null, years: number[], observations: { year: number, indexPct: number, weight: number }[] }
+
+function ymShift(ym: string, k: number): string {
+  const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + k
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`
+}
+const dowOf = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay()
+const mean = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2
+}
 
 export function loadCapacityHistory(db: Db) {
   const placeholders = CORE_REVENUE_ACCOUNT_NUMBERS.map(() => '?').join(',')
@@ -60,203 +79,175 @@ export function loadCapacityHistory(db: Db) {
     JOIN accounts a ON a.id = dli.account_id
     WHERE a.account_number IN (${placeholders}) AND a.is_active = 1
     GROUP BY dli.date
-    ORDER BY dli.date
-  `).all(...CORE_REVENUE_ACCOUNT_NUMBERS) as DailyRevenueRow[]
-  const revenueByDate = new Map(revenueRows.map(r => [r.date, r.revenue]))
-
-  // Real Toast covers, not a revenue threshold, now define "open" — a
-  // genuine improvement over the old $300-revenue-guess heuristic, now that
-  // real covers data reaches back through the Mass Ave era too (see
-  // CLAUDE.md's "Ongoing per-area/whole-restaurant tracking" section). Uses
-  // MIN_COVERS_FOR_OPEN_DAY rather than a bare covers > 0 — see that
-  // constant's comment for why a stray single order on an otherwise-closed
-  // day needs to be excluded, not just a covers=0 day. A day below the
-  // threshold could in principle also mean "no Toast data synced for that
-  // date yet" rather than a real closure — same ambiguity
-  // backfill-toast-metrics.mjs's own "quiet streak" check already flags —
-  // but it's a strictly better signal than guessing from a dollar amount
-  // that doesn't even distinguish a closure from a buyout night whose
-  // revenue posted to a different GL bucket.
-  const coversRows = db.prepare(`SELECT date, covers FROM daily_toast_metrics WHERE covers >= ? ORDER BY date`).all(MIN_COVERS_FOR_OPEN_DAY) as DailyCoversRow[]
+  `).all(...CORE_REVENUE_ACCOUNT_NUMBERS) as { date: string, revenue: number }[]
+  const coversRows = db.prepare('SELECT date, covers FROM daily_toast_metrics WHERE covers >= ? ORDER BY date').all(MIN_COVERS) as { date: string, covers: number }[]
+  const holidays = new Set((db.prepare('SELECT date FROM holiday_closures').all() as { date: string }[]).map(r => r.date))
+  const specialNights = new Set((db.prepare("SELECT date FROM special_nights WHERE kind != 'catering'").all() as { date: string }[]).map(r => r.date))
 
   const { date: asOfDate } = db.prepare('SELECT MAX(date) AS date FROM daily_toast_metrics').get() as { date: string | null }
   if (!asOfDate || coversRows.length === 0) {
     return {
-      asOfYear: null, historicalYears: [], currentYear: null, monthlyIndex: [],
+      asOfYear: null, historicalYears: [] as number[], currentYear: null, monthlyIndex: [] as MonthlyIndexPoint[],
       coversSeries: [], spendSeries: [], revenueSeries: [],
       locationBaselines: { covers: { massAve: null, cambridgeSt: null }, spend: { massAve: null, cambridgeSt: null }, revenue: { massAve: null, cambridgeSt: null } },
-      areaFillIndex: null, areaFillIndexSince: null, dataAnnualFillPct: null
+      areaFillIndex: null, areaFillIndexSince: CAMBRIDGE_ST_START, coversPerNightLevel: null as number | null
     }
   }
   const asOfYear = Number(asOfDate.slice(0, 4))
+  const locationOf = (iso: string) => LOCATIONS.find(l => iso >= l.start && iso <= l.end) ?? null
 
-  type DayPoint = { date: string, month: number, covers: number, revenue: number | null, spend: number | null }
-  const byYear = new Map<number, DayPoint[]>()
+  // ---- Nights -----------------------------------------------------------
+  type Night = { date: string, ym: string, loc: LocationKey, covers: number, regular: boolean }
+  const nights: Night[] = []
   for (const r of coversRows) {
-    const year = Number(r.date.slice(0, 4))
-    const month = Number(r.date.slice(5, 7))
-    const revenue = revenueByDate.get(r.date) ?? null
-    // A day with real Toast covers but exactly $0 core revenue isn't a real
-    // slow dine-in night — verified against real production data (2026-08-13):
-    // ~6% of open days show this, and checking a few showed real substantial
-    // money that day, just posted to Off-Site/On-Site Events or Catering
-    // accounts instead (e.g. 2025-06-22: 171 covers, $0 core revenue,
-    // $12,519 to "Off-Site Events – Food Revenue") — a private event Toast
-    // still logged covers for, correctly excluded from *core dine-in*
-    // revenue by CORE_REVENUE_ACCOUNT_NUMBERS above, but with nothing
-    // filtering its covers out the same way. Left in, it produces a
-    // nonsensical $0/cover spend reading (corrupting that month's spend
-    // average) and, for the covers index, counts event attendance as if it
-    // were regular walk-in demand. `revenue == null` (no QBO sync yet for
-    // that date — effectively only "today") gets the same treatment, since
-    // there's no way to confirm the day was real core dine-in either way.
-    if (revenue == null || revenue <= 0) continue
-    const spend = revenue / r.covers
-    if (!byYear.has(year)) byYear.set(year, [])
-    byYear.get(year)!.push({ date: r.date, month, covers: r.covers, revenue, spend })
+    const loc = locationOf(r.date)
+    if (!loc || holidays.has(r.date)) continue
+    const regular = loc.serviceDows.includes(dowOf(r.date)) && !specialNights.has(r.date)
+    nights.push({ date: r.date, ym: r.date.slice(0, 7), loc: loc.key, covers: r.covers, regular })
+  }
+  // Private parties: well above the month's typical regular night.
+  const regularByMonth = new Map<string, number[]>()
+  for (const n of nights) {
+    if (!n.regular) continue
+    const k = `${n.loc}:${n.ym}`
+    regularByMonth.set(k, [...(regularByMonth.get(k) ?? []), n.covers])
+  }
+  const medianByMonth = new Map([...regularByMonth].map(([k, v]) => [k, median(v)]))
+  for (const n of nights) {
+    if (n.regular && n.covers > PARTY_NIGHT_MULTIPLE * (medianByMonth.get(`${n.loc}:${n.ym}`) ?? Infinity)) n.regular = false
   }
 
-  const allYears = [...byYear.keys()].sort((a, b) => a - b)
-  // Only the single most recent prior year — see CLAUDE.md's 2026-08-10
-  // note for why (a straight "this year vs. last year" reads more clearly
-  // than an equal-weighted multi-year average, at the user's own request).
-  const priorYears = allYears.filter(y => y < asOfYear)
-  const historicalYears = priorYears.length > 0 ? [priorYears[priorYears.length - 1]] : []
-  // The seasonal index (and so the automatic covers forecast) must come from a
-  // year spent entirely in one room. 2026 is half Mass Ave (~40 covers/night)
-  // and half Cambridge St (~85): measured against that blended year, Jan-May
-  // read ~0.6 and Jul-Dec ~1.4, which from 2027-01-01 would have roughly
-  // halved the winter forecast. So skip the move year: 2025 (all Mass Ave)
-  // until 2027 is a full Cambridge St year to use. Charts keep
-  // historicalYears (they normalize 2026 per location, see periodAvgFor).
-  const SPLIT_LOCATION_YEARS = new Set([2026])
-  const singleLocationPrior = priorYears.filter(y => !SPLIT_LOCATION_YEARS.has(y))
-  const indexYears = singleLocationPrior.length > 0
-    ? [singleLocationPrior[singleLocationPrior.length - 1]]
-    : historicalYears
-
-  type Metric = 'covers' | 'spend' | 'revenue'
-  // spend/revenue are typed nullable on DayPoint defensively, but every
-  // DayPoint in byYear was already required to have real, positive revenue
-  // (and therefore spend) above — this filter is belt-and-suspenders, not
-  // load-bearing.
-  function metricValue(d: DayPoint, metric: Metric): number | null {
-    return metric === 'covers' ? d.covers : metric === 'spend' ? d.spend : d.revenue
-  }
-  function avgOf(days: DayPoint[], metric: Metric): number | null {
-    const vals = days.map(d => metricValue(d, metric)).filter((v): v is number => v != null)
-    if (vals.length === 0) return null
-    return vals.reduce((sum, v) => sum + v, 0) / vals.length
-  }
-  function yearAvg(year: number, metric: Metric): number | null {
-    return avgOf(byYear.get(year) ?? [], metric)
-  }
-
-  // 2026 spans the real location move (old Mass Ave location closed
-  // 2026-05-30, new Cambridge St location's real opening was 2026-06-20 —
-  // see CLAUDE.md). A single whole-year average blends two operationally
-  // different rooms; each half needs its own baseline. Hand-verified
-  // constant, not a generic mechanism — no other year has this problem.
-  const LOCATION_MOVE_PERIODS: { start: string, end: string }[] = [
-    { start: '2026-01-01', end: '2026-05-31' },
-    { start: '2026-06-20', end: '2026-12-31' }
-  ]
-  function periodAvgFor(year: number, dateIso: string, metric: Metric): number | null {
-    if (year !== 2026) return yearAvg(year, metric)
-    const period = LOCATION_MOVE_PERIODS.find(p => dateIso >= p.start && dateIso <= p.end)
-    if (!period) return null
-    const days = (byYear.get(year) ?? []).filter(d => d.date >= period.start && d.date <= period.end)
-    return avgOf(days, metric)
-  }
-
-  // ---- Monthly index (for Edit Capacity's "Set by History") -------------
-  // Covers-based (switched from revenue 2026-08-12) — "Set by History"
-  // writes into each area's *covers* input, so a covers-shaped index is a
-  // direct measurement rather than the revenue-based approximation this
-  // used before (revenue seasonality mixes in spend-per-cover seasonality,
-  // which isn't what a covers target should track).
-  const monthlyIndex = Array.from({ length: 12 }, (_, i) => {
-    const month = i + 1
-    const perYear: { year: number, indexPct: number }[] = []
-    for (const year of indexYears) {
-      const yAvg = yearAvg(year, 'covers')
-      if (yAvg == null) continue
-      const monthDays = (byYear.get(year) ?? []).filter(d => d.month === month)
-      if (monthDays.length < MIN_OPEN_DAYS_FOR_MONTH_INDEX) continue
-      const monthAvg = monthDays.reduce((sum, d) => sum + d.covers, 0) / monthDays.length
-      perYear.push({ year, indexPct: (monthAvg / yAvg) * 100 })
+  // ---- Location-months --------------------------------------------------
+  const stats = new Map<string, MonthStats>()
+  const statFor = (loc: LocationKey, ym: string) => {
+    const k = `${loc}:${ym}`
+    let s = stats.get(k)
+    if (!s) {
+      s = { loc, ym, year: Number(ym.slice(0, 4)), month: Number(ym.slice(5, 7)), regularNights: 0, regularCovers: 0, openNights: 0, openCovers: 0, revenue: 0 }
+      stats.set(k, s)
     }
-    const indexPct = perYear.length > 0 ? perYear.reduce((sum, p) => sum + p.indexPct, 0) / perYear.length : null
-    return { month, indexPct, years: perYear.map(p => p.year) }
-  })
+    return s
+  }
+  for (const n of nights) {
+    const s = statFor(n.loc, n.ym)
+    s.openNights++
+    s.openCovers += n.covers
+    if (n.regular) { s.regularNights++; s.regularCovers += n.covers }
+  }
+  // Revenue by month total, not by night: cash-basis deposits land on other days than the
+  // night they belong to, but within a month they even out.
+  for (const r of revenueRows) {
+    const loc = locationOf(r.date)
+    const s = loc ? stats.get(`${loc.key}:${r.date.slice(0, 7)}`) : undefined
+    if (s) s.revenue += r.revenue
+  }
+  function valueOf(s: MonthStats, metric: Metric): number | null {
+    if (metric === 'covers') return s.regularNights > 0 ? s.regularCovers / s.regularNights : null
+    if (s.revenue <= 0 || s.openNights === 0) return null
+    return metric === 'revenue' ? s.revenue / s.openNights : s.revenue / s.openCovers
+  }
+  const isFull = (s: MonthStats | undefined) => !!s && s.regularNights >= MIN_NIGHTS_FOR_FULL_MONTH
 
-  // ---- Monthly series (for the Historical page's three charts) ----------
-  // Same "index to own average" technique as monthlyIndex, but per
-  // chartYear's own raw value (for a grouped-bar current-vs-prior
-  // comparison), and split into parallel series per metric rather than one
-  // blended figure. `revenue` (added 2026-08-13, at the user's request, to
-  // sit alongside covers/spend as a "which months actually made the most
-  // money" headline) is real per-open-day revenue — mathematically the
-  // same thing as covers × spend per day (spend is defined as revenue ÷
-  // covers), so this isn't a third, independently-derived number; it's
-  // just building the ratio-to-own-average index directly off `d.revenue`
-  // rather than off `coversIndex × spendIndex`, which would drift from a
-  // true revenue average (averaging two ratios and multiplying isn't the
-  // same as averaging their product).
-  // Classifies each *day* individually via periodAvgFor (not by picking one
-  // representative day per month) — see CLAUDE.md's 2026-08-10 note on why
-  // that matters (a month whose earliest day falls in the location-move gap
-  // would otherwise get dropped whole, discarding real data from its other
-  // days).
+  // The average of the 12 full months centered on `s` at the same location (null when the
+  // location doesn't have 12 consecutive full months around it yet).
+  function centeredReference(s: MonthStats, metric: Metric): number | null {
+    let best: { offset: number, value: number } | null = null
+    for (let startShift = -11; startShift <= 0; startShift++) {
+      const window = Array.from({ length: 12 }, (_, i) => stats.get(`${s.loc}:${ymShift(s.ym, startShift + i)}`))
+      if (!window.every(isFull)) continue
+      const vals = window.map(w => valueOf(w!, metric))
+      if (vals.some(v => v == null)) continue
+      const offset = Math.abs(startShift + 5.5)
+      if (!best || offset < best.offset) best = { offset, value: mean(vals as number[]) }
+    }
+    return best?.value ?? null
+  }
+  // Fallback reference for the charts: the location's average over its full months so far.
+  function locationAverage(loc: LocationKey, metric: Metric, year?: number): number | null {
+    const vals = [...stats.values()]
+      .filter(s => s.loc === loc && isFull(s) && (year == null || s.year === year))
+      .map(s => valueOf(s, metric)).filter((v): v is number => v != null)
+    return vals.length ? mean(vals) : null
+  }
+
+  // ---- Monthly covers index (the forecast's seasonal shape) -----------------
+  const observationsByMonth = new Map<number, { year: number, indexPct: number }[]>()
+  for (const s of stats.values()) {
+    if (!isFull(s)) continue
+    const value = valueOf(s, 'covers')
+    const ref = centeredReference(s, 'covers')
+    if (value == null || ref == null || ref <= 0) continue
+    observationsByMonth.set(s.month, [...(observationsByMonth.get(s.month) ?? []), { year: s.year, indexPct: (value / ref) * 100 }])
+  }
+  const rawIndex = Array.from({ length: 12 }, (_, i) => {
+    const month = i + 1
+    const obs = (observationsByMonth.get(month) ?? []).sort((a, b) => a.year - b.year)
+    if (obs.length === 0) return { month, raw: null as number | null, observations: [] as { year: number, indexPct: number, weight: number }[] }
+    const newest = obs[obs.length - 1]!.year
+    const weighted = obs.map(o => ({ ...o, weight: RECENCY_WEIGHT ** (newest - o.year) }))
+    const total = weighted.reduce((sum, o) => sum + o.weight, 0)
+    return { month, raw: weighted.reduce((sum, o) => sum + o.weight * o.indexPct, 0) / total, observations: weighted.map(o => ({ ...o, weight: o.weight / total })) }
+  })
+  // Scale so the 12 months average 100 (only possible once every month has a value).
+  const raws = rawIndex.map(r => r.raw)
+  const scale = raws.every(r => r != null) ? 100 / mean(raws as number[]) : 1
+  const monthlyIndex: MonthlyIndexPoint[] = rawIndex.map(r => ({
+    month: r.month,
+    indexPct: r.raw == null ? null : r.raw * scale,
+    years: r.observations.map(o => o.year),
+    observations: r.observations
+  }))
+
+  // ---- Cambridge St demand level (for the automatic capacity forecast) -------
+  // De-seasonalized covers per regular night since the move: real covers ÷ what the seasonal
+  // shape says each of those nights should carry relative to an average month. The forecast
+  // for a month is this level × that month's index. Demand, not seats: November (no outdoor
+  // seating) ran about as busy as October, so the forecast no longer scales covers with each
+  // month's capacity.
+  let levelCovers = 0
+  let levelIndex = 0
+  for (const n of nights) {
+    if (n.loc !== 'cambridgeSt' || !n.regular) continue
+    const idx = monthlyIndex[Number(n.date.slice(5, 7)) - 1]?.indexPct
+    if (idx == null) continue
+    levelCovers += n.covers
+    levelIndex += idx / 100
+  }
+  const coversPerNightLevel = levelIndex > 0 ? levelCovers / levelIndex : null
+
+  // ---- Chart series (Seasonal Trends) -----------------------------------
+  // Last year and this year, each month against the same centered 12-month reference the
+  // forecast uses. Cambridge St months, until it has a full year, are compared with its
+  // average so far (`partial: true`).
+  const priorYears = [...new Set([...stats.values()].map(s => s.year))].filter(y => y < asOfYear).sort((a, b) => a - b)
+  const historicalYears = priorYears.length > 0 ? [priorYears[priorYears.length - 1]!] : []
   const chartYears = [...historicalYears, asOfYear]
-  function buildSeries(metric: Metric): { year: number, month: number, indexPct: number, openDays: number }[] {
-    const series: { year: number, month: number, indexPct: number, openDays: number }[] = []
-    for (const year of chartYears) {
-      if (yearAvg(year, metric) == null) continue
-      const byMonth = new Map<number, { ratioSum: number, days: number }>()
-      for (const d of byYear.get(year) ?? []) {
-        const value = metricValue(d, metric)
-        if (value == null) continue // defensive — see metricValue's comment above
-        const avg = periodAvgFor(year, d.date, metric)
-        if (avg == null) continue // this day falls in the location-move gap — excluded on its own, not by dragging its whole month down with it
-        const m = byMonth.get(d.month) ?? { ratioSum: 0, days: 0 }
-        m.ratioSum += value / avg
-        m.days += 1
-        byMonth.set(d.month, m)
-      }
-      for (const [month, m] of [...byMonth.entries()].sort((a, b) => a[0] - b[0])) {
-        if (m.days < MIN_OPEN_DAYS_FOR_MONTH_INDEX) continue
-        series.push({ year, month, indexPct: (m.ratioSum / m.days) * 100, openDays: m.days })
-      }
+  type SeriesPoint = { year: number, month: number, indexPct: number, openDays: number, location: LocationKey, partial: boolean }
+  function buildSeries(metric: Metric): SeriesPoint[] {
+    const series: SeriesPoint[] = []
+    for (const s of [...stats.values()].sort((a, b) => a.ym.localeCompare(b.ym))) {
+      if (!chartYears.includes(s.year)) continue
+      const nightsUsed = metric === 'covers' ? s.regularNights : s.openNights
+      if (nightsUsed < MIN_NIGHTS_FOR_CHART_POINT) continue
+      const value = valueOf(s, metric)
+      if (value == null) continue
+      let ref = isFull(s) ? centeredReference(s, metric) : null
+      const partial = ref == null
+      if (ref == null) ref = locationAverage(s.loc, metric)
+      if (ref == null || ref <= 0) continue
+      series.push({ year: s.year, month: s.month, indexPct: (value / ref) * 100, openDays: nightsUsed, location: s.loc, partial })
     }
     return series
   }
-
-  // The chart's "Year average (100%)" reference line is a ratio — on its
-  // own it doesn't say what real number a bar is actually being measured
-  // against. Added 2026-08-12 at the user's request, framed the same way
-  // they asked for it: by *location*, not by calendar year, since that's
-  // what a restaurateur actually wants to compare (Mass Ave vs. Cambridge
-  // St), not "2025" as an abstract label. Mass Ave's number is 2025's own
-  // whole-year average (2025 is the only historical year, and it's
-  // entirely Mass Ave); Cambridge St's is the new-location half of
-  // LOCATION_MOVE_PERIODS. Hardcoded to this specific transition the same
-  // way LOCATION_MOVE_PERIODS itself already is — only meaningful while
-  // 2026 (the move year) is still the current lens; once next year rolls
-  // around and asOfYear moves past 2026, this pairing stops being
-  // applicable and simply won't render (both page and component treat a
-  // null baseline as "don't show it").
-  const massAveYear = historicalYears.includes(2025) ? 2025 : null
+  // The chart legend's real numbers: last year's Mass Ave average month, and Cambridge St's so far.
   function baselinesFor(metric: Metric) {
-    return asOfYear === 2026 && massAveYear != null
-      ? { massAve: yearAvg(massAveYear, metric), cambridgeSt: periodAvgFor(2026, LOCATION_MOVE_PERIODS[1].start, metric) }
-      : { massAve: null, cambridgeSt: null }
+    const lastYear = historicalYears[0]
+    return {
+      massAve: lastYear != null ? locationAverage('massAve', metric, lastYear) : null,
+      cambridgeSt: locationAverage('cambridgeSt', metric)
+    }
   }
-  const locationBaselines = {
-    covers: baselinesFor('covers'),
-    spend: baselinesFor('spend'),
-    revenue: baselinesFor('revenue')
-  }
+  const locationBaselines = { covers: baselinesFor('covers'), spend: baselinesFor('spend'), revenue: baselinesFor('revenue') }
 
   // ---- Per-area fill-rate index (for Edit Capacity's "Set by History") --
   // How much more/less intensely each area fills, relative to the
@@ -290,14 +281,13 @@ export function loadCapacityHistory(db: Db) {
     (month >= 5 && month <= 10 ? a.capacityMayOct : a.capacityNovApr) ?? 0
   // An area's capacity on a given date: 0 on its never-open weekdays (Chef's Counter Sundays), so those
   // nights neither add capacity nor count covers toward its fill rate (area-hours.ts).
-  const dowOf = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay()
   const areaCapOn = (a: { name: string; capacityNovApr: number | null; capacityMayOct: number | null }, iso: string) =>
     neverOpenOn(a.name, dowOf(iso)) ? 0 : areaCapForMonth(a, Number(iso.slice(5, 7)))
   const totalCapOn = (iso: string) => areaCapacityRows.reduce((sum, a) => sum + areaCapOn(a, iso), 0)
   const areaNameById = new Map(areaCapacityRows.map(a => [a.id, a.name]))
 
   // Only open days since the move (same open-day rule as the rest of this file).
-  const moveStart = LOCATION_MOVE_PERIODS[1]!.start
+  const moveStart = CAMBRIDGE_ST_START
   const openDaysSinceMove = coversRows.filter(r => r.date >= moveStart)
   const openDateSet = new Set(openDaysSinceMove.map(r => r.date))
   const areaDayRows = db.prepare(`
@@ -326,22 +316,6 @@ export function loadCapacityHistory(db: Db) {
       })
     : null
 
-  // ---- Data-driven annual baseline (for the automatic capacity forecast)
-  // De-seasonalized fill % since the move: real covers divided by what the
-  // historical shape (monthlyIndex) expects each of those days to carry. Leans
-  // on Mass Ave's month-to-month demand shape still roughly holding for
-  // Cambridge St, the best proxy until a full year of Cambridge St history
-  // exists. See CLAUDE.md's "Historical seasonality" sections.
-  let dataBaselineActual = 0
-  let dataBaselineExpected = 0
-  for (const r of openDaysSinceMove) {
-    const month = Number(r.date.slice(5, 7))
-    const idx = monthlyIndex.find(m => m.month === month)?.indexPct
-    if (idx == null) continue
-    dataBaselineActual += r.covers
-    dataBaselineExpected += totalCapOn(r.date) * (idx / 100)
-  }
-  const dataAnnualFillPct = dataBaselineExpected > 0 ? dataBaselineActual / dataBaselineExpected : null
 
   return {
     asOfYear,
@@ -353,7 +327,7 @@ export function loadCapacityHistory(db: Db) {
     revenueSeries: buildSeries('revenue'),
     locationBaselines,
     areaFillIndex,
-    areaFillIndexSince: LOCATION_MOVE_PERIODS[1].start,
-    dataAnnualFillPct
+    areaFillIndexSince: CAMBRIDGE_ST_START,
+    coversPerNightLevel
   }
 }

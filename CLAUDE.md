@@ -155,10 +155,14 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 `refreshForecastsAfterChange`, `ensureForecastsFresh` in `server/utils/capacity-forecast.ts`).
 - **Capacity drivers** (Planning › Capacity): per-area **spend per guest** = the area's real Toast blend
   over the two most recently closed, fully synced months (≥ 30 covers), updated at month close.
-  **Expected covers per night** for every month that hasn't started = the most recent single-location
-  year's covers seasonality (2025 until 2027 is complete; 2026, the move year, is skipped) ×
-  a baseline from real Cambridge St covers since the move (season-aware capacity), split across areas by
-  each area's real fill rate. The current month is never recomputed. Rows are per calendar month and
+  **Expected covers per night** for every month that hasn't started = Cambridge St's de-seasonalized demand
+  level (`coversPerNightLevel`, covers per regular night since the move) × that month's covers index, split
+  across areas in proportion to capacity × each area's real fill rate (capped; demand, not seats: Outdoor's
+  winter closure moves guests indoors). The **covers index** (`server/utils/capacity-history.ts`, rebuilt
+  2026-11-17): regular nights only (location's own service nights, no holidays/special nights/party nights
+  over 1.75× the month's median; no same-day QBO revenue required), each month ÷ the centered 12-month
+  average at the same location, recent years weighted double (Jan–May lean 2/3 on 2026 Mass Ave), scaled to
+  average 100. Cambridge St months join once it has 12 full months. See history. The current month is never recomputed. Rows are per calendar month and
   reused every year (a closed month's row is next year's forecast). Pins: `capacity_areas.follow_actuals`
   (1 = automatic), `capacity_area_seasonality.pinned`. Chef's Counter spend per guest is pinned at
   $190/$50; covers Jan–Apr pinned at 7 (re-check after February 2027 actuals).

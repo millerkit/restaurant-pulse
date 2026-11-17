@@ -12,8 +12,8 @@
 //   follow_actuals = 0 is pinned (e.g. Chef's Counter, a deliberate price).
 //
 // - Expected covers per night (capacity_area_seasonality.expected_covers): for
-//   every month that hasn't started, the historical seasonal shape × a
-//   data-driven baseline, split across areas by each area's real fill rate
+//   every month that hasn't started, Cambridge St's real demand level × the
+//   historical seasonal shape (covers, not seats), split across areas by each area's real fill rate
 //   (server/utils/capacity-history.ts). The current month is frozen: it keeps
 //   whatever the forecast said on the night before it started, so actuals have
 //   a fixed reference to be judged against. Rows are reused every year, so a
@@ -61,15 +61,32 @@ function areaCapacity(a: AreaRow, month: number): number {
   return ((month >= 5 && month <= 10) ? a.capacity_may_oct : a.capacity_nov_apr) ?? 0
 }
 
-// Splits a month's covers target across areas: each area's share is the
-// month's fill fraction × its own capacity × its real fill-rate index, capped at
-// its capacity, rounded so the whole numbers add up to the restaurant total
-// (largest remainder; the leftover only goes to areas below their cap). Same
-// rule "Set by History" used, moved server-side.
+// Splits a month's covers target (fraction × the month's total capacity) across
+// areas in proportion to each area's capacity × its real fill-rate index, capped at
+// its capacity (anything over a cap goes to the areas below theirs), rounded so the
+// whole numbers add up to the restaurant total (largest remainder; the leftover only
+// goes to areas below their cap). Proportional since 2026-11-17: the fill indexes
+// average 1 only over the seating they were measured on (Outdoor included), so in
+// winter fraction × capacity × index overshot the target by about a tenth.
 export function distributeCovers(fraction: number, areas: AreaRow[], month: number, indexFor: (areaId: number) => number): Map<number, number> {
   const caps = areas.map(a => areaCapacity(a, month))
-  const exact = areas.map((a, i) => Math.min(fraction * caps[i]! * indexFor(a.id), caps[i]!))
   const totalTarget = Math.round(fraction * caps.reduce((s, c) => s + c, 0))
+  const weights = areas.map((a, i) => caps[i]! * Math.max(0, indexFor(a.id)))
+  const exact = caps.map(() => 0)
+  const open = new Set(caps.map((_, i) => i).filter(i => caps[i]! > 0 && weights[i]! > 0))
+  let remaining = fraction * caps.reduce((s, c) => s + c, 0)
+  while (open.size > 0 && remaining > 1e-9) {
+    const weightSum = [...open].reduce((s, i) => s + weights[i]!, 0)
+    let spilled = false
+    for (const i of [...open]) {
+      const share = remaining * weights[i]! / weightSum
+      if (exact[i]! + share >= caps[i]!) { remaining -= caps[i]! - exact[i]!; exact[i] = caps[i]!; open.delete(i); spilled = true }
+    }
+    if (!spilled) {
+      for (const i of open) exact[i] = exact[i]! + remaining * weights[i]! / weightSum
+      remaining = 0
+    }
+  }
   const result = exact.map(Math.floor)
   let leftover = Math.max(0, totalTarget - result.reduce((s, v) => s + v, 0))
   const order = result.map((_, i) => i).sort((x, y) => (exact[y]! - result[y]!) - (exact[x]! - result[x]!))
@@ -155,8 +172,11 @@ export function refreshCapacityForecast(db: Db, today: string, syncedThrough?: s
   }
 
   // ---- Expected covers per night ----------------------------------------
+  // Covers per night = Cambridge St's de-seasonalized demand level × the month's covers index
+  // (capacity-history.ts). Demand, not seats: a month with less seating (Outdoor closed
+  // Nov-Apr) moves those guests indoors rather than losing them, up to each area's capacity.
   const history = loadCapacityHistory(db)
-  const baseline = history.dataAnnualFillPct
+  const level = history.coversPerNightLevel
   const indexFor = (areaId: number) => history.areaFillIndex?.find(r => r.areaId === areaId)?.indexValue ?? 1
   const rows = db.prepare('SELECT area_id, month, expected_covers, pinned, auto_covers FROM capacity_area_seasonality').all() as { area_id: number, month: number, expected_covers: number, pinned: number, auto_covers: number | null }[]
   const byKey = new Map(rows.map(r => [`${r.area_id}:${r.month}`, r]))
@@ -170,9 +190,10 @@ export function refreshCapacityForecast(db: Db, today: string, syncedThrough?: s
     for (let month = 1; month <= 12; month++) {
       if (month === tm) continue // the current month is frozen
       const idx = history.monthlyIndex.find(m => m.month === month)?.indexPct
-      if (idx == null || baseline == null) continue
+      const totalCap = areas.reduce((sum, a) => sum + areaCapacity(a, month), 0)
+      if (idx == null || level == null || totalCap <= 0) continue
       result.historyAvailable = true
-      const fraction = baseline * (idx / 100)
+      const fraction = Math.min(1, (level * (idx / 100)) / totalCap)
       const split = distributeCovers(fraction, areas, month, indexFor)
       for (const a of areas) {
         const row = byKey.get(`${a.id}:${month}`)

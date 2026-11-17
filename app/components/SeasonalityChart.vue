@@ -155,7 +155,7 @@ const showTable = ref(false)
         <span class="legend-swatch" :class="colorRoleFor(y)"></span>
         {{ y }}{{ y === currentYear ? ' (to date)' : '' }}<template v-if="colorRoleFor(y) === 'prior' && massAveBaselineLabel"> — Mass Ave avg {{ massAveBaselineLabel }}</template><template v-if="colorRoleFor(y) === 'current' && cambridgeStBaselineLabel"> — Cambridge St avg {{ cambridgeStBaselineLabel }}</template>
       </span>
-      <span class="legend-item ref-line"><span class="legend-swatch ref"></span>Year average (100%)</span>
+      <span class="legend-item ref-line"><span class="legend-swatch ref"></span>Typical month (100%)</span>
       <button type="button" class="table-toggle" @click="showTable = !showTable">{{ showTable ? 'Show chart' : 'Show as table' }}</button>
     </div>
 

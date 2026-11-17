@@ -578,7 +578,7 @@ function monthBasisTitle(s: MonthlyDraft): string {
   if (s.month === forecastCurrentMonth.value) return `${MONTH_NAMES[s.month - 1]} has started, so its forecast is frozen at what it was on the 1st and actuals are judged against it. It starts following the forecast again (for next year) when the month ends.`
   const pct = autoFillPct(s.month)
   if (pct == null) return 'Not enough Toast history yet to forecast this month automatically; the saved numbers are used.'
-  return `Last year's covers pattern says ${MONTH_NAMES[s.month - 1]} runs at about ${fmtPctWhole(pct)} of seats, scaled to how full Cambridge St has actually been since the move, then split by how full each area really runs. Updated nightly.`
+  return `Cambridge St's real covers since the move, adjusted for the season, × how busy ${MONTH_NAMES[s.month - 1]} runs compared with a typical month (Seasonal Trends; recent years count double), which comes to about ${fmtPctWhole(pct)} of this month's seats, then split by how full each area really runs. Updated nightly.`
 }
 function onCoversInput(s: MonthlyDraft, areaId: number) {
   s.areaPinned[areaId] = true
@@ -1010,7 +1010,7 @@ async function save() {
           <div class="section-head">
             <div class="section-label">Expected Nightly Covers by Area &amp; Closures</div>
             <ul class="section-note note-list">
-              <li><strong>Automatic</strong> (plain numbers): every month that hasn't started follows the forecast, updated nightly — last year's seasonal pattern, scaled to how full Cambridge St has really been since the move, split by how full each area actually runs.</li>
+              <li><strong>Automatic</strong> (plain numbers): every month that hasn't started follows the forecast, updated nightly — Cambridge St's real covers since the move, adjusted for the season, × how busy that month runs compared with a typical month (the <NuxtLink to="/historical">Seasonal Trends</NuxtLink> covers pattern; recent years count double, so January–May lean on 2026), split by how full each area actually runs. Guests, not seats: when Outdoor closes, its guests move indoors.</li>
               <li><strong>Pinned</strong> (outlined, with ↺): a number you typed stays put. Click ↺ to send it back to automatic.</li>
               <li>The current month is frozen at what the forecast said on the 1st, so this month's actuals are judged against a fixed number. Each month's row is reused for next year once the month ends.</li>
               <li>Total, Fill %, and Per-Cover $ are derived from these baselines; Projected Revenue also applies any weekly area closure from its start date.</li>

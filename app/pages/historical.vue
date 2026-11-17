@@ -45,7 +45,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
         <section v-if="historyData.revenueSeries.length">
           <div class="section-head">
             <div class="section-label">Revenue Seasonality</div>
-            <div class="section-note">Core dine-in revenue per open day (covers × spend per cover), indexed to each year's own average. The headline number — which months actually made the most money — with the Covers and Spend charts below explaining why.</div>
+            <div class="section-note">Core dine-in revenue per open night (the month's QuickBooks total ÷ nights open), compared with the typical month around it at the same location: the average of the 12 months centered on it. Which months actually made the most money; the Covers and Spend charts below explain why. Cambridge St months are compared with its average so far until it has a full year.</div>
           </div>
           <div class="pl-table-card chart-card">
             <SeasonalityChart
@@ -53,7 +53,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
               :historical-years="historyData.historicalYears"
               :current-year="historyData.currentYear"
               metric-label="Revenue"
-              aria-label="Monthly core dine-in revenue per open day, indexed to each year's own average, current year vs. prior year"
+              aria-label="Monthly core dine-in revenue per open day, compared with the typical month around it, current year vs. prior year"
               :mass-ave-baseline-label="fmtRevenueBaseline(historyData.locationBaselines.revenue.massAve)"
               :cambridge-st-baseline-label="fmtRevenueBaseline(historyData.locationBaselines.revenue.cambridgeSt)"
             />
@@ -63,7 +63,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
         <section v-if="historyData.coversSeries.length">
           <div class="section-head">
             <div class="section-label">Covers Seasonality</div>
-            <div class="section-note">Covers per open day (Toast, core dine-in — events/catering excluded, closures excluded), indexed to each year's own average. Answers "was this month busier or slower than a typical month here" without needing to compare against a fixed capacity — same figure that powers the Capacity planning page's <NuxtLink to="/capacity?tab=edit">Set by History</NuxtLink> button.</div>
+            <div class="section-note">Covers per regular night (Toast; holidays, buyouts, events, Mass Ave's Sunday private openings and private-party nights left out), compared with the typical month around it at the same location. Was this month busier or slower than a typical month here? This is the seasonal shape the <NuxtLink to="/capacity?tab=edit">Capacity</NuxtLink> forecast uses, with recent years counting double: January–May lean two-thirds on 2026, one-third on 2025.</div>
           </div>
           <div class="pl-table-card chart-card">
             <SeasonalityChart
@@ -71,7 +71,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
               :historical-years="historyData.historicalYears"
               :current-year="historyData.currentYear"
               metric-label="Covers"
-              aria-label="Monthly covers per open day, indexed to each year's own average, current year vs. prior year"
+              aria-label="Monthly covers per open day, compared with the typical month around it, current year vs. prior year"
               :mass-ave-baseline-label="fmtCoversBaseline(historyData.locationBaselines.covers.massAve)"
               :cambridge-st-baseline-label="fmtCoversBaseline(historyData.locationBaselines.covers.cambridgeSt)"
             />
@@ -81,7 +81,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
         <section v-if="historyData.spendSeries.length">
           <div class="section-head">
             <div class="section-label">Average Spend Per Cover Seasonality</div>
-            <div class="section-note">Core dine-in revenue (QuickBooks) ÷ covers (Toast) per open day, indexed to each year's own average. Tracks whether guests spend more or less per visit at different times of year, separate from how many guests come in.</div>
+            <div class="section-note">The month's core dine-in revenue (QuickBooks) ÷ its covers (Toast), compared with the typical month around it at the same location. Tracks whether guests spend more or less per visit at different times of year, separate from how many guests come in.</div>
           </div>
           <div class="pl-table-card chart-card">
             <SeasonalityChart
@@ -89,7 +89,7 @@ function fmtRevenueBaseline(n: number | null | undefined): string | null {
               :historical-years="historyData.historicalYears"
               :current-year="historyData.currentYear"
               metric-label="Avg Spend/Cover"
-              aria-label="Monthly average spend per cover, indexed to each year's own average, current year vs. prior year"
+              aria-label="Monthly average spend per cover, compared with the typical month around it, current year vs. prior year"
               :mass-ave-baseline-label="fmtSpendBaseline(historyData.locationBaselines.spend.massAve)"
               :cambridge-st-baseline-label="fmtSpendBaseline(historyData.locationBaselines.spend.cambridgeSt)"
             />
