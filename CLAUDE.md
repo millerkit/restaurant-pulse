@@ -294,6 +294,10 @@ Kitchen Hours). `server/utils/foh-hours-report.ts` (+ `server/api/foh-hours.get.
   `/api/foh-hours` is the one dollar-carrying route the `floor` role may call. Filled nightly by the Toast sync (same orders, no
   extra call, non-fatal); history by hand: `npm run db:backfill-toast-server-sales -- --since=2026-06-16` (production:
   `fly ssh console -C "node scripts/backfill-toast-server-sales.mjs --since=2026-06-16"`, needs approval; idempotent).
+**Normal-service nights only** (`classifyDays`, `MIN_ORDERS_FOR_SERVICE_DAY` = 20 in `foh-hours-report.ts`): closed Mondays,
+dated holiday closures, dated buyout / event / off-site nights (Sales Plan `special_nights`), and any other night with under 20 orders
+(low volume or an anomaly; falls back to the 15-covers rule where order counts aren't synced) are tagged under the date and left out of
+Guests, guests per FOH hour and the productivity table (their hours are still listed). Change the 20 in one place.
 **Left out of every FOH figure** (Kit, 2026-11-17): managers (anyone who ever clocked a General Manager, Floor Manager or Wine
 Director job: Abigail, Shane, Katie; `MANAGER_JOB_PATTERN`) and shared station logins (staff override "excluded", e.g. Service Bar,
 which still shows in the productivity table as a "Shared login" row since it carries the bar's sales). There is no Management

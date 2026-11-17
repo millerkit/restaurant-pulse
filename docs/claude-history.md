@@ -6411,3 +6411,10 @@ the next nightly sync after deploy) and approval, since it writes to the product
 
 **Verified** locally: API and HTML download (no managers, productivity table present), page for the week of Oct 26 (groups Floor /
 Bar / Concierge, productivity table, footnotes), BOH report untouched.
+
+**FOH Hours, day rules (2026-11-17, after the first production backfill)**: the backfill showed days with 0-2 orders (closed Mondays,
+stray orders) and Nov 12 with 6 (probably an unentered private event). Kit: respect the schedule (Mondays, holidays, buyouts) and, as a
+fallback, treat a day under X orders as closed or an anomaly. Built as `classifyDays` (special nights and holidays from
+`loadPlannedNights`, Mondays, then orders < 20 via `daily_toast_server_sales`, else covers < 15). Marked days get a tag under the date;
+they are excluded from Guests, guests per FOH hour and the productivity table and its hours. Typical ordinary nights run 27-75 orders;
+local hours data ends Nov 5, so the low-orders branch could not be exercised locally (the Monday-closed branch was).

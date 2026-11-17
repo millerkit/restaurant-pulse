@@ -117,7 +117,10 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
             <tr>
               <th scope="col">Employee</th>
               <th scope="col">Total</th>
-              <th v-for="d in data.days" :key="d.date" scope="col" :class="{ closed: d.isClosedDay }">{{ d.label }}</th>
+              <th v-for="d in data.days" :key="d.date" scope="col" :class="{ closed: d.isClosedDay }">
+                {{ d.label }}
+                <span v-if="d.tag" class="daytag" :class="{ special: d.status === 'buyout' || d.status === 'event' || d.status === 'offsite' }">{{ d.tag }}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -156,7 +159,8 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
       <p class="foot">
         Counts hours worked as {{ data.includedJobs.join(', ') }}. Each person is grouped by the job they worked most that week. Managers (General Manager, Floor Manager, Wine Director) are not included.
         "Near 40" = {{ data.thresholds.close }}+ hours or overtime logged in Toast.
-        Guests are Toast guest counts on open nights.
+        Closed days (Mondays, holidays), buyout, event and off-site nights, and nights with under {{ data.thresholds.minOrders }} orders (a low-volume day or an anomaly)
+        are marked under the date. Their hours are listed, but they are left out of Guests, guests per FOH hour and the productivity table, so those compare normal nights only.
         ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. An unfinished shift can look off too.
         <template v-if="data.excludedLogins.length">
           Shared logins left out of the table: {{ data.excludedLogins.map(x => `${x.name} (${x.hours.toFixed(1)} hrs)`).join(', ') }}.
@@ -230,7 +234,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
         </div>
         <p class="foot">
           Net sales are after discounts, before tax and tip, for every order the person rang (the same figures as Toast's Employee productivity report).
-          Per guest = net sales ÷ guests; Sales / hr = net sales ÷ FOH hours clocked. Avg turn is order opened to paid, leaving out any order open over 8 hours.
+          Per guest = net sales ÷ guests; Sales / hr = net sales ÷ FOH hours clocked on those normal nights (Hours here counts them only). Avg turn is order opened to paid, leaving out any order open over 8 hours.
           Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. A shared login's sales are the bar's, not one person's.
         </p>
       </template>
@@ -272,6 +276,8 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 .hours-table .section-row th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); text-align: left; background: var(--surface-alt); }
 .hours-table tfoot th, .hours-table tfoot td { font-weight: 700; color: var(--ink); border-top: 1px solid var(--hair); }
 .hours-table tfoot .guests-row th, .hours-table tfoot .guests-row td { font-weight: 500; color: var(--ink-2); border-top: none; }
+.daytag { display: block; margin-top: 2px; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.daytag.special { color: var(--accent); }
 .prod-head { margin-top: 28px; }
 .hours-table.prod-table { min-width: 860px; }
 .foot { margin: 10px 2px 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }

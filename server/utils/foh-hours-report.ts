@@ -21,6 +21,7 @@ import {
   BOH_JOB_PATTERN, RESTAURANT_TIME_ZONE, HOURS_REPORT_CSS, addDays, mondayOf, localToday, round1, esc, fmtH, fmtDate
 } from './boh-hours-report'
 import { loadStaffOverrides, staffKeys } from './staff-overrides'
+import { loadPlannedNights } from './special-nights'
 
 export const FOH_JOB_PATTERN = /^(server|(lead |service )?bartender|bar ?prep|bar ?back|concierge|host|hostess|service captain|captain|cater-waiter|food runner|runner|busser)/i
 const BAR_JOB_PATTERN = /^((lead |service )?bartender|bar ?prep|bar ?back)/i
@@ -30,7 +31,13 @@ export const MANAGER_JOB_PATTERN = /^(general manager|floor manager|assistant ma
 const OVERTIME_LINE_HOURS = 40
 const CLOSE_TO_OVERTIME_HOURS = 36
 const TRAILING_WEEKS = 4
-// A day counts as open at this many covers (same rule as the rest of the app).
+// Which days count as normal service (Kit, 2026-11-17). Closed Mondays, dated holiday closures, and
+// dated buyout / event / off-site nights are not normal service; and a day that should be open but has
+// fewer than MIN_ORDERS_FOR_SERVICE_DAY orders is a low-volume day or an anomaly (a stray order on a
+// closed day, an unentered private event). Such days are marked and left out of guests per FOH hour and
+// the productivity table; their hours are still listed. Ordinary Tue-Sun nights run about 27-75 orders.
+// If order counts aren't synced for a day yet, the app-wide 15-covers rule stands in.
+export const MIN_ORDERS_FOR_SERVICE_DAY = 20
 const MIN_COVERS_FOR_OPEN_DAY = 15
 
 export type FohGroupKey = 'floor' | 'bar' | 'concierge'
@@ -41,7 +48,17 @@ const GROUPS: { key: FohGroupKey, label: string }[] = [
 ]
 const groupOfJob = (title: string): FohGroupKey => (CONCIERGE_JOB_PATTERN.test(title) ? 'concierge' : BAR_JOB_PATTERN.test(title) ? 'bar' : 'floor')
 
-export interface FohDay { date: string, label: string, isClosedDay: boolean, elapsed: boolean }
+export type FohDayStatus = 'open' | 'closed' | 'buyout' | 'event' | 'offsite' | 'low'
+export interface FohDay {
+  date: string
+  label: string
+  isClosedDay: boolean   // greyed out: closed (Monday, holiday) or low orders
+  elapsed: boolean
+  status: FohDayStatus
+  tag: string | null     // short note under the date: "Closed", "Thanksgiving", "Buyout", "Low orders"
+  service: boolean       // counts in guests per FOH hour and the productivity table
+}
+interface DayClass { status: FohDayStatus, tag: string | null, service: boolean }
 export interface FohPerson {
   guid: string
   name: string
@@ -102,7 +119,7 @@ export interface FohHoursReport {
   excludedLogins: { name: string, hours: number }[]
   prevWeek: string | null
   nextWeek: string | null
-  thresholds: { overtime: number, close: number }
+  thresholds: { overtime: number, close: number, minOrders: number }
   generatedAt: string
 }
 
@@ -116,25 +133,59 @@ function managerGuidsOf(db: ReturnType<typeof useDb>): Set<string> {
   return new Set(rows.filter(r => MANAGER_JOB_PATTERN.test(r.title)).map(r => r.guid))
 }
 
+// Classifies every date in [from, to]. `dataThrough` is the last synced day: later days (the rest of a
+// week in progress) are not judged on volume.
+function classifyDays(db: ReturnType<typeof useDb>, from: string, to: string, dataThrough: string): Map<string, DayClass> {
+  const planned = loadPlannedNights(db, from, to)
+  const orders = new Map<string, number>()
+  try {
+    for (const r of db.prepare('SELECT date, SUM(orders) AS n FROM daily_toast_server_sales WHERE date BETWEEN ? AND ? GROUP BY date').all(from, to) as { date: string, n: number }[]) orders.set(r.date, r.n)
+  } catch { /* migration 0025 not applied: the covers rule stands in */ }
+  const covers = new Map<string, number>()
+  for (const r of db.prepare('SELECT date, covers FROM daily_toast_metrics WHERE date BETWEEN ? AND ?').all(from, to) as { date: string, covers: number }[]) covers.set(r.date, r.covers)
+  const out = new Map<string, DayClass>()
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const n = planned.get(d)
+    let c: DayClass
+    if (n && (n.kind === 'buyout' || n.kind === 'event' || n.kind === 'offsite')) {
+      c = { status: n.kind, tag: n.kind === 'buyout' ? 'Buyout' : n.kind === 'event' ? 'Event' : 'Off-site', service: false }
+    } else if (n && n.kind === 'closed') {
+      c = { status: 'closed', tag: n.holiday ?? n.note ?? 'Closed', service: false }
+    } else if (new Date(`${d}T00:00:00Z`).getUTCDay() === 1) {
+      c = { status: 'closed', tag: 'Closed', service: false }
+    } else if (d <= dataThrough && (orders.has(d) ? orders.get(d)! < MIN_ORDERS_FOR_SERVICE_DAY : (covers.get(d) ?? 0) < MIN_COVERS_FOR_OPEN_DAY)) {
+      c = { status: 'low', tag: 'Low orders', service: false }
+    } else {
+      c = { status: 'open', tag: null, service: true }
+    }
+    out.set(d, c)
+  }
+  return out
+}
+
 interface JobHourRow { date: string, guid: string, title: string, regular: number, overtime: number, autoShifts: number, autoHours: number }
 
 interface ServerSalesRow { guid: string, orders: number, guests: number, net: number, tax: number, tips: number, voids: number, turnSeconds: number, turnOrders: number }
 
 function buildProductivity(
   db: ReturnType<typeof useDb>, from: string, to: string, names: Map<string, string>,
-  stationGuids: Set<string>, managerGuids: Set<string>, hoursByGuid: Map<string, number>
+  stationGuids: Set<string>, managerGuids: Set<string>, hoursByGuid: Map<string, number>, serviceDates: string[]
 ): FohProductivity {
   let sales: ServerSalesRow[]
   try {
-    sales = db.prepare(`
+    const any = db.prepare('SELECT COUNT(*) AS n FROM daily_toast_server_sales WHERE date BETWEEN ? AND ?').get(from, to) as { n: number }
+    if (!any.n) return { available: false, rows: [], total: null } // not synced for this week yet
+    // Normal-service nights only (not closed, buyout, event, off-site or low-order days).
+    const marks = serviceDates.map(() => '?').join(',')
+    sales = serviceDates.length ? db.prepare(`
       SELECT employee_guid AS guid, SUM(orders) AS orders, SUM(guests) AS guests, SUM(net_sales) AS net, SUM(tax) AS tax,
              SUM(non_cash_tips) AS tips, SUM(void_count) AS voids, SUM(turn_seconds) AS turnSeconds, SUM(turn_orders) AS turnOrders
-      FROM daily_toast_server_sales WHERE date BETWEEN ? AND ? GROUP BY employee_guid
-    `).all(from, to) as ServerSalesRow[]
+      FROM daily_toast_server_sales WHERE date IN (${marks}) GROUP BY employee_guid
+    `).all(...serviceDates) as ServerSalesRow[] : []
   } catch {
     return { available: false, rows: [], total: null } // migration 0025 not applied yet
   }
-  if (!sales.length) return { available: false, rows: [], total: null }
+  if (!sales.length) return { available: true, rows: [], total: null }
   const r1 = (n: number) => Math.round(n * 10) / 10
   const r2 = (n: number) => Math.round(n * 100) / 100
   const make = (guid: string, name: string, isStation: boolean, hours: number | null, s: Omit<ServerSalesRow, 'guid'>): FohProductivityRow => ({
@@ -168,13 +219,13 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   const base = {
     restaurantName: site.restaurantName,
     groups: GROUPS,
-    thresholds: { overtime: OVERTIME_LINE_HOURS, close: CLOSE_TO_OVERTIME_HOURS },
+    thresholds: { overtime: OVERTIME_LINE_HOURS, close: CLOSE_TO_OVERTIME_HOURS, minOrders: MIN_ORDERS_FOR_SERVICE_DAY },
     generatedAt
   }
   const range = db.prepare('SELECT MIN(date) AS minDate, MAX(date) AS maxDate FROM daily_toast_job_hours').get() as { minDate: string | null, maxDate: string | null }
   const emptyDays = (start: string): FohDay[] => Array.from({ length: 7 }, (_, i) => {
     const date = addDays(start, i)
-    return { date, label: new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC' }), isClosedDay: i === 0, elapsed: false }
+    return { date, label: new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC' }), isClosedDay: i === 0, elapsed: false, status: i === 0 ? 'closed' : 'open', tag: i === 0 ? 'Closed' : null, service: i !== 0 }
   })
   const noGuests = { current: null, lastWeek: null, trailingAvg: null }
   if (!range.minDate || !range.maxDate) {
@@ -252,19 +303,21 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   const byDay: Record<string, number> = {}
   for (const r of fohRows) byDay[r.date] = round1((byDay[r.date] ?? 0) + hoursOf(r))
 
-  // Guests on open nights, from the Toast covers sync (see CLAUDE.md: a day is open at 15+ covers).
-  const coversOn = (from: string, to: string) => {
+  // Guests on normal-service nights only (see classifyDays), from the Toast covers sync.
+  const dataThrough: string = range.maxDate
+  const dayClass = classifyDays(db, weekStart, weekEnd, dataThrough)
+  const coversOn = (from: string, to: string, dayInfo: Map<string, DayClass>) => {
     const m = new Map<string, number>()
     for (const r of db.prepare('SELECT date, covers FROM daily_toast_metrics WHERE date BETWEEN ? AND ?').all(from, to) as { date: string, covers: number }[]) {
-      if (r.covers >= MIN_COVERS_FOR_OPEN_DAY) m.set(r.date, r.covers)
+      if (dayInfo.get(r.date)?.service && r.covers > 0) m.set(r.date, r.covers)
     }
     return m
   }
-  const coversByDay = Object.fromEntries(coversOn(weekStart, weekEnd))
+  const coversByDay = Object.fromEntries(coversOn(weekStart, weekEnd, dayClass))
   const coversTotal = Object.values(coversByDay).reduce((s, v) => s + v, 0)
-  // Guests ÷ FOH hours, counting only the open nights that have both.
+  // Guests ÷ FOH hours, counting only the normal-service nights that have both.
   const perHour = (from: string, to: string): number | null => {
-    const covers = coversOn(from, to)
+    const covers = coversOn(from, to, from === weekStart ? dayClass : classifyDays(db, from, to, dataThrough))
     const hours = fohRowsFor(from, to).filter(r => covers.has(r.date))
     const h = sum(hours)
     if (!covers.size || h <= 0) return null
@@ -297,9 +350,11 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   for (const r of rows) if (isFoh(r.title) && stationGuids.has(r.guid)) stationMap.set(names.get(r.guid) ?? 'Unknown login', (stationMap.get(names.get(r.guid) ?? 'Unknown login') ?? 0) + hoursOf(r))
 
   // Productivity: Toast's Employee productivity figures for the week, one row per server who rang orders.
+  // Hours here are normal-service nights only, so sales per hour compares like with like.
+  const serviceDates = [...dayClass].filter(([, c]) => c.service).map(([d]) => d)
   const hoursByGuid = new Map<string, number>()
-  for (const r of rows) if (isFoh(r.title)) hoursByGuid.set(r.guid, (hoursByGuid.get(r.guid) ?? 0) + hoursOf(r))
-  const productivity = buildProductivity(db, weekStart, weekEnd, names, stationGuids, gmGuids, hoursByGuid)
+  for (const r of rows) if (isFoh(r.title) && dayClass.get(r.date)?.service) hoursByGuid.set(r.guid, (hoursByGuid.get(r.guid) ?? 0) + hoursOf(r))
+  const productivity = buildProductivity(db, weekStart, weekEnd, names, stationGuids, gmGuids, hoursByGuid, serviceDates)
 
   const jobTitles = (db.prepare('SELECT title FROM toast_jobs WHERE deleted = 0 ORDER BY title').all() as { title: string }[]).map(j => j.title)
   const thisMonday = mondayOf(range.maxDate)
@@ -311,7 +366,10 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
     weekEnd,
     asOf,
     weekComplete,
-    days: emptyDays(weekStart).map((d, i) => ({ ...d, elapsed: i < elapsedDays })),
+    days: emptyDays(weekStart).map((d, i) => {
+      const c = dayClass.get(d.date)!
+      return { ...d, elapsed: i < elapsedDays, status: c.status, tag: c.tag, service: c.service, isClosedDay: c.status === 'closed' || c.status === 'low' }
+    }),
     people,
     productivity,
     autoClockOuts: { people: people.filter(p => p.autoShifts > 0).length, shifts: people.reduce((s, p) => s + p.autoShifts, 0) },
@@ -347,7 +405,7 @@ export function renderFohHoursHtml(r: FohHoursReport): string {
     return d === 0 ? 'same as' : `${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)} ${d > 0 ? 'more' : 'fewer'} than`
   }
   const cols = r.days.length + 2
-  const head = r.days.map(d => `<th class="n${d.isClosedDay ? ' closed' : ''}">${esc(d.label)}</th>`).join('')
+  const head = r.days.map(d => `<th class="n${d.isClosedDay ? ' closed' : ''}">${esc(d.label)}${d.tag ? `<span class="job">${esc(d.tag)}</span>` : ''}</th>`).join('')
   const rowHtml = (p: FohPerson) => {
     const chip = p.status === 'over' ? '<span class="chip over">▲ In overtime</span>' : p.status === 'close' ? '<span class="chip close">◆ Near 40</span>' : ''
     const autoChip = p.autoShifts > 0 ? `<span class="chip auto">⚠ Auto clock-out${p.autoShifts > 1 ? ` ×${p.autoShifts}` : ''}</span>` : ''
@@ -359,7 +417,7 @@ export function renderFohHoursHtml(r: FohHoursReport): string {
     return rows ? `<tr class="sec"><th colspan="${cols}">${esc(g.label)}</th></tr>${rows}` : ''
   }).join('')
   const dayTotals = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${fmtH(r.totals.byDay[d.date] ?? 0)}</td>`).join('')
-  const dayCovers = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${fmtH(r.totals.coversByDay[d.date] ?? 0).replace(/\.0$/, '')}</td>`).join('')
+  const dayCovers = r.days.map(d => `<td class="n${d.isClosedDay ? ' closed' : ''}">${r.totals.coversByDay[d.date] ?? '–'}</td>`).join('')
   const cmp: string[] = []
   if (r.comparison.priorSamePoint !== null && r.asOf && !r.weekComplete) cmp.push(`${delta(r.totals.all, r.comparison.priorSamePoint)} the same days last week (${r.comparison.priorSamePoint.toFixed(1)})`)
   if (r.comparison.priorFullWeek !== null) cmp.push(`last week's full total: ${r.comparison.priorFullWeek.toFixed(1)}`)
@@ -401,7 +459,7 @@ ${r.autoClockOuts.shifts ? `<div class="card"><div class="l">Auto clock-outs</di
 <tbody>${body || `<tr><td colspan="${cols}" class="closed">No front-of-house hours recorded yet.</td></tr>`}</tbody>
 <tfoot><tr><th scope="row">All FOH</th><td class="n total">${r.totals.all.toFixed(1)}</td>${dayTotals}</tr><tr><th scope="row">Guests</th><td class="n total">${r.totals.covers || '–'}</td>${dayCovers}</tr></tfoot>
 </table></div>
-<p class="foot">Counts hours worked as ${esc(r.includedJobs.join(', ') || 'front-of-house jobs')}. Each person is grouped by the job they worked most. Managers (General Manager, Floor Manager, Wine Director) are not included. "Near 40" = ${r.thresholds.close}+ hours or overtime logged in Toast. Hours come from Toast clock-ins. ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. Generated ${esc(new Date(r.generatedAt).toLocaleString('en-US', { timeZone: RESTAURANT_TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' }))}.</p>
+<p class="foot">Counts hours worked as ${esc(r.includedJobs.join(', ') || 'front-of-house jobs')}. Each person is grouped by the job they worked most. Managers (General Manager, Floor Manager, Wine Director) are not included. "Near 40" = ${r.thresholds.close}+ hours or overtime logged in Toast. Hours come from Toast clock-ins. Closed days (Mondays, holidays), buyout, event and off-site nights, and nights with under ${r.thresholds.minOrders} orders are marked under the date; their hours are listed but they are left out of Guests, guests per FOH hour and the productivity table. ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. Generated ${esc(new Date(r.generatedAt).toLocaleString('en-US', { timeZone: RESTAURANT_TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' }))}.</p>
 ${productivity}
 ${stations}${notCounted}
 </main></body></html>`
