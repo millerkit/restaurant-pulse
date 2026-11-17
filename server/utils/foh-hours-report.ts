@@ -46,6 +46,11 @@ export const MIN_ORDERS_FOR_SERVICE_DAY = 20
 // 2026-11-17): a bartender or server with a stray order or two would show a meaningless sales per hour.
 // The shared bar login and the Chef's Counter table are exempt.
 export const MIN_ORDERS_FOR_PRODUCTIVITY_ROW = 10
+// Weekly trend charts (Kit, 2026-11-17): complete Mon-Sun weeks only, the most recent MAX_TREND_WEEKS, and a week
+// needs at least MIN_NIGHTS_FOR_TREND_POINT normal-service nights (a holiday-shortened or event-heavy week would
+// distort the line, so it is left as a gap).
+const MAX_TREND_WEEKS = 26
+const MIN_NIGHTS_FOR_TREND_POINT = 3
 const MIN_COVERS_FOR_OPEN_DAY = 15
 
 export type FohGroupKey = 'floor' | 'bar' | 'concierge'
@@ -104,6 +109,19 @@ export interface FohProductivity {
   counterRows: FohProductivityRow[] // Chef's Counter orders by server (tips are blank: the gratuity is in the price)
   total: FohProductivityRow | null
 }
+// One complete week for the trend charts. A metric is null when the week had too few normal-service nights or nothing to divide by.
+export interface FohTrendPoint {
+  weekStart: string
+  weekEnd: string
+  serviceNights: number
+  guests: number | null         // guests on normal-service nights
+  fohHours: number | null       // FOH hours on those nights (managers and the shared login out)
+  guestsPerHour: number | null
+  netSales: number | null       // team total on the productivity table (servers and bartenders, counter orders out)
+  serverHours: number | null
+  salesPerHour: number | null
+  turnMinutes: number | null
+}
 export interface FohHoursReport {
   restaurantName: string
   hasData: boolean
@@ -115,6 +133,7 @@ export interface FohHoursReport {
   groups: { key: FohGroupKey, label: string }[]
   people: FohPerson[]
   productivity: FohProductivity
+  trends?: FohTrendPoint[]        // only when asked for (/api/foh-hours/trends)
   autoClockOuts: { people: number, shifts: number }
   // covers/coversByDay: Toast guests on open nights (blank for closed days and nights not synced yet).
   totals: { all: number, overtime: number, byDay: Record<string, number>, covers: number, coversByDay: Record<string, number>, guestsPerHourByDay: Record<string, number> }
@@ -170,6 +189,18 @@ function classifyDays(db: ReturnType<typeof useDb>, from: string, to: string, da
     out.set(d, c)
   }
   return out
+}
+
+// Hours that count toward the productivity table for one week's rows: main = Server / Bartender / Lead Bartender (and
+// the shared bar login's own hours), counter = the Chef's Counter job; normal-service nights only.
+function collectProdHours(rows: JobHourRow[], dayInfo: Map<string, DayClass>, isFoh: (t: string) => boolean, stationGuids: Set<string>, managerGuids: Set<string>) {
+  const hours = { main: new Map<string, number>(), counter: new Map<string, number>() }
+  for (const r of rows) {
+    if (!isFoh(r.title) || !dayInfo.get(r.date)?.service || managerGuids.has(r.guid)) continue
+    const target = stationGuids.has(r.guid) || PRODUCTIVITY_JOB_PATTERN.test(r.title) ? hours.main : COUNTER_JOB_PATTERN.test(r.title) ? hours.counter : null
+    if (target) target.set(r.guid, (target.get(r.guid) ?? 0) + r.regular + r.overtime)
+  }
+  return hours
 }
 
 interface JobHourRow { date: string, guid: string, title: string, regular: number, overtime: number, autoShifts: number, autoHours: number }
@@ -230,7 +261,7 @@ function buildProductivity(
   return { available: true, rows, counterRows, total }
 }
 
-export function buildFohHoursReport(requestedWeek?: string | null): FohHoursReport {
+export function buildFohHoursReport(requestedWeek?: string | null, opts?: { trends?: boolean }): FohHoursReport {
   const db = useDb()
   const generatedAt = new Date().toISOString()
   const base = {
@@ -373,13 +404,40 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   // Productivity: Toast's Employee productivity figures for the week, one row per server who rang orders.
   // Hours here are normal-service nights only, so sales per hour compares like with like.
   const serviceDates = [...dayClass].filter(([, c]) => c.service).map(([d]) => d)
-  const prodHours = { main: new Map<string, number>(), counter: new Map<string, number>() }
-  for (const r of rows) {
-    if (!isFoh(r.title) || !dayClass.get(r.date)?.service) continue
-    const target = stationGuids.has(r.guid) || PRODUCTIVITY_JOB_PATTERN.test(r.title) ? prodHours.main : COUNTER_JOB_PATTERN.test(r.title) ? prodHours.counter : null
-    if (target) target.set(r.guid, (target.get(r.guid) ?? 0) + hoursOf(r))
-  }
+  const prodHours = collectProdHours(rows, dayClass, isFoh, stationGuids, gmGuids)
   const productivity = buildProductivity(db, weekStart, weekEnd, names, stationGuids, gmGuids, prodHours, serviceDates)
+
+  // Weekly series for the trend charts (only built when asked for): the same normal-night rules and the same
+  // productivity table total, week by week, over complete weeks.
+  let trends: FohTrendPoint[] | undefined
+  if (opts?.trends) {
+    trends = []
+    const lastMonday = mondayOf(addDays(range.maxDate, -6)) // the latest week that has fully ended
+    const firstFull = mondayOf(range.minDate) < range.minDate ? addDays(mondayOf(range.minDate), 7) : mondayOf(range.minDate)
+    const earliest = addDays(lastMonday, -7 * (MAX_TREND_WEEKS - 1))
+    for (let ws = firstFull > earliest ? firstFull : earliest; ws <= lastMonday; ws = addDays(ws, 7)) {
+      const we = addDays(ws, 6)
+      const dc = classifyDays(db, ws, we, dataThrough)
+      const svc = [...dc].filter(([, c]) => c.service).map(([d]) => d)
+      const point: FohTrendPoint = { weekStart: ws, weekEnd: we, serviceNights: svc.length, guests: null, fohHours: null, guestsPerHour: null, netSales: null, serverHours: null, salesPerHour: null, turnMinutes: null }
+      if (svc.length >= MIN_NIGHTS_FOR_TREND_POINT) {
+        const wrows = rowsFor(ws, we)
+        const svcSet = new Set(svc)
+        const covers = coversOn(ws, we, dc)
+        point.guests = [...covers.values()].reduce((s, v) => s + v, 0)
+        point.fohHours = round1(sum(wrows.filter(r => isFoh(r.title) && !leftOut(r.guid) && svcSet.has(r.date))))
+        point.guestsPerHour = perHour(ws, we)
+        const t = buildProductivity(db, ws, we, names, stationGuids, gmGuids, collectProdHours(wrows, dc, isFoh, stationGuids, gmGuids), svc).total
+        if (t) {
+          point.netSales = t.netSales
+          point.serverHours = t.hours
+          point.salesPerHour = t.perHour
+          point.turnMinutes = t.turnMinutes && t.turnMinutes > 0 ? t.turnMinutes : null
+        }
+      }
+      trends.push(point)
+    }
+  }
 
   const jobTitles = (db.prepare('SELECT title FROM toast_jobs WHERE deleted = 0 ORDER BY title').all() as { title: string }[]).map(j => j.title)
   const thisMonday = mondayOf(range.maxDate)
@@ -397,6 +455,7 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
     }),
     people,
     productivity,
+    trends,
     autoClockOuts: { people: people.filter(p => p.autoShifts > 0).length, shifts: people.reduce((s, p) => s + p.autoShifts, 0) },
     // Summed from raw rows, not the rounded per-person totals, so rounding can't drift the headline.
     totals: { all: round1(sum(fohRows)), overtime: round1(fohRows.reduce((s, r) => s + r.overtime, 0)), byDay, covers: coversTotal, coversByDay, guestsPerHourByDay },

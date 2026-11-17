@@ -1,18 +1,48 @@
 <script setup lang="ts">
-// Server productivity (Toast's Employee productivity figures; sortable, default sales per hour) on top, then FOH
+// Weekly trend charts (guests per FOH hour, team sales per hour, average turn; Chart or Table) at the top, then
+// server productivity (Toast's Employee productivity figures; sortable, default sales per hour) on top, then FOH
 // hours for a Mon–Sun week from Toast time entries: hours per person per day, grouped Floor / Bar / Concierge
 // (managers are left out).
 // For the GM and the Floor Manager; both see the sales dollars (Kit's call, 2026-11-17).
 // "Download report" gives a standalone HTML file to send. Data: server/utils/foh-hours-report.ts.
 // Same layout as the BOH report on Kitchen Hours (app/components/BohHoursReport.vue).
 import site from '~/config/site.json'
-import type { FohHoursReport, FohProductivityRow } from '../../server/utils/foh-hours-report'
+import type { FohHoursReport, FohProductivityRow, FohTrendPoint } from '../../server/utils/foh-hours-report'
 
 useHead({ title: `${site.restaurantName} — FOH Hours` })
 
 const week = ref<string | null>(null)
 const query = computed(() => (week.value ? { week: week.value } : {}))
 const { data, pending, error, refresh } = await useFetch<FohHoursReport>('/api/foh-hours', { query, lazy: true })
+
+// Weekly trend charts: complete weeks, normal-service nights only (server/utils/foh-hours-report.ts). A per-viewer
+// Chart/Table choice is remembered in localStorage when it is available.
+const { data: trends } = await useFetch<FohTrendPoint[]>('/api/foh-hours/trends', { lazy: true })
+const trendView = ref<'chart' | 'table'>('chart')
+onMounted(() => {
+  try {
+    const v = localStorage.getItem('foh-trend-view')
+    if (v === 'chart' || v === 'table') trendView.value = v
+  } catch {}
+})
+watch(trendView, (v) => {
+  try { localStorage.setItem('foh-trend-view', v) } catch {}
+})
+const trendPoints = computed(() => trends.value ?? [])
+const withValue = (k: 'guestsPerHour' | 'salesPerHour' | 'turnMinutes') => trendPoints.value.filter(p => p[k] !== null).length
+const fmtInt = (n: number | null) => (n === null ? '–' : Math.round(n).toLocaleString('en-US'))
+const chartGph = computed(() => trendPoints.value.map(p => ({
+  weekStart: p.weekStart, weekEnd: p.weekEnd, value: p.guestsPerHour,
+  rows: [{ label: 'Guests', value: fmtInt(p.guests) }, { label: 'FOH hours', value: p.fohHours === null ? '–' : p.fohHours.toFixed(1) }, { label: 'Normal nights', value: String(p.serviceNights) }]
+})))
+const chartSph = computed(() => trendPoints.value.map(p => ({
+  weekStart: p.weekStart, weekEnd: p.weekEnd, value: p.salesPerHour,
+  rows: [{ label: 'Net sales', value: p.netSales === null ? '–' : fmtMoney(p.netSales) }, { label: 'Server hours', value: p.serverHours === null ? '–' : p.serverHours.toFixed(1) }, { label: 'Normal nights', value: String(p.serviceNights) }]
+})))
+const chartTurn = computed(() => trendPoints.value.map(p => ({
+  weekStart: p.weekStart, weekEnd: p.weekEnd, value: p.turnMinutes,
+  rows: [{ label: 'Normal nights', value: String(p.serviceNights) }]
+})))
 
 const fmtH = (n: number) => (n === 0 ? '–' : n.toFixed(1))
 const fmtMoney = (n: number | null) => (n === null ? '–' : `$${Math.round(n).toLocaleString('en-US')}`)
@@ -89,7 +119,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
     />
 
     <div v-if="pending && !data" class="state-note">Loading hours…</div>
-    <div v-else-if="error" class="note-card">
+    <div v-if="error" class="note-card">
       <span class="chip critical">Couldn't load FOH hours</span>
       <span class="quiet">{{ error.message }}</span>
     </div>
@@ -98,7 +128,69 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
       <span class="quiet">Run the Toast hours backfill (see CLAUDE.md, BOH hours report).</span>
     </div>
 
-    <section v-else-if="data" class="foh">
+    <section v-if="trendPoints.length" class="trends">
+      <div class="section-head">
+        <div class="section-label">Weekly trends</div>
+        <div class="section-note">Complete weeks, normal-service nights only (closed days, buyouts and low-order nights are left out). Dashed line = trend.</div>
+      </div>
+      <div class="controls">
+        <span class="quiet">Last {{ trendPoints.length }} complete weeks</span>
+        <div class="view-switch" role="group" aria-label="Chart or table">
+          <button type="button" :class="{ active: trendView === 'chart' }" :aria-pressed="trendView === 'chart'" @click="trendView = 'chart'">Chart</button>
+          <button type="button" :class="{ active: trendView === 'table' }" :aria-pressed="trendView === 'table'" @click="trendView = 'table'">Table</button>
+        </div>
+      </div>
+      <template v-if="trendView === 'chart'">
+        <div class="chart-title">Guests per FOH hour <span class="trend-note">(dashed line = trend)</span></div>
+        <div class="table-card chart-card">
+          <WeeklyTrendChart v-if="withValue('guestsPerHour') > 0" :points="chartGph" format="ratio" label="Guests per FOH hour" />
+          <div v-else class="quiet pad">No weeks with enough normal nights yet.</div>
+        </div>
+        <div class="chart-title">Team sales per hour (servers and bartenders) <span class="trend-note">(dashed line = trend)</span></div>
+        <div class="table-card chart-card">
+          <WeeklyTrendChart v-if="withValue('salesPerHour') > 0" :points="chartSph" format="dollars" label="Sales per hour" />
+          <div v-else class="quiet pad">Sales per server need the history backfill (see CLAUDE.md, FOH Hours).</div>
+        </div>
+        <div class="chart-title">Average turn time <span class="trend-note">(dashed line = trend)</span></div>
+        <div class="table-card chart-card">
+          <WeeklyTrendChart v-if="withValue('turnMinutes') > 0" :points="chartTurn" format="minutes" label="Average turn time" />
+          <div v-else class="quiet pad">Sales per server need the history backfill (see CLAUDE.md, FOH Hours).</div>
+        </div>
+      </template>
+      <div v-else class="table-card">
+        <table class="hours-table trend-table">
+          <caption>Weekly FOH trends</caption>
+          <thead>
+            <tr>
+              <th scope="col">Week (Mon–Sun)</th>
+              <th scope="col">Normal nights</th>
+              <th scope="col">Guests</th>
+              <th scope="col">FOH hours</th>
+              <th scope="col">Guests / FOH hr</th>
+              <th scope="col">Net sales</th>
+              <th scope="col">Server hours</th>
+              <th scope="col">Sales / hr</th>
+              <th scope="col">Avg turn</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in [...trendPoints].reverse()" :key="p.weekStart">
+              <th scope="row">{{ fmtDate(p.weekStart) }} – {{ fmtDate(p.weekEnd) }}</th>
+              <td>{{ p.serviceNights }}</td>
+              <td>{{ fmtInt(p.guests) }}</td>
+              <td>{{ p.fohHours === null ? '–' : p.fohHours.toFixed(1) }}</td>
+              <td class="total">{{ p.guestsPerHour === null ? '–' : p.guestsPerHour.toFixed(1) }}</td>
+              <td>{{ p.netSales === null ? '–' : fmtMoney(p.netSales) }}</td>
+              <td>{{ p.serverHours === null ? '–' : p.serverHours.toFixed(1) }}</td>
+              <td class="total">{{ fmtMoney(p.salesPerHour) }}</td>
+              <td>{{ fmtTurn(p.turnMinutes) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="data && data.hasData" class="foh">
       <div class="bar">
         <div class="week-nav" role="group" aria-label="Choose week">
           <button type="button" :disabled="!data.prevWeek" aria-label="Previous week" @click="week = data.prevWeek">‹</button>
@@ -332,8 +424,18 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 .daytag { display: block; margin-top: 2px; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
 .daytag.special { color: var(--accent); }
 .hours-head { margin-top: 28px; }
+.trends { margin-bottom: 28px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; }
+.view-switch { display: inline-flex; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }
+.view-switch button { font: inherit; font-size: 12px; font-weight: 700; padding: 5px 14px; border: none; background: var(--surface-alt); color: var(--ink-2); cursor: pointer; }
+.view-switch button + button { border-left: 1px solid var(--hair); }
+.view-switch button.active { background: var(--accent); color: white; }
+.trend-note { font-weight: 400; color: var(--ink-3); }
+.chart-card { padding: 16px 12px 8px; }
+.chart-card .pad { padding: 12px 8px; }
+.hours-table.trend-table { min-width: 760px; }
 .counter-block { margin-top: 16px; }
-.chart-title { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 0 0 6px; }
+.chart-title { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 14px 0 6px; }
 .sort-btn { font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .sort-btn:hover, .sort-btn.active { color: var(--ink); }
 .sort-btn .arrow { font-size: 9px; min-width: 9px; }

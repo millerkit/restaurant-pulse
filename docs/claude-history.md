@@ -6430,3 +6430,10 @@ rows as non-counter; the backfill replaces each day with the split rows). Known 
 individual bartender with a stray order (e.g. Bre Zeek) shows a tiny sales/hr; the bar's sales are the Service Bar row.
 
 **Minimum orders (2026-11-17)**: Kit: a person needs a minimum number of orders in the week to be in the main productivity table (Bre Zeek's 1 order gave a meaningless $21/hr). `MIN_ORDERS_FOR_PRODUCTIVITY_ROW` = 10; the shared bar login and the Chef's Counter table are exempt; the team total covers the rows shown.
+
+**FOH Hours weekly trend charts (2026-11-17)**: Kit chose three charts (guests per FOH hour, team sales per hour, average turn time) with a
+dashed trendline like Kitchen Hours, rejecting voids/tip % (too noisy weekly) and per-person lines (noisy, counter-skewed). Built as
+`buildFohHoursReport(null, { trends: true })` (same normal-night rules and the same productivity total, per complete week) behind
+`/api/foh-hours/trends`, a generic `app/components/WeeklyTrendChart.vue` (same drawing and hover as KitchenLaborChart, nice-step y-axis), and a
+Chart/Table section above the week picker. Local data has only five complete weeks (hours history starts Sep 28), so the trendlines are
+tentative until production has more; sales-based points need the server-sales backfill. Possible next step: per-weekday versions (e.g. Fridays only).

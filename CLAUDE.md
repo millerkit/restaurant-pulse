@@ -288,6 +288,9 @@ Kitchen Hours). `server/utils/foh-hours-report.ts` (+ `server/api/foh-hours.get.
 - **Hours** (Toast time entries by job, `daily_toast_job_hours`): per person per day, grouped **Floor / Bar / Concierge** by
   the job each person worked most that week; near-40 and auto clock-out flags; Guests row. FOH jobs match `FOH_JOB_PATTERN`;
   a job that is neither FOH nor BOH is listed as not counted.
+- **Weekly trends** (top of the page, Chart/Table toggle like Kitchen Hours; `GET /api/foh-hours/trends`, `WeeklyTrendChart.vue`): guests per
+  FOH hour, team sales per hour (the productivity table's total) and average turn time, one point per complete Mon-Sun week (latest 26), normal
+  nights only; a week with under 3 normal nights is a gap (`MIN_NIGHTS_FOR_TREND_POINT`); dashed least-squares trend like Kitchen Hours.
 - **Server productivity** (shown first, sortable, default sales/hr high to low; Toast's Employee productivity report, `daily_toast_server_sales`, migrations 0025-0026): guests, orders,
   net sales, per guest, avg order, sales/hr, avg turn, non-cash tips %, voids. Definitions in `server/utils/toast-server-sales.mjs`
   (matched Toast's report for 2026-11-13). Only people with Server / Bartender / Lead Bartender hours that week and at least 10 orders in it
