@@ -288,9 +288,12 @@ Kitchen Hours). `server/utils/foh-hours-report.ts` (+ `server/api/foh-hours.get.
 - **Hours** (Toast time entries by job, `daily_toast_job_hours`): per person per day, grouped **Floor / Bar / Concierge** by
   the job each person worked most that week; near-40 and auto clock-out flags; Guests row. FOH jobs match `FOH_JOB_PATTERN`;
   a job that is neither FOH nor BOH is listed as not counted.
-- **Server productivity** (Toast's Employee productivity report, `daily_toast_server_sales`, migration 0025): guests, orders,
+- **Server productivity** (shown first, sortable, default sales/hr high to low; Toast's Employee productivity report, `daily_toast_server_sales`, migrations 0025-0026): guests, orders,
   net sales, per guest, avg order, sales/hr, avg turn, non-cash tips %, voids. Definitions in `server/utils/toast-server-sales.mjs`
-  (matched Toast's report for 2026-11-13). **The GM and the Floor Manager both see these dollars** (Kit's call), so
+  (matched Toast's report for 2026-11-13). Only people with Server / Bartender / Lead Bartender hours that week and at least 10 orders in it
+(`MIN_ORDERS_FOR_PRODUCTIVITY_ROW`; plus the shared bar login's own row); hours = clocked hours on those jobs. **Chef's Counter orders are split out** (`is_counter` rows: table `C<n>` or a
+Chef's Counter selection) into their own table, with tip % blank (prix fixe includes the gratuity) and hours from the new Toast job
+"Chef's Counter" (matched by `COUNTER_JOB_PATTERN`; Food Runner is FOH hours-only, never in productivity). **The GM and the Floor Manager both see these dollars** (Kit's call), so
   `/api/foh-hours` is the one dollar-carrying route the `floor` role may call. Filled nightly by the Toast sync (same orders, no
   extra call, non-fatal); history by hand: `npm run db:backfill-toast-server-sales -- --since=2026-06-16` (production:
   `fly ssh console -C "node scripts/backfill-toast-server-sales.mjs --since=2026-06-16"`, needs approval; idempotent).

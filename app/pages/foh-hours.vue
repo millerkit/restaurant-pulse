@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// FOH hours for a Mon–Sun week, from Toast time entries: hours per person per day, grouped Floor /
-// Bar / Concierge (managers are left out), plus Toast's Employee productivity figures per server.
+// Server productivity (Toast's Employee productivity figures; sortable, default sales per hour) on top, then FOH
+// hours for a Mon–Sun week from Toast time entries: hours per person per day, grouped Floor / Bar / Concierge
+// (managers are left out).
 // For the GM and the Floor Manager; both see the sales dollars (Kit's call, 2026-11-17).
 // "Download report" gives a standalone HTML file to send. Data: server/utils/foh-hours-report.ts.
 // Same layout as the BOH report on Kitchen Hours (app/components/BohHoursReport.vue).
 import site from '~/config/site.json'
-import type { FohHoursReport } from '../../server/utils/foh-hours-report'
+import type { FohHoursReport, FohProductivityRow } from '../../server/utils/foh-hours-report'
 
 useHead({ title: `${site.restaurantName} — FOH Hours` })
 
@@ -18,6 +19,50 @@ const fmtMoney = (n: number | null) => (n === null ? '–' : `$${Math.round(n).t
 const fmtTurn = (m: number | null) => (m === null || m <= 0 ? '–' : m >= 60 ? `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m` : `${Math.round(m)}m`)
 const fmtPct = (n: number | null) => (n === null ? '–' : `${n.toFixed(1)}%`)
 const fmtDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+// Sortable productivity columns: click a header; first click sorts high to low (A to Z for names).
+type SortKey = 'name' | 'hours' | 'guests' | 'orders' | 'netSales' | 'perGuest' | 'avgOrder' | 'perHour' | 'turnMinutes' | 'tipPct' | 'voids'
+const prodCols: { key: SortKey, label: string }[] = [
+  { key: 'name', label: 'Employee' }, { key: 'hours', label: 'Hours' }, { key: 'guests', label: 'Guests' }, { key: 'orders', label: 'Orders' },
+  { key: 'netSales', label: 'Net sales' }, { key: 'perGuest', label: 'Per guest' }, { key: 'avgOrder', label: 'Avg order' },
+  { key: 'perHour', label: 'Sales / hr' }, { key: 'turnMinutes', label: 'Avg turn' }, { key: 'tipPct', label: 'Non-cash tips' }, { key: 'voids', label: 'Voids' }
+]
+const sortKey = ref<SortKey>('perHour')
+const sortDir = ref<'asc' | 'desc'>('desc')
+function setSort(k: SortKey) {
+  if (sortKey.value === k) sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  else { sortKey.value = k; sortDir.value = k === 'name' ? 'asc' : 'desc' }
+}
+// The shared bar login is pinned last and empty values sort last, whichever way it is sorted.
+function sortRows(rows: FohProductivityRow[]) {
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  const k = sortKey.value
+  return [...rows].sort((a, b) => {
+    if (a.isStation !== b.isStation) return Number(a.isStation) - Number(b.isStation)
+    const av = a[k], bv = b[k]
+    if (av === null || av === undefined) return bv === null || bv === undefined ? 0 : 1
+    if (bv === null || bv === undefined) return -1
+    return (typeof av === 'string' ? av.localeCompare(String(bv)) : Number(av) - Number(bv)) * dir
+  })
+}
+const mainRows = computed(() => sortRows(data.value?.productivity.rows ?? []))
+const counterRows = computed(() => sortRows(data.value?.productivity.counterRows ?? []))
+function cell(r: FohProductivityRow, k: SortKey): string {
+  switch (k) {
+    case 'hours': return r.hours !== null ? r.hours.toFixed(1) : '–'
+    case 'guests': return String(r.guests)
+    case 'orders': return String(r.orders)
+    case 'netSales': return fmtMoney(r.netSales)
+    case 'perGuest': return fmtMoney(r.perGuest)
+    case 'avgOrder': return fmtMoney(r.avgOrder)
+    case 'perHour': return fmtMoney(r.perHour)
+    case 'turnMinutes': return fmtTurn(r.turnMinutes)
+    case 'tipPct': return fmtPct(r.tipPct)
+    case 'voids': return r.voids ? String(r.voids) : '–'
+    default: return r.name
+  }
+}
+const ariaSort = (k: SortKey) => (sortKey.value === k ? (sortDir.value === 'asc' ? 'ascending' : 'descending') : 'none')
 
 const groupsWithPeople = computed(() => (data.value?.groups ?? [])
   .map(g => ({ ...g, people: data.value!.people.filter(p => p.group === g.key) }))
@@ -54,13 +99,6 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
     </div>
 
     <section v-else-if="data" class="foh">
-      <div class="section-head">
-        <div class="section-label">FOH hours worked</div>
-        <div class="section-note">
-          Hours clocked in Toast, Monday–Sunday. Runs through the last synced day, so it has no payroll lag.
-        </div>
-      </div>
-
       <div class="bar">
         <div class="week-nav" role="group" aria-label="Choose week">
           <button type="button" :disabled="!data.prevWeek" aria-label="Previous week" @click="week = data.prevWeek">‹</button>
@@ -71,6 +109,85 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
           {{ data.asOf ? (data.weekComplete ? 'Final' : `Through ${fmtDate(data.asOf)}`) : 'No hours yet this week' }}
         </span>
         <a class="download" :href="downloadHref" download>Download report (HTML)</a>
+      </div>
+
+      <div class="section-head">
+        <div class="section-label">Server productivity</div>
+        <div class="section-note">Toast's Employee productivity figures for the week. Click a column to sort.</div>
+      </div>
+      <div v-if="!data.productivity.available" class="note-card">
+        <span class="chip warning">Not synced for this week</span>
+        <span class="quiet">Sales per server fill in nightly; earlier weeks need the history backfill (see CLAUDE.md, FOH Hours).</span>
+      </div>
+      <template v-else>
+        <div class="table-card">
+          <table class="hours-table prod-table">
+            <caption>Server productivity for the week</caption>
+            <thead>
+              <tr>
+                <th v-for="c in prodCols" :key="c.key" scope="col" :aria-sort="ariaSort(c.key)">
+                  <button type="button" class="sort-btn" :class="{ active: sortKey === c.key }" @click="setSort(c.key)">
+                    {{ c.label }}<span class="arrow" aria-hidden="true">{{ sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : '' }}</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!mainRows.length"><td :colspan="prodCols.length" class="muted">No server or bartender sales on normal-service nights this week.</td></tr>
+              <tr v-for="r in mainRows" :key="r.guid">
+                <th scope="row">
+                  {{ r.name }}
+                  <span v-if="r.isStation" class="job">Shared login</span>
+                </th>
+                <td v-for="c in prodCols.slice(1)" :key="c.key" :class="{ total: c.key === 'perHour' }">{{ cell(r, c.key) }}</td>
+              </tr>
+            </tbody>
+            <tfoot v-if="data.productivity.total">
+              <tr>
+                <th scope="row">{{ data.productivity.total.name }}</th>
+                <td v-for="c in prodCols.slice(1)" :key="c.key" :class="{ total: c.key === 'perHour' }">{{ cell(data.productivity.total, c.key) }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div v-if="counterRows.length" class="counter-block">
+          <div class="chart-title">Chef's Counter</div>
+          <div class="table-card">
+            <table class="hours-table prod-table">
+              <caption>Chef's Counter sales by server</caption>
+              <thead>
+                <tr>
+                  <th v-for="c in prodCols" :key="c.key" scope="col" :aria-sort="ariaSort(c.key)">
+                    <button type="button" class="sort-btn" :class="{ active: sortKey === c.key }" @click="setSort(c.key)">
+                      {{ c.label }}<span class="arrow" aria-hidden="true">{{ sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : '' }}</span>
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in counterRows" :key="r.guid">
+                  <th scope="row">{{ r.name }}</th>
+                  <td v-for="c in prodCols.slice(1)" :key="c.key" :class="{ total: c.key === 'perHour' }">{{ cell(r, c.key) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="foot">
+          Servers and bartenders only (Server, Bartender, Lead Bartender) with at least {{ data.thresholds.minServerOrders }} orders in the week; the team total covers the rows shown. Net sales are after discounts, before tax and tip, for the orders the person rang,
+          <strong>leaving out Chef's Counter orders</strong>, which are listed apart: the prix fixe includes the gratuity (so tips are left blank there) and one counter night would swamp everyone's
+          sales. Hours are clocked on those jobs (Chef's Counter hours come from the Chef's Counter job, so they show once clock-ins use it).
+          Per guest = net sales ÷ guests; Sales / hr = net sales ÷ those hours. Avg turn is order opened to paid, leaving out any order open over 8 hours.
+          Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. Bartenders mostly ring under the shared bar login, so the bar's sales are its own row, not theirs.
+        </p>
+      </template>
+
+      <div class="section-head hours-head">
+        <div class="section-label">FOH hours worked</div>
+        <div class="section-note">
+          Hours clocked in Toast, Monday–Sunday. Runs through the last synced day, so it has no payroll lag.
+        </div>
       </div>
 
       <div class="cards">
@@ -174,75 +291,6 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
           Not counted as FOH or BOH: {{ data.notCounted.map(x => `${x.title} (${x.hours.toFixed(1)} hrs)`).join(', ') }}.
         </template>
       </p>
-
-      <div class="section-head prod-head">
-        <div class="section-label">Server productivity</div>
-        <div class="section-note">Toast's Employee productivity figures for the same week, from the orders each person rang.</div>
-      </div>
-      <div v-if="!data.productivity.available" class="note-card">
-        <span class="chip warning">Not synced for this week</span>
-        <span class="quiet">Sales per server fill in nightly; earlier weeks need the history backfill (see CLAUDE.md, FOH Hours).</span>
-      </div>
-      <template v-else>
-        <div class="table-card">
-          <table class="hours-table prod-table">
-            <caption>Server productivity for the week</caption>
-            <thead>
-              <tr>
-                <th scope="col">Employee</th>
-                <th scope="col">Hours</th>
-                <th scope="col">Guests</th>
-                <th scope="col">Orders</th>
-                <th scope="col">Net sales</th>
-                <th scope="col">Per guest</th>
-                <th scope="col">Avg order</th>
-                <th scope="col">Sales / hr</th>
-                <th scope="col">Avg turn</th>
-                <th scope="col">Non-cash tips</th>
-                <th scope="col">Voids</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="r in data.productivity.rows" :key="r.guid">
-                <th scope="row">
-                  {{ r.name }}
-                  <span v-if="r.isStation" class="job">Shared login</span>
-                </th>
-                <td>{{ r.hours !== null ? r.hours.toFixed(1) : '–' }}</td>
-                <td>{{ r.guests }}</td>
-                <td>{{ r.orders }}</td>
-                <td class="total">{{ fmtMoney(r.netSales) }}</td>
-                <td>{{ fmtMoney(r.perGuest) }}</td>
-                <td>{{ fmtMoney(r.avgOrder) }}</td>
-                <td>{{ fmtMoney(r.perHour) }}</td>
-                <td>{{ fmtTurn(r.turnMinutes) }}</td>
-                <td>{{ fmtPct(r.tipPct) }}</td>
-                <td>{{ r.voids || '–' }}</td>
-              </tr>
-            </tbody>
-            <tfoot v-if="data.productivity.total">
-              <tr>
-                <th scope="row">{{ data.productivity.total.name }}</th>
-                <td>{{ data.productivity.total.hours !== null ? data.productivity.total.hours.toFixed(1) : '–' }}</td>
-                <td>{{ data.productivity.total.guests }}</td>
-                <td>{{ data.productivity.total.orders }}</td>
-                <td class="total">{{ fmtMoney(data.productivity.total.netSales) }}</td>
-                <td>{{ fmtMoney(data.productivity.total.perGuest) }}</td>
-                <td>{{ fmtMoney(data.productivity.total.avgOrder) }}</td>
-                <td>{{ fmtMoney(data.productivity.total.perHour) }}</td>
-                <td>{{ fmtTurn(data.productivity.total.turnMinutes) }}</td>
-                <td>{{ fmtPct(data.productivity.total.tipPct) }}</td>
-                <td>{{ data.productivity.total.voids || '–' }}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <p class="foot">
-          Net sales are after discounts, before tax and tip, for every order the person rang (the same figures as Toast's Employee productivity report).
-          Per guest = net sales ÷ guests; Sales / hr = net sales ÷ FOH hours clocked on those normal nights (Hours here counts them only). Avg turn is order opened to paid, leaving out any order open over 8 hours.
-          Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. A shared login's sales are the bar's, not one person's.
-        </p>
-      </template>
     </section>
   </div>
 </template>
@@ -283,7 +331,12 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 .hours-table tfoot .guests-row th, .hours-table tfoot .guests-row td { font-weight: 500; color: var(--ink-2); border-top: none; }
 .daytag { display: block; margin-top: 2px; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
 .daytag.special { color: var(--accent); }
-.prod-head { margin-top: 28px; }
+.hours-head { margin-top: 28px; }
+.counter-block { margin-top: 16px; }
+.chart-title { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 0 0 6px; }
+.sort-btn { font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.sort-btn:hover, .sort-btn.active { color: var(--ink); }
+.sort-btn .arrow { font-size: 9px; min-width: 9px; }
 .hours-table.prod-table { min-width: 860px; }
 .foot { margin: 10px 2px 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
 </style>

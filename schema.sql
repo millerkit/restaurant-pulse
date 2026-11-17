@@ -263,6 +263,7 @@ CREATE TABLE daily_toast_job_hours (
 CREATE TABLE daily_toast_server_sales (
   date           TEXT NOT NULL,
   employee_guid  TEXT NOT NULL,
+  is_counter     INTEGER NOT NULL DEFAULT 0, -- 1 = Chef's Counter orders, kept apart (migration 0026)
   orders         INTEGER NOT NULL,
   guests         INTEGER NOT NULL,
   net_sales      REAL NOT NULL,
@@ -272,7 +273,7 @@ CREATE TABLE daily_toast_server_sales (
   turn_seconds   REAL NOT NULL,       -- summed order open -> paid time
   turn_orders    INTEGER NOT NULL,    -- orders in that sum (the divisor for average turn time)
   synced_at      TEXT NOT NULL,
-  PRIMARY KEY (date, employee_guid)
+  PRIMARY KEY (date, employee_guid, is_counter)
 );
 
 -- Job titles for the guids above, from /labor/v1/jobs (one call per sync run).

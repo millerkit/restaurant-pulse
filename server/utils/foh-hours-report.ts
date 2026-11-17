@@ -23,8 +23,12 @@ import {
 import { loadStaffOverrides, staffKeys } from './staff-overrides'
 import { loadPlannedNights } from './special-nights'
 
-export const FOH_JOB_PATTERN = /^(server|(lead |service )?bartender|bar ?prep|bar ?back|concierge|host|hostess|service captain|captain|cater-waiter|food runner|runner|busser)/i
+export const FOH_JOB_PATTERN = /^(server|(lead |service )?bartender|bar ?prep|bar ?back|concierge|host|hostess|service captain|captain|cater-waiter|chef.?s counter|food runner|runner|busser)/i
 const BAR_JOB_PATTERN = /^((lead |service )?bartender|bar ?prep|bar ?back)/i
+// Productivity (sales per server) counts only people working these jobs (Kit, 2026-11-17); the Chef's Counter
+// job is judged on its own, because the counter's prix fixe and included gratuity would distort everyone else.
+const PRODUCTIVITY_JOB_PATTERN = /^(server|bartender|lead bartender)$/i
+const COUNTER_JOB_PATTERN = /^chef.?s counter$/i
 const CONCIERGE_JOB_PATTERN = /^(concierge|host|hostess)/i
 export const MANAGER_JOB_PATTERN = /^(general manager|floor manager|assistant manager|manager|wine director|director|sommelier|maitre)/i
 // Toast starts overtime after 40 hours in the week; "close" is a heads-up band. Rare in the front of house.
@@ -38,6 +42,10 @@ const TRAILING_WEEKS = 4
 // the productivity table; their hours are still listed. Ordinary Tue-Sun nights run about 27-75 orders.
 // If order counts aren't synced for a day yet, the app-wide 15-covers rule stands in.
 export const MIN_ORDERS_FOR_SERVICE_DAY = 20
+// A person needs at least this many orders in the week to get a row in the main productivity table (Kit,
+// 2026-11-17): a bartender or server with a stray order or two would show a meaningless sales per hour.
+// The shared bar login and the Chef's Counter table are exempt.
+export const MIN_ORDERS_FOR_PRODUCTIVITY_ROW = 10
 const MIN_COVERS_FOR_OPEN_DAY = 15
 
 export type FohGroupKey = 'floor' | 'bar' | 'concierge'
@@ -92,7 +100,8 @@ export interface FohProductivityRow {
 }
 export interface FohProductivity {
   available: boolean            // false until the history backfill / nightly sync has filled this week
-  rows: FohProductivityRow[]
+  rows: FohProductivityRow[]    // main-floor and bar service, by sales per hour
+  counterRows: FohProductivityRow[] // Chef's Counter orders by server (tips are blank: the gratuity is in the price)
   total: FohProductivityRow | null
 }
 export interface FohHoursReport {
@@ -119,7 +128,7 @@ export interface FohHoursReport {
   excludedLogins: { name: string, hours: number }[]
   prevWeek: string | null
   nextWeek: string | null
-  thresholds: { overtime: number, close: number, minOrders: number }
+  thresholds: { overtime: number, close: number, minOrders: number, minServerOrders: number }
   generatedAt: string
 }
 
@@ -165,52 +174,60 @@ function classifyDays(db: ReturnType<typeof useDb>, from: string, to: string, da
 
 interface JobHourRow { date: string, guid: string, title: string, regular: number, overtime: number, autoShifts: number, autoHours: number }
 
-interface ServerSalesRow { guid: string, orders: number, guests: number, net: number, tax: number, tips: number, voids: number, turnSeconds: number, turnOrders: number }
+interface ServerSalesRow { guid: string, isCounter: number, orders: number, guests: number, net: number, tax: number, tips: number, voids: number, turnSeconds: number, turnOrders: number }
 
+// hours.main: normal-service hours on the productivity jobs (Server, Bartender, Lead Bartender; the whole shared
+// bar login's hours for a station); hours.counter: hours on the Chef's Counter job.
 function buildProductivity(
   db: ReturnType<typeof useDb>, from: string, to: string, names: Map<string, string>,
-  stationGuids: Set<string>, managerGuids: Set<string>, hoursByGuid: Map<string, number>, serviceDates: string[]
+  stationGuids: Set<string>, managerGuids: Set<string>, hours: { main: Map<string, number>, counter: Map<string, number> }, serviceDates: string[]
 ): FohProductivity {
   let sales: ServerSalesRow[]
   try {
     const any = db.prepare('SELECT COUNT(*) AS n FROM daily_toast_server_sales WHERE date BETWEEN ? AND ?').get(from, to) as { n: number }
-    if (!any.n) return { available: false, rows: [], total: null } // not synced for this week yet
+    if (!any.n) return { available: false, rows: [], counterRows: [], total: null } // not synced for this week yet
     // Normal-service nights only (not closed, buyout, event, off-site or low-order days).
     const marks = serviceDates.map(() => '?').join(',')
     sales = serviceDates.length ? db.prepare(`
-      SELECT employee_guid AS guid, SUM(orders) AS orders, SUM(guests) AS guests, SUM(net_sales) AS net, SUM(tax) AS tax,
+      SELECT employee_guid AS guid, is_counter AS isCounter, SUM(orders) AS orders, SUM(guests) AS guests, SUM(net_sales) AS net, SUM(tax) AS tax,
              SUM(non_cash_tips) AS tips, SUM(void_count) AS voids, SUM(turn_seconds) AS turnSeconds, SUM(turn_orders) AS turnOrders
-      FROM daily_toast_server_sales WHERE date IN (${marks}) GROUP BY employee_guid
+      FROM daily_toast_server_sales WHERE date IN (${marks}) GROUP BY employee_guid, is_counter
     `).all(...serviceDates) as ServerSalesRow[] : []
   } catch {
-    return { available: false, rows: [], total: null } // migration 0025 not applied yet
+    return { available: false, rows: [], counterRows: [], total: null } // migration not applied yet
   }
-  if (!sales.length) return { available: true, rows: [], total: null }
   const r1 = (n: number) => Math.round(n * 10) / 10
   const r2 = (n: number) => Math.round(n * 100) / 100
-  const make = (guid: string, name: string, isStation: boolean, hours: number | null, s: Omit<ServerSalesRow, 'guid'>): FohProductivityRow => ({
+  const make = (guid: string, name: string, isStation: boolean, hrs: number | null, s: Omit<ServerSalesRow, 'guid' | 'isCounter'>): FohProductivityRow => ({
     guid, name, isStation,
-    hours: hours === null ? null : r1(hours),
+    hours: hrs === null ? null : r1(hrs),
     orders: s.orders, guests: s.guests, netSales: r2(s.net),
     perGuest: s.guests > 0 ? r2(s.net / s.guests) : null,
     avgOrder: s.orders > 0 ? r2(s.net / s.orders) : null,
-    perHour: hours && hours > 0 ? r2(s.net / hours) : null,
+    perHour: hrs && hrs > 0 ? r2(s.net / hrs) : null,
     turnMinutes: s.turnOrders > 0 ? r1(s.turnSeconds / s.turnOrders / 60) : null,
     tipPct: s.net + s.tax > 0 ? r1(100 * s.tips / (s.net + s.tax)) : null,
     voids: s.voids
   })
-  // Only people (and the shared bar login) who clocked FOH hours that week and rang something: the
-  // online-ordering pseudo-user and managers have no FOH hours, so they drop out.
-  const kept = sales.filter(s => s.orders > 0 && names.has(s.guid) && hoursByGuid.has(s.guid) && !managerGuids.has(s.guid))
-  const rows = kept
-    .map(s => make(s.guid, names.get(s.guid)!, stationGuids.has(s.guid), hoursByGuid.get(s.guid) ?? null, s))
-    .sort((a, b) => Number(a.isStation) - Number(b.isStation) || b.netSales - a.netSales || a.name.localeCompare(b.name))
-  const sum = (k: keyof Omit<ServerSalesRow, 'guid'>) => kept.reduce((t, s) => t + s[k], 0)
-  const totalHours = kept.reduce((t, s) => t + (hoursByGuid.get(s.guid) ?? 0), 0)
+  // Known staff who rang something, managers out (the online-ordering pseudo-user has no name or hours).
+  const people = sales.filter(s => s.orders > 0 && names.has(s.guid) && !managerGuids.has(s.guid))
+  // Main table: only people who worked a productivity job that week and rang at least MIN_ORDERS_FOR_PRODUCTIVITY_ROW orders
+  // (and the shared bar login, which carries the bar's sales). The team total covers the rows shown.
+  const kept = people.filter(s => !s.isCounter && hours.main.has(s.guid) && (stationGuids.has(s.guid) || s.orders >= MIN_ORDERS_FOR_PRODUCTIVITY_ROW))
+  const byPerHour = (a: FohProductivityRow, b: FohProductivityRow) =>
+    Number(a.isStation) - Number(b.isStation) || (b.perHour ?? -1) - (a.perHour ?? -1) || b.netSales - a.netSales || a.name.localeCompare(b.name)
+  const rows = kept.map(s => make(s.guid, names.get(s.guid)!, stationGuids.has(s.guid), hours.main.get(s.guid) ?? null, s)).sort(byPerHour)
+  // Chef's Counter table: counter orders by server; hours from the Chef's Counter job once clock-ins use it. The
+  // included gratuity isn't a card tip, so tip % is left blank.
+  const counterRows = people.filter(s => s.isCounter && !stationGuids.has(s.guid))
+    .map(s => ({ ...make(s.guid, names.get(s.guid)!, false, hours.counter.get(s.guid) ?? null, s), tipPct: null }))
+    .sort((a, b) => b.netSales - a.netSales || a.name.localeCompare(b.name))
+  const sum = (k: keyof Omit<ServerSalesRow, 'guid' | 'isCounter'>) => kept.reduce((t, s) => t + s[k], 0)
+  const totalHours = kept.reduce((t, s) => t + (hours.main.get(s.guid) ?? 0), 0)
   const total = rows.length
     ? make('total', 'Team total', false, totalHours, { orders: sum('orders'), guests: sum('guests'), net: sum('net'), tax: sum('tax'), tips: sum('tips'), voids: sum('voids'), turnSeconds: sum('turnSeconds'), turnOrders: sum('turnOrders') })
     : null
-  return { available: true, rows, total }
+  return { available: true, rows, counterRows, total }
 }
 
 export function buildFohHoursReport(requestedWeek?: string | null): FohHoursReport {
@@ -219,7 +236,7 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   const base = {
     restaurantName: site.restaurantName,
     groups: GROUPS,
-    thresholds: { overtime: OVERTIME_LINE_HOURS, close: CLOSE_TO_OVERTIME_HOURS, minOrders: MIN_ORDERS_FOR_SERVICE_DAY },
+    thresholds: { overtime: OVERTIME_LINE_HOURS, close: CLOSE_TO_OVERTIME_HOURS, minOrders: MIN_ORDERS_FOR_SERVICE_DAY, minServerOrders: MIN_ORDERS_FOR_PRODUCTIVITY_ROW },
     generatedAt
   }
   const range = db.prepare('SELECT MIN(date) AS minDate, MAX(date) AS maxDate FROM daily_toast_job_hours').get() as { minDate: string | null, maxDate: string | null }
@@ -232,7 +249,7 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
     const emptyWeek = mondayOf(localToday())
     return {
       ...base, hasData: false, weekStart: emptyWeek, weekEnd: addDays(emptyWeek, 6), asOf: null, weekComplete: false,
-      days: emptyDays(emptyWeek), people: [], productivity: { available: false, rows: [], total: null }, autoClockOuts: { people: 0, shifts: 0 },
+      days: emptyDays(emptyWeek), people: [], productivity: { available: false, rows: [], counterRows: [], total: null }, autoClockOuts: { people: 0, shifts: 0 },
       totals: { all: 0, overtime: 0, byDay: {}, covers: 0, coversByDay: {}, guestsPerHourByDay: {} }, guestsPerHour: noGuests,
       comparison: { priorSamePoint: null, priorFullWeek: null, trailingAvgFullWeek: null, trailingWeeks: 0 },
       includedJobs: [], notCounted: [], excludedLogins: [], prevWeek: null, nextWeek: null
@@ -356,9 +373,13 @@ export function buildFohHoursReport(requestedWeek?: string | null): FohHoursRepo
   // Productivity: Toast's Employee productivity figures for the week, one row per server who rang orders.
   // Hours here are normal-service nights only, so sales per hour compares like with like.
   const serviceDates = [...dayClass].filter(([, c]) => c.service).map(([d]) => d)
-  const hoursByGuid = new Map<string, number>()
-  for (const r of rows) if (isFoh(r.title) && dayClass.get(r.date)?.service) hoursByGuid.set(r.guid, (hoursByGuid.get(r.guid) ?? 0) + hoursOf(r))
-  const productivity = buildProductivity(db, weekStart, weekEnd, names, stationGuids, gmGuids, hoursByGuid, serviceDates)
+  const prodHours = { main: new Map<string, number>(), counter: new Map<string, number>() }
+  for (const r of rows) {
+    if (!isFoh(r.title) || !dayClass.get(r.date)?.service) continue
+    const target = stationGuids.has(r.guid) || PRODUCTIVITY_JOB_PATTERN.test(r.title) ? prodHours.main : COUNTER_JOB_PATTERN.test(r.title) ? prodHours.counter : null
+    if (target) target.set(r.guid, (target.get(r.guid) ?? 0) + hoursOf(r))
+  }
+  const productivity = buildProductivity(db, weekStart, weekEnd, names, stationGuids, gmGuids, prodHours, serviceDates)
 
   const jobTitles = (db.prepare('SELECT title FROM toast_jobs WHERE deleted = 0 ORDER BY title').all() as { title: string }[]).map(j => j.title)
   const thisMonday = mondayOf(range.maxDate)
@@ -431,15 +452,17 @@ export function renderFohHoursHtml(r: FohHoursReport): string {
   const notCounted = r.notCounted.length ? `<p class="foot">Not counted as FOH or BOH: ${r.notCounted.map(x => `${esc(x.title)} (${x.hours.toFixed(1)} hrs)`).join(', ')}.</p>` : ''
   const money = (n: number | null) => (n === null ? '–' : `$${Math.round(n).toLocaleString('en-US')}`)
   const turn = (m: number | null) => (m === null || m <= 0 ? '–' : m >= 60 ? `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m` : `${Math.round(m)}m`)
-  const prodRow = (x: FohProductivityRow, label: string) => `<tr><th scope="row">${esc(label)}${x.isStation ? '<span class="job">Shared login</span>' : ''}</th><td class="n">${x.hours !== null ? x.hours.toFixed(1) : '–'}</td><td class="n">${x.guests}</td><td class="n">${x.orders}</td><td class="n total">${money(x.netSales)}</td><td class="n">${money(x.perGuest)}</td><td class="n">${money(x.avgOrder)}</td><td class="n">${money(x.perHour)}</td><td class="n">${turn(x.turnMinutes)}</td><td class="n">${x.tipPct !== null ? `${x.tipPct.toFixed(1)}%` : '–'}</td><td class="n">${x.voids || '–'}</td></tr>`
-  const productivity = r.productivity.available
-    ? `<h2 style="font-size:16px;margin:22px 0 8px">Server productivity</h2>
-<div class="tbl"><table>
+  const prodRow = (x: FohProductivityRow, label: string) => `<tr><th scope="row">${esc(label)}${x.isStation ? '<span class="job">Shared login</span>' : ''}</th><td class="n">${x.hours !== null ? x.hours.toFixed(1) : '–'}</td><td class="n">${x.guests}</td><td class="n">${x.orders}</td><td class="n">${money(x.netSales)}</td><td class="n">${money(x.perGuest)}</td><td class="n">${money(x.avgOrder)}</td><td class="n total">${money(x.perHour)}</td><td class="n">${turn(x.turnMinutes)}</td><td class="n">${x.tipPct !== null ? `${x.tipPct.toFixed(1)}%` : '–'}</td><td class="n">${x.voids || '–'}</td></tr>`
+  const prodTable = (rows: FohProductivityRow[], total: FohProductivityRow | null) => `<div class="tbl"><table>
 <thead><tr><th>Employee</th><th class="n">Hours</th><th class="n">Guests</th><th class="n">Orders</th><th class="n">Net sales</th><th class="n">Per guest</th><th class="n">Avg order</th><th class="n">Sales / hr</th><th class="n">Avg turn</th><th class="n">Non-cash tips</th><th class="n">Voids</th></tr></thead>
-<tbody>${r.productivity.rows.map(x => prodRow(x, x.name)).join('')}</tbody>
-${r.productivity.total ? `<tfoot>${prodRow(r.productivity.total, r.productivity.total.name)}</tfoot>` : ''}
-</table></div>
-<p class="foot">Net sales are after discounts, before tax and tip, for every order the person rang (Toast's Employee productivity figures). Per guest = net sales ÷ guests; Sales / hr = net sales ÷ FOH hours clocked. Avg turn is order opened to paid, leaving out any order open over 8 hours. Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. A shared login's sales are the bar's, not one person's.</p>`
+<tbody>${rows.map(x => prodRow(x, x.name)).join('')}</tbody>
+${total ? `<tfoot>${prodRow(total, total.name)}</tfoot>` : ''}
+</table></div>`
+  const productivity = r.productivity.available
+    ? `<h2 style="font-size:16px;margin:0 0 8px">Server productivity</h2>
+${prodTable(r.productivity.rows, r.productivity.total)}
+${r.productivity.counterRows.length ? `<h2 style="font-size:16px;margin:18px 0 8px">Chef's Counter</h2>${prodTable(r.productivity.counterRows, null)}` : ''}
+<p class="foot">Servers and bartenders only (Server, Bartender, Lead Bartender) with at least ${r.thresholds.minServerOrders} orders in the week, sorted by sales per hour. Net sales are after discounts, before tax and tip, for the orders the person rang, excluding Chef's Counter orders, which are listed apart (the prix fixe includes the gratuity, so their tip column is blank). Hours are clocked on those jobs; Chef's Counter hours are on the Chef's Counter job. Per guest = net sales ÷ guests; Sales / hr = net sales ÷ those hours. Avg turn is order opened to paid, leaving out any order open over 8 hours. Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. A shared login's sales are the bar's, not one person's.</p>`
     : ''
   const nearCount = r.people.filter(p => p.status === 'close').length
   const overCount = r.people.filter(p => p.status === 'over').length
@@ -452,6 +475,8 @@ ${HOURS_REPORT_CSS}
 </style></head><body><main>
 <h1>FOH hours — week of ${esc(fmtDate(r.weekStart))}</h1>
 <p class="sub">${esc(r.restaurantName)} · Mon ${esc(fmtDate(r.weekStart))} – Sun ${esc(fmtDate(r.weekEnd))} · ${esc(through)} · from Toast time entries</p>
+${productivity}
+<h2 style="font-size:16px;margin:22px 0 8px">FOH hours worked</h2>
 <div class="cards">
 <div class="card"><div class="l">FOH hours</div><div class="v">${r.totals.all.toFixed(1)}</div><div class="s">${r.people.length} ${r.people.length === 1 ? 'person' : 'people'} clocked in</div></div>
 <div class="card"><div class="l">Near 40 hours</div><div class="v">${nearCount + overCount}</div><div class="s">${overCount} in overtime</div></div>
@@ -465,7 +490,6 @@ ${r.autoClockOuts.shifts ? `<div class="card"><div class="l">Auto clock-outs</di
 <tfoot><tr><th scope="row">All FOH</th><td class="n total">${r.totals.all.toFixed(1)}</td>${dayTotals}</tr><tr><th scope="row">Guests</th><td class="n total">${r.totals.covers || '–'}</td>${dayCovers}</tr><tr><th scope="row">Guests per FOH hour</th><td class="n total">${r.guestsPerHour.current !== null ? r.guestsPerHour.current.toFixed(1) : '–'}</td>${dayGph}</tr></tfoot>
 </table></div>
 <p class="foot">Counts hours worked as ${esc(r.includedJobs.join(', ') || 'front-of-house jobs')}. Each person is grouped by the job they worked most. Managers (General Manager, Floor Manager, Wine Director) are not included. "Near 40" = ${r.thresholds.close}+ hours or overtime logged in Toast. Hours come from Toast clock-ins. Closed days (Mondays, holidays), buyout, event and off-site nights, and nights with under ${r.thresholds.minOrders} orders are marked under the date; their hours are listed but they are left out of Guests, guests per FOH hour and the productivity table. ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. Generated ${esc(new Date(r.generatedAt).toLocaleString('en-US', { timeZone: RESTAURANT_TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' }))}.</p>
-${productivity}
 ${stations}${notCounted}
 </main></body></html>`
 }

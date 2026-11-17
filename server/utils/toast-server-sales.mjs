@@ -14,19 +14,32 @@
 //    averaged across days; orders open over MAX_TURN_SECONDS are left out of it;
 //  - nonCashTips: tipAmount on payments that aren't CASH and weren't voided; Toast's "non-cash tips %"
 //    divides it by net sales + tax;
-//  - voidCount: voided selections (items) on non-voided checks.
+//  - voidCount: voided selections (items) on non-voided checks;
+//  - one row per (server, isCounter): Chef's Counter orders are separate, see isChefsCounterOrder.
 export const MAX_PLAUSIBLE_GUESTS_PER_ORDER = 50
 // A tab left open overnight would swamp an average turn time, so an order open longer than this is left
 // out of the turn-time figure only (everything else still counts). Toast's own report has no such cap.
 export const MAX_TURN_SECONDS = 8 * 3600
 
-export function aggregateServerSales(orders) {
+// A Chef's Counter order: seated at a counter table (C<n>, via the table->area map) or carrying a Chef's
+// Counter prix fixe selection (prepaid tickets and the bulk Stripe check can be rung with no table). Counter
+// sales are kept in their own rows (isCounter): the prix fixe includes the gratuity (so tips look tiny) and one
+// counter night would swamp a server's sales, so the report shows them apart from main-floor and bar service.
+export function isChefsCounterOrder(order, areaByTableGuid) {
+  if (order.table && areaByTableGuid && areaByTableGuid.get(order.table.guid) === 'chefs counter') return true
+  return (order.checks ?? []).some(c => !c.voided && (c.selections ?? []).some(s => !s.voided && /chef.?s counter/i.test(s.displayName ?? '')))
+}
+
+// counterOf(order) -> true for a Chef's Counter order (default: none), see isChefsCounterOrder.
+export function aggregateServerSales(orders, counterOf = (_order) => false) {
   const byServer = new Map()
   for (const o of orders) {
     if (o.deleted || o.voided) continue
     const guid = o.server?.guid
     if (!guid) continue
-    const r = byServer.get(guid) ?? { employeeGuid: guid, orders: 0, guests: 0, netSales: 0, tax: 0, nonCashTips: 0, voidCount: 0, turnSeconds: 0, turnOrders: 0 }
+    const isCounter = counterOf(o) ? 1 : 0
+    const key = `${guid}|${isCounter}`
+    const r = byServer.get(key) ?? { employeeGuid: guid, isCounter, orders: 0, guests: 0, netSales: 0, tax: 0, nonCashTips: 0, voidCount: 0, turnSeconds: 0, turnOrders: 0 }
     r.orders += 1
     const guests = o.numberOfGuests ?? 0
     if (guests <= MAX_PLAUSIBLE_GUESTS_PER_ORDER) r.guests += guests
@@ -46,7 +59,7 @@ export function aggregateServerSales(orders) {
       }
       for (const s of c.selections ?? []) if (s.voided) r.voidCount += 1
     }
-    byServer.set(guid, r)
+    byServer.set(key, r)
   }
   return [...byServer.values()]
 }

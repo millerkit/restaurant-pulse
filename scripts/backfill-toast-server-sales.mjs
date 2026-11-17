@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { aggregateServerSales } from '../server/utils/toast-server-sales.mjs'
+import { aggregateServerSales, isChefsCounterOrder } from '../server/utils/toast-server-sales.mjs'
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const dbPath = join(rootDir, 'data', 'restaurant.sqlite')
@@ -99,6 +99,15 @@ async function fetchOrders(isoDay) {
   return results
 }
 
+// Chef's Counter tables (C<n>, same naming rule as server/utils/toast-table-map.ts) so counter orders are kept apart.
+const counterTables = new Map()
+try {
+  for (const t of await toastGet('/config/v2/tables')) counterTables.set(t.guid, /^C\d+$/i.test((t.name ?? '').trim()) ? 'chefs counter' : null)
+  console.log(`Loaded ${counterTables.size} Toast table(s); Chef's Counter orders will be split out.`)
+} catch (err) {
+  console.warn(`Could not fetch /config/v2/tables (${err.message}) — counter orders are then found by their prix fixe selection only.`)
+}
+
 const db = new Database(dbPath)
 if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'daily_toast_server_sales'`).get()) {
   console.error('Table daily_toast_server_sales is missing — run: node scripts/migrate.mjs')
@@ -106,8 +115,8 @@ if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'da
 }
 const deleteDay = db.prepare('DELETE FROM daily_toast_server_sales WHERE date = ?')
 const insert = db.prepare(`
-  INSERT INTO daily_toast_server_sales (date, employee_guid, orders, guests, net_sales, tax, non_cash_tips, void_count, turn_seconds, turn_orders, synced_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO daily_toast_server_sales (date, employee_guid, is_counter, orders, guests, net_sales, tax, non_cash_tips, void_count, turn_seconds, turn_orders, synced_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
 
 const days = []
@@ -124,11 +133,11 @@ for (const isoDay of days) {
     console.error('Stopping here — re-run with the same --since to resume (each day is replaced wholesale, so re-running is safe).')
     process.exit(1)
   }
-  const rows = aggregateServerSales(orders)
+  const rows = aggregateServerSales(orders, o => isChefsCounterOrder(o, counterTables))
   const syncedAt = new Date().toISOString()
   db.transaction(() => {
     deleteDay.run(isoDay)
-    for (const r of rows) insert.run(isoDay, r.employeeGuid, r.orders, r.guests, r.netSales, r.tax, r.nonCashTips, r.voidCount, r.turnSeconds, r.turnOrders, syncedAt)
+    for (const r of rows) insert.run(isoDay, r.employeeGuid, r.isCounter, r.orders, r.guests, r.netSales, r.tax, r.nonCashTips, r.voidCount, r.turnSeconds, r.turnOrders, syncedAt)
   })()
   if (rows.length) daysWithOrders++
   console.log(`${isoDay}: ${rows.length} server(s), ${rows.reduce((s, r) => s + r.orders, 0)} order(s)`)

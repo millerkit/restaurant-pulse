@@ -6418,3 +6418,15 @@ fallback, treat a day under X orders as closed or an anomaly. Built as `classify
 `loadPlannedNights`, Mondays, then orders < 20 via `daily_toast_server_sales`, else covers < 15). Marked days get a tag under the date;
 they are excluded from Guests, guests per FOH hour and the productivity table and its hours. Typical ordinary nights run 27-75 orders;
 local hours data ends Nov 5, so the low-orders branch could not be exercised locally (the Monday-closed branch was).
+
+**FOH Hours, productivity rework (2026-11-17, after the first production backfill)**: Kit asked to (1) move productivity above the hours,
+(2) bold sales/hr instead of net sales, (3) make every productivity column sortable, default sales/hr high to low, (4) drop Skye (concierge)
+by counting only Server, Bartender and Lead Bartender hours, and (5) handle Chef's Counter: its prix fixe sales swamp whoever works it
+and the included gratuity makes tips look tiny (Amber's main-floor tip rate was 21% once her counter orders were split out, vs. ~8% mixed).
+Done: migration 0026 adds `is_counter` to the key of `daily_toast_server_sales`; counter orders are found by table (`C<n>`, via the
+existing table->area map) or a Chef's Counter selection (`isChefsCounterOrder`) and shown in a separate table with hours from the new
+"Chef's Counter" Toast job once clock-ins use it. **Production: re-run the server-sales backfill after deploying** (the migration copies old
+rows as non-counter; the backfill replaces each day with the split rows). Known limit: bartenders ring under the shared bar login, so an
+individual bartender with a stray order (e.g. Bre Zeek) shows a tiny sales/hr; the bar's sales are the Service Bar row.
+
+**Minimum orders (2026-11-17)**: Kit: a person needs a minimum number of orders in the week to be in the main productivity table (Bre Zeek's 1 order gave a meaningless $21/hr). `MIN_ORDERS_FOR_PRODUCTIVITY_ROW` = 10; the shared bar login and the Chef's Counter table are exempt; the team total covers the rows shown.

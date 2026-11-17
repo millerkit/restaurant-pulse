@@ -5,7 +5,7 @@
 // spot-check; regularHours + overtimeHours from Toast's own time-entry
 // computation, not a manual clock-in/out diff).
 
-import { aggregateServerSales } from './toast-server-sales.mjs'
+import { aggregateServerSales, isChefsCounterOrder } from './toast-server-sales.mjs'
 
 interface ToastCredentials {
   apiHostname: string
@@ -189,18 +189,18 @@ async function fetchAllPages<T>(creds: ToastCredentials, path: string, businessD
   return results
 }
 
-function writeServerSalesForDate(isoDate: string, orders: ToastOrder[]) {
+function writeServerSalesForDate(isoDate: string, orders: ToastOrder[], areaMap: Map<string, string | null>) {
   try {
-    const rows = aggregateServerSales(orders)
+    const rows = aggregateServerSales(orders, (o: ToastOrder) => isChefsCounterOrder(o, areaMap))
     const db = useDb()
     const syncedAt = new Date().toISOString()
     const insert = db.prepare(`
-      INSERT INTO daily_toast_server_sales (date, employee_guid, orders, guests, net_sales, tax, non_cash_tips, void_count, turn_seconds, turn_orders, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO daily_toast_server_sales (date, employee_guid, is_counter, orders, guests, net_sales, tax, non_cash_tips, void_count, turn_seconds, turn_orders, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     db.transaction(() => {
       db.prepare('DELETE FROM daily_toast_server_sales WHERE date = ?').run(isoDate)
-      for (const r of rows) insert.run(isoDate, r.employeeGuid, r.orders, r.guests, r.netSales, r.tax, r.nonCashTips, r.voidCount, r.turnSeconds, r.turnOrders, syncedAt)
+      for (const r of rows) insert.run(isoDate, r.employeeGuid, r.isCounter, r.orders, r.guests, r.netSales, r.tax, r.nonCashTips, r.voidCount, r.turnSeconds, r.turnOrders, syncedAt)
     })()
   } catch (err) {
     console.warn(`writeServerSalesForDate(${isoDate}) failed — FOH productivity will be stale (database migration 0025 not applied? see Settings): ${err instanceof Error ? err.message : err}`)
@@ -234,10 +234,6 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
     .filter(te => !salariedJobGuids.has(te.jobReference?.guid ?? ''))
     .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
 
-  // Per-server sales for the FOH Hours productivity table, from the same orders (no extra call).
-  // Non-fatal: a missing table (migration 0025 not applied) must not break covers and labor hours.
-  writeServerSalesForDate(isoDate, orders)
-
   // Per-employee hours for the Staff Hours report — from the same time
   // entries, but unlike laborHours above, salaried jobs are included.
   writeEmployeeHoursForDate(isoDate, timeEntries)
@@ -259,6 +255,9 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   // whose name didn't match a known area pattern are excluded from the
   // per-area sums but still counted in the whole-restaurant covers above.
   const areaMap = await getTableAreaMap(creds)
+  // Per-server sales for the FOH Hours productivity table, from the same orders (no extra call).
+  // Non-fatal: a missing table (migration not applied) must not break covers and labor hours.
+  writeServerSalesForDate(isoDate, orders, areaMap)
   const areaIds = new Map(db.prepare('SELECT id, name FROM capacity_areas').all().map((r: any) => [r.name, r.id]))
   const perArea = new Map<string, { covers: number; revenue: number; foodRevenue: number | null; beverageRevenue: number | null }>()
   // Chef's Counter covers can't be summed per order: a party's prix fixes
