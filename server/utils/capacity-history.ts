@@ -17,9 +17,10 @@ type Db = Database.Database
 //   few Sunday openings were private events), isn't a dated holiday closure or special night
 //   (buyout / event / off-site; catering runs alongside a normal night and stays), and isn't a
 //   private party: covers over PARTY_NIGHT_MULTIPLE × that month's median regular night.
-//   It does NOT need same-day QuickBooks revenue: QuickBooks is cash basis, deposits were
-//   batched in early 2025, and requiring revenue that day dropped half of January 2025's real
-//   nights (9 of 18) and understated its index by ~15 points.
+//   It does NOT need same-day QuickBooks dine-in revenue: a night's money can land elsewhere
+//   (January 2025's Tasting Collective nights were coded to On-Site Events until Kit recoded them
+//   2026-11-17; cash-basis deposits can post on another day), and requiring it dropped half of
+//   January 2025's real nights (9 of 18), understating its index by ~20 points.
 // - **Each month against the year around it, at the same location.** A month's covers per
 //   night ÷ the average of the 12 full months centered on it (a centered moving average, the
 //   classic way to separate seasonality from a trend), never mixing Mass Ave and Cambridge St.

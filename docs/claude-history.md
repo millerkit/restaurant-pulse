@@ -6491,9 +6491,10 @@ display (and the Settings summary text) did.
 
 Kit asked for the most accurate seasonal scaling possible, with January-May 2026 (last Mass Ave months) weighted
 more than 2025. Review of production data (Toast covers + QBO core revenue, 2024-07-28 to 2026-11-16) found:
-- **Covers nights were dropped for lack of same-day QBO revenue.** QBO is cash basis and early-2025 deposits were
-  batched, so January 2025 kept only 9 of its 18 real nights (35/night instead of 41.2); its index read 84% instead
-  of ~106%. February 2025 lost 3 nights. The covers index no longer needs revenue that day.
+- **Covers nights were dropped for lack of same-day QBO core revenue.** January 2025 kept only 9 of its 18 real
+  nights (35/night instead of 41.2); its index read 84% instead of ~106%. The cause (found after the rebuild): the
+  January 2025 Tasting Collective nights (Tue-Thu, ~$4,400 each) were coded to On-Site Events in QBO. February 2025
+  lost 3 nights the same way. The covers index no longer needs revenue that day.
 - **The move year was skipped**, so the forecast used only 2025. Now each month is divided by the centered 12-month
   average at the same location (classical ratio-to-moving-average: removes trend, never mixes the two rooms), so
   Jan-May 2026 are measured against Jun 2025-May 2026. Observations are weighted 0.5^(years older than the newest),
@@ -6516,7 +6517,11 @@ Cambridge St Jul-Nov 2026 actuals is within ~4/night except November (83 vs 90; 
 Jan 108, Feb 105, Mar 89, Apr 95, May 104, Jun 126, Jul 101, Aug 96, Sep 92, Oct 93, Nov 91, Dec 99.
 Seasonal Trends charts use the same centered reference (Cambridge St months vs its average so far, `partial`);
 revenue per open night and spend per cover now come from monthly QBO totals instead of per-day revenue.
-Known data gap: January 2025 QBO core revenue is only $39,944 for 741 covers ($54/cover vs $77-102 around it), so
-that month's revenue and spend bars read low; covers and the forecast are unaffected.
+January 2025 revenue (resolved same day): Kit recoded the Tasting Collective nights from On-Site Events to dine-in
+in QBO; repaired in production with `diff-qbo-pl.mjs --since=2025-01-01 --until=2025-01-31 --category=revenue --fix`
+(9 accounts; core dine-in $39,944 -> $77,910, $105/cover; re-run shows 0 differences). Tasting Collective is what
+makes January an average month and Valentine's Day lifts February (Kit): both are in the covers index as regular
+nights, so don't also date Tasting Collective nights as special nights. The rest of 2025 still differs from QBO
+(36 accounts on a full-year diff, e.g. 6082 Employer FICA $39,430 missing); not repaired, Kit chose January revenue only.
 Caveat: Cambridge St's level comes from its first five months, which may include opening buzz.
 `dataAnnualFillPct` was replaced by `coversPerNightLevel`; `monthlyIndex` now carries its weighted observations.
