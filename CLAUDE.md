@@ -282,13 +282,23 @@ calling the Cash & Loans handler directly. Stale Toast/QBO data adds a "Data not
 
 ## FOH Hours (Team › FOH Hours, `/foh-hours`) — built 2026-11-17
 
-Same shape as the BOH report on Kitchen Hours, for the GM and the Floor Manager (new `floor` role, migration 0024).
-Hours only, no dollars: Toast time entries by job (`daily_toast_job_hours`), grouped Floor / Bar / Management by the job
-each person worked most that week; "near 40" and auto clock-out flags; a Guests row and guests per FOH hour (open nights
-only). FOH jobs are matched by title (`FOH_JOB_PATTERN`); a job that is neither FOH nor BOH is listed as not counted.
-Shared station logins (staff override "excluded", e.g. Service Bar) are left out and named at the bottom. Download:
-`/api/foh-hours/report`. **Ideas not built** (Toast data the sync downloads but doesn't keep): covers and sales per server
-per night, clock-in/out times, tips/voids/comps per person; scheduled vs. actual hours needs a new Toast API scope. See history.
+For the GM and the Floor Manager (new `floor` role, migration 0024, = the Sous Chef's view with FOH Hours instead of
+Kitchen Hours). `server/utils/foh-hours-report.ts` (+ `server/api/foh-hours.get.ts`, `foh-hours/report.get.ts` download,
+`app/pages/foh-hours.vue`). Two parts, both for a Mon–Sun week with a week picker:
+- **Hours** (Toast time entries by job, `daily_toast_job_hours`): per person per day, grouped **Floor / Bar / Concierge** by
+  the job each person worked most that week; near-40 and auto clock-out flags; Guests row. FOH jobs match `FOH_JOB_PATTERN`;
+  a job that is neither FOH nor BOH is listed as not counted.
+- **Server productivity** (Toast's Employee productivity report, `daily_toast_server_sales`, migration 0025): guests, orders,
+  net sales, per guest, avg order, sales/hr, avg turn, non-cash tips %, voids. Definitions in `server/utils/toast-server-sales.mjs`
+  (matched Toast's report for 2026-11-13). **The GM and the Floor Manager both see these dollars** (Kit's call), so
+  `/api/foh-hours` is the one dollar-carrying route the `floor` role may call. Filled nightly by the Toast sync (same orders, no
+  extra call, non-fatal); history by hand: `npm run db:backfill-toast-server-sales -- --since=2026-06-16` (production:
+  `fly ssh console -C "node scripts/backfill-toast-server-sales.mjs --since=2026-06-16"`, needs approval; idempotent).
+**Left out of every FOH figure** (Kit, 2026-11-17): managers (anyone who ever clocked a General Manager, Floor Manager or Wine
+Director job: Abigail, Shane, Katie; `MANAGER_JOB_PATTERN`) and shared station logins (staff override "excluded", e.g. Service Bar,
+which still shows in the productivity table as a "Shared login" row since it carries the bar's sales). There is no Management
+section. **Ideas not built** (data the sync downloads but doesn't keep): clock-in/out times, per-night (not per-week) server
+rows, comps/discounts per person; scheduled vs. actual hours needs a new Toast API scope. See history.
 
 ## Not yet done
 

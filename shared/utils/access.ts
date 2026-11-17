@@ -10,8 +10,10 @@
 //             profit views), Covers & Spend, Seasonal Trends, Budget Check, Kitchen Hours & Cost
 //             with dollars. Owner compensation is withheld server-side (see the redactions).
 //   floor   - the Floor Manager (2026-11-17): exactly what kitchen sees (Summary, This Week for the
-//             kitchen), except FOH Hours (/foh-hours, hours per person, no dollars) in place of Kitchen
-//             Hours & Cost. Not allowed on /api/dashboard, /api/kitchen-labor or anything with pay.
+//             kitchen), except FOH Hours (/foh-hours) in place of Kitchen Hours & Cost. FOH Hours includes
+//             sales per server (Toast's Employee productivity figures): Kit decided the GM and the Floor
+//             Manager both see those dollars, so /api/foh-hours is the one dollar-carrying route floor may
+//             call. Not allowed on /api/dashboard, /api/kitchen-labor or anything with pay.
 //   kitchen - read-only: This Week for the kitchen (covers and bookings only, /kitchen-week) and
 //             Kitchen Hours & Cost, percentages and hours only (forced server-side, see
 //             server/api/kitchen-labor.get.ts). Kitchen is deliberately NOT allowed on

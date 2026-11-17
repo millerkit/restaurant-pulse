@@ -5,6 +5,8 @@
 // spot-check; regularHours + overtimeHours from Toast's own time-entry
 // computation, not a manual clock-in/out diff).
 
+import { aggregateServerSales } from './toast-server-sales.mjs'
+
 interface ToastCredentials {
   apiHostname: string
   clientId: string
@@ -187,6 +189,24 @@ async function fetchAllPages<T>(creds: ToastCredentials, path: string, businessD
   return results
 }
 
+function writeServerSalesForDate(isoDate: string, orders: ToastOrder[]) {
+  try {
+    const rows = aggregateServerSales(orders)
+    const db = useDb()
+    const syncedAt = new Date().toISOString()
+    const insert = db.prepare(`
+      INSERT INTO daily_toast_server_sales (date, employee_guid, orders, guests, net_sales, tax, non_cash_tips, void_count, turn_seconds, turn_orders, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    db.transaction(() => {
+      db.prepare('DELETE FROM daily_toast_server_sales WHERE date = ?').run(isoDate)
+      for (const r of rows) insert.run(isoDate, r.employeeGuid, r.orders, r.guests, r.netSales, r.tax, r.nonCashTips, r.voidCount, r.turnSeconds, r.turnOrders, syncedAt)
+    })()
+  } catch (err) {
+    console.warn(`writeServerSalesForDate(${isoDate}) failed — FOH productivity will be stale (database migration 0025 not applied? see Settings): ${err instanceof Error ? err.message : err}`)
+  }
+}
+
 function toBusinessDateParam(isoDate: string): string {
   return isoDate.replace(/-/g, '')
 }
@@ -213,6 +233,10 @@ export async function syncToastMetricsForDate(creds: ToastCredentials, isoDate: 
   const laborHours = timeEntries
     .filter(te => !salariedJobGuids.has(te.jobReference?.guid ?? ''))
     .reduce((sum, te) => sum + (te.regularHours ?? 0) + (te.overtimeHours ?? 0), 0)
+
+  // Per-server sales for the FOH Hours productivity table, from the same orders (no extra call).
+  // Non-fatal: a missing table (migration 0025 not applied) must not break covers and labor hours.
+  writeServerSalesForDate(isoDate, orders)
 
   // Per-employee hours for the Staff Hours report — from the same time
   // entries, but unlike laborHours above, salaried jobs are included.

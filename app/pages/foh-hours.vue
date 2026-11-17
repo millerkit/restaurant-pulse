@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // FOH hours for a Mon–Sun week, from Toast time entries: hours per person per day, grouped Floor /
-// Bar / Management. For the GM and the Floor Manager to track hours (not cost, so no dollars).
+// Bar / Concierge (managers are left out), plus Toast's Employee productivity figures per server.
+// For the GM and the Floor Manager; both see the sales dollars (Kit's call, 2026-11-17).
 // "Download report" gives a standalone HTML file to send. Data: server/utils/foh-hours-report.ts.
 // Same layout as the BOH report on Kitchen Hours (app/components/BohHoursReport.vue).
 import site from '~/config/site.json'
@@ -13,6 +14,9 @@ const query = computed(() => (week.value ? { week: week.value } : {}))
 const { data, pending, error, refresh } = await useFetch<FohHoursReport>('/api/foh-hours', { query, lazy: true })
 
 const fmtH = (n: number) => (n === 0 ? '–' : n.toFixed(1))
+const fmtMoney = (n: number | null) => (n === null ? '–' : `$${Math.round(n).toLocaleString('en-US')}`)
+const fmtTurn = (m: number | null) => (m === null || m <= 0 ? '–' : m >= 60 ? `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m` : `${Math.round(m)}m`)
+const fmtPct = (n: number | null) => (n === null ? '–' : `${n.toFixed(1)}%`)
 const fmtDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
 const groupsWithPeople = computed(() => (data.value?.groups ?? [])
@@ -150,7 +154,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
         </table>
       </div>
       <p class="foot">
-        Counts hours worked as {{ data.includedJobs.join(', ') }}. Each person is grouped by the job they worked most that week.
+        Counts hours worked as {{ data.includedJobs.join(', ') }}. Each person is grouped by the job they worked most that week. Managers (General Manager, Floor Manager, Wine Director) are not included.
         "Near 40" = {{ data.thresholds.close }}+ hours or overtime logged in Toast.
         Guests are Toast guest counts on open nights.
         ⚠ marks a shift Toast clocked out automatically because nobody did: it usually runs long and is worth correcting in Toast. An unfinished shift can look off too.
@@ -161,6 +165,75 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
           Not counted as FOH or BOH: {{ data.notCounted.map(x => `${x.title} (${x.hours.toFixed(1)} hrs)`).join(', ') }}.
         </template>
       </p>
+
+      <div class="section-head prod-head">
+        <div class="section-label">Server productivity</div>
+        <div class="section-note">Toast's Employee productivity figures for the same week, from the orders each person rang.</div>
+      </div>
+      <div v-if="!data.productivity.available" class="note-card">
+        <span class="chip warning">Not synced for this week</span>
+        <span class="quiet">Sales per server fill in nightly; earlier weeks need the history backfill (see CLAUDE.md, FOH Hours).</span>
+      </div>
+      <template v-else>
+        <div class="table-card">
+          <table class="hours-table prod-table">
+            <caption>Server productivity for the week</caption>
+            <thead>
+              <tr>
+                <th scope="col">Employee</th>
+                <th scope="col">Hours</th>
+                <th scope="col">Guests</th>
+                <th scope="col">Orders</th>
+                <th scope="col">Net sales</th>
+                <th scope="col">Per guest</th>
+                <th scope="col">Avg order</th>
+                <th scope="col">Sales / hr</th>
+                <th scope="col">Avg turn</th>
+                <th scope="col">Non-cash tips</th>
+                <th scope="col">Voids</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in data.productivity.rows" :key="r.guid">
+                <th scope="row">
+                  {{ r.name }}
+                  <span v-if="r.isStation" class="job">Shared login</span>
+                </th>
+                <td>{{ r.hours !== null ? r.hours.toFixed(1) : '–' }}</td>
+                <td>{{ r.guests }}</td>
+                <td>{{ r.orders }}</td>
+                <td class="total">{{ fmtMoney(r.netSales) }}</td>
+                <td>{{ fmtMoney(r.perGuest) }}</td>
+                <td>{{ fmtMoney(r.avgOrder) }}</td>
+                <td>{{ fmtMoney(r.perHour) }}</td>
+                <td>{{ fmtTurn(r.turnMinutes) }}</td>
+                <td>{{ fmtPct(r.tipPct) }}</td>
+                <td>{{ r.voids || '–' }}</td>
+              </tr>
+            </tbody>
+            <tfoot v-if="data.productivity.total">
+              <tr>
+                <th scope="row">{{ data.productivity.total.name }}</th>
+                <td>{{ data.productivity.total.hours !== null ? data.productivity.total.hours.toFixed(1) : '–' }}</td>
+                <td>{{ data.productivity.total.guests }}</td>
+                <td>{{ data.productivity.total.orders }}</td>
+                <td class="total">{{ fmtMoney(data.productivity.total.netSales) }}</td>
+                <td>{{ fmtMoney(data.productivity.total.perGuest) }}</td>
+                <td>{{ fmtMoney(data.productivity.total.avgOrder) }}</td>
+                <td>{{ fmtMoney(data.productivity.total.perHour) }}</td>
+                <td>{{ fmtTurn(data.productivity.total.turnMinutes) }}</td>
+                <td>{{ fmtPct(data.productivity.total.tipPct) }}</td>
+                <td>{{ data.productivity.total.voids || '–' }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p class="foot">
+          Net sales are after discounts, before tax and tip, for every order the person rang (the same figures as Toast's Employee productivity report).
+          Per guest = net sales ÷ guests; Sales / hr = net sales ÷ FOH hours clocked. Avg turn is order opened to paid, leaving out any order open over 8 hours.
+          Non-cash tips are card tips as a percent of net sales plus tax. Voids are voided items. A shared login's sales are the bar's, not one person's.
+        </p>
+      </template>
     </section>
   </div>
 </template>
@@ -199,5 +272,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 .hours-table .section-row th { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); text-align: left; background: var(--surface-alt); }
 .hours-table tfoot th, .hours-table tfoot td { font-weight: 700; color: var(--ink); border-top: 1px solid var(--hair); }
 .hours-table tfoot .guests-row th, .hours-table tfoot .guests-row td { font-weight: 500; color: var(--ink-2); border-top: none; }
+.prod-head { margin-top: 28px; }
+.hours-table.prod-table { min-width: 860px; }
 .foot { margin: 10px 2px 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
 </style>

@@ -254,6 +254,27 @@ CREATE TABLE daily_toast_job_hours (
   PRIMARY KEY (date, employee_guid, job_guid)
 );
 
+-- Per-server, per-business-date order totals (2026-11-17, migration 0025): the figures behind Toast's
+-- Employee productivity report, for the FOH Hours page. Rules and definitions (net sales, turn time,
+-- non-cash tips, voids): server/utils/toast-server-sales.mjs. One row per server who rang an order that
+-- day, kept for everyone (the report leaves managers and the shared station login out at read time).
+-- Replaced wholesale per date. Written by the nightly Toast sync (non-fatal) and
+-- scripts/backfill-toast-server-sales.mjs for history. Toast's non-cash tips % = non_cash_tips / (net_sales + tax).
+CREATE TABLE daily_toast_server_sales (
+  date           TEXT NOT NULL,
+  employee_guid  TEXT NOT NULL,
+  orders         INTEGER NOT NULL,
+  guests         INTEGER NOT NULL,
+  net_sales      REAL NOT NULL,
+  tax            REAL NOT NULL,
+  non_cash_tips  REAL NOT NULL,
+  void_count     INTEGER NOT NULL,
+  turn_seconds   REAL NOT NULL,       -- summed order open -> paid time
+  turn_orders    INTEGER NOT NULL,    -- orders in that sum (the divisor for average turn time)
+  synced_at      TEXT NOT NULL,
+  PRIMARY KEY (date, employee_guid)
+);
+
 -- Job titles for the guids above, from /labor/v1/jobs (one call per sync run).
 CREATE TABLE toast_jobs (
   guid            TEXT PRIMARY KEY,

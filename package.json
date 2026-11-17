@@ -17,6 +17,7 @@
     "db:backfill-pl": "node --env-file=.env.local scripts/backfill-qbo-pl.mjs",
     "db:backfill-toast": "node --env-file=.env.local scripts/backfill-toast-metrics.mjs",
     "db:backfill-toast-employee-hours": "node --env-file=.env.local scripts/backfill-toast-employee-hours.mjs",
+    "db:backfill-toast-server-sales": "node --env-file=.env.local scripts/backfill-toast-server-sales.mjs",
     "db:seed-benchmarks": "node scripts/seed-category-benchmarks.mjs",
     "db:seed-labor-settings": "node scripts/seed-labor-position-settings.mjs",
     "db:seed-dev-actuals": "node scripts/seed-dev-actuals.mjs",

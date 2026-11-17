@@ -6389,3 +6389,25 @@ Manager's email must be added in Settings › People & Access and on the Cloudfl
 covers and sales per server per night (order `server`, guests, check amount), clock-in/out times (shift length, who
 closed, staffing vs. covers by hour), tips, voids and comps per person; scheduled shifts need Toast's Scheduling API
 scope. Suggested next step if wanted: a per-server-per-night table filled by the same sync plus a backfill script.
+
+## 2026-11-17 (later) — FOH Hours: exclusions, Concierge section, server productivity
+
+**Changes after the first deploy** (Kit): (1) leave out the GM (Abigail), Shane (Floor Manager) and Katie (Wine Director /
+Service Captain / Cater-Waiter) from every FOH figure, and drop the Management section: done as a rule, anyone who ever
+clocked a job matching `MANAGER_JOB_PATTERN` is excluded entirely (all history, any other job they worked), and not listed
+as "not counted"; (2) Concierge is its own section (Floor / Bar / Concierge, by the job worked most that week);
+(3) pull Toast's Employee productivity figures into the page, visible to the GM and the Floor Manager including dollars.
+
+**Productivity data**: Toast's ordersBulk already carries `server`, `numberOfGuests`, check `amount`/`taxAmount`, payment
+`tipAmount`/`type` and selection `voided`; the sync downloaded it and kept only covers. New `daily_toast_server_sales`
+(migration 0025), one row per server per business date, written by `writeServerSalesForDate` in `toast-metrics-sync.ts`
+(non-fatal) from the shared pure `server/utils/toast-server-sales.mjs`. Verified against Kit's Toast screenshot for 2026-11-13:
+guests, orders, net sales, net sales/guest, average order value, void count and non-cash tip % (tips ÷ (net + tax)) matched;
+turn time = order opened -> **paid** (closed time is later on bar tabs). One deliberate difference: an order open over 8 hours is
+left out of turn time (a bar tab left open pushed Service Bar's weekly average to 274 min). The report shows rows only for
+people with FOH hours that week (drops the "Default Online Ordering" pseudo-user and managers) and adds sales/hr.
+Local backfill run for 2026-10-26 to 2026-11-16; **production needs the backfill run by hand** (history only fills forward from
+the next nightly sync after deploy) and approval, since it writes to the production database.
+
+**Verified** locally: API and HTML download (no managers, productivity table present), page for the week of Oct 26 (groups Floor /
+Bar / Concierge, productivity table, footnotes), BOH report untouched.
