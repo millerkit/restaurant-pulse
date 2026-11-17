@@ -29,6 +29,10 @@ type KitchenLabor =
 // ?view=kitchen shows the Sous Chef's version: percentages and hours, no dollar
 // figures and no Executive Chef toggle (the server rescales the numbers so no
 // dollars are sent at all). Phase 2's roles will force this for the kitchen role.
+// Two views, kept in the URL (?show=): Hours (the BOH hours report, default) and Cost (labor as a % of food revenue).
+const tabs = [{ key: 'hours', label: 'Hours' }, { key: 'cost', label: 'Cost' }] as const
+const tab = usePageTab(tabs.map(t => t.key), 'hours')
+
 const route = useRoute()
 const kitchenQuery = computed(() => (route.query.view === 'kitchen' ? { view: 'kitchen' } : {}))
 const { isOwner } = useMe()
@@ -151,8 +155,11 @@ function fmtDelta(v: number) {
         @synced="refresh()"
       />
 
-      <BohHoursReport />
+      <PageTabs v-model="tab" :tabs="[...tabs]" label="Kitchen Hours views" />
 
+      <BohHoursReport v-if="tab === 'hours'" />
+
+      <template v-if="tab === 'cost'">
       <section v-if="!data.hasData" class="note-card">
         <span class="chip warning">No data synced yet</span>
       </section>
@@ -296,6 +303,7 @@ function fmtDelta(v: number) {
             <li v-if="data.offCycleLabor > 0.5"><strong>Off-cycle postings:</strong> {{ fmtMoney(data.offCycleLabor) }} of kitchen labor was posted on days other than a Friday; each is counted with the next Friday's payroll.</li>
           </ul>
         </section>
+      </template>
       </template>
     </template>
   </div>

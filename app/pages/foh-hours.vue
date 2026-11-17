@@ -11,6 +11,10 @@ import type { FohHoursReport, FohProductivityRow, FohTrendPoint } from '../../se
 
 useHead({ title: `${site.restaurantName} — FOH Hours & Productivity` })
 
+// Three views, kept in the URL (?show=): Productivity (default), Hours, Trends. The week picker applies to the first two.
+const tabs = [{ key: 'productivity', label: 'Productivity' }, { key: 'hours', label: 'Hours' }, { key: 'trends', label: 'Trends' }] as const
+const tab = usePageTab(tabs.map(t => t.key), 'productivity')
+
 const week = ref<string | null>(null)
 const query = computed(() => (week.value ? { week: week.value } : {}))
 const { data, pending, error, refresh } = await useFetch<FohHoursReport>('/api/foh-hours', { query, lazy: true })
@@ -128,7 +132,9 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
       <span class="quiet">Run the Toast hours backfill (see CLAUDE.md, BOH hours report).</span>
     </div>
 
-    <section v-if="trendPoints.length" class="trends">
+    <PageTabs v-if="data && data.hasData" v-model="tab" :tabs="[...tabs]" label="FOH Hours views" />
+
+    <section v-if="tab === 'trends' && trendPoints.length" class="trends">
       <div class="section-head">
         <div class="section-label">Weekly trends</div>
         <div class="section-note">Complete weeks, normal-service nights only (closed days, buyouts and low-order nights are left out). Dashed line = trend.</div>
@@ -189,8 +195,12 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
         </table>
       </div>
     </section>
+    <div v-else-if="tab === 'trends' && data && data.hasData" class="note-card">
+      <span class="chip warning">Not enough history yet</span>
+      <span class="quiet">Trends need complete weeks of hours (and, for sales and turn time, the server-sales backfill).</span>
+    </div>
 
-    <section v-if="data && data.hasData" class="foh">
+    <section v-if="data && data.hasData && tab !== 'trends'" class="foh">
       <div class="bar">
         <div class="week-nav" role="group" aria-label="Choose week">
           <button type="button" :disabled="!data.prevWeek" aria-label="Previous week" @click="week = data.prevWeek">‹</button>
@@ -203,6 +213,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
         <a class="download" :href="downloadHref" download>Download report (HTML)</a>
       </div>
 
+      <template v-if="tab === 'productivity'">
       <div class="section-head">
         <div class="section-label">Server productivity</div>
         <div class="section-note">Toast's Employee productivity figures for the week. Click a column to sort.</div>
@@ -275,6 +286,9 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
         </p>
       </template>
 
+      </template>
+
+      <template v-if="tab === 'hours'">
       <div class="section-head hours-head">
         <div class="section-label">FOH hours worked</div>
         <div class="section-note">
@@ -383,6 +397,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
           Not counted as FOH or BOH: {{ data.notCounted.map(x => `${x.title} (${x.hours.toFixed(1)} hrs)`).join(', ') }}.
         </template>
       </p>
+      </template>
     </section>
   </div>
 </template>
@@ -423,7 +438,7 @@ const downloadHref = computed(() => `/api/foh-hours/report${data.value ? `?week=
 .hours-table tfoot .guests-row th, .hours-table tfoot .guests-row td { font-weight: 500; color: var(--ink-2); border-top: none; }
 .daytag { display: block; margin-top: 2px; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
 .daytag.special { color: var(--accent); }
-.hours-head { margin-top: 28px; }
+.hours-head { margin-top: 4px; }
 .trends { margin-bottom: 28px; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; }
 .view-switch { display: inline-flex; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }

@@ -6437,3 +6437,8 @@ dashed trendline like Kitchen Hours, rejecting voids/tip % (too noisy weekly) an
 `/api/foh-hours/trends`, a generic `app/components/WeeklyTrendChart.vue` (same drawing and hover as KitchenLaborChart, nice-step y-axis), and a
 Chart/Table section above the week picker. Local data has only five complete weeks (hours history starts Sep 28), so the trendlines are
 tentative until production has more; sales-based points need the server-sales backfill. Possible next step: per-weekday versions (e.g. Fridays only).
+
+**In-page views (2026-11-17)**: FOH Hours had grown to trends + productivity + hours on one page. Kit asked for a tab/select and the same on Kitchen Hours.
+Built a small segmented `PageTabs.vue` and `usePageTab` (URL `?show=`, so a view can be linked and survives reload): FOH = Productivity (default) / Hours /
+Trends (week picker hidden on Trends); Kitchen = Hours (default, the BOH report) / Cost (summary cards, week by week chart/table, footnotes). Sub-nav tabs and
+routes are unchanged. Verified in the browser on both pages (each view shows only its own content; URL updates; default leaves the URL clean).
