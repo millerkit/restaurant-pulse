@@ -6570,3 +6570,16 @@ before the upload date (upcoming visits hold only bookings made so far, which sk
 median 10 days, 8 in 10 within 24; parties of 8+ were only 19 (< `MIN_LEAD_SAMPLE` 25), so event outreach fell back to all-bookings
 and says so. The local capacity config gives implausible spare-seat counts (Salon ~45 per night); check production's. Page checked
 by server render only (HTTP 200, cards present), not in a browser. Remaining: step 3, the campaigns log.
+
+
+## 2026-11-18 — special_nights.booked_on
+
+Kit's production check of step 2: only 19 parties of 8+ (< 25), so every "event outreach by" date was the all-bookings floor and
+just repeated the dining date. Fix at the source: migration 0027 adds nullable `special_nights.booked_on` (deposit paid / agreement
+signed). The Sales Plan's Add-night form has a "Booked on" date (disabled for closures; must be on or before the night), the table
+shows it ("not recorded" for existing rows), and the POST keeps a saved value when re-saved blank (`COALESCE`). Sales Strategy's
+event outreach = month start − P80 of (night − booked_on) over all dated non-closure nights once there are `MIN_EVENT_LEAD_SAMPLE`
+5; the lead-times card shows the figure and count, or how many more are needed. Verified locally with throwaway rows (5 events at
+20–100 days → P80 84 days → June outreach Mar 9; rows removed). Existing production nights have no booked_on: Kit has to re-add
+each (a blank re-save of other fields keeps it) before the figure appears. Also earlier today: buyout nights now use each area's
+real weekday pattern; future act-by chips are neutral, not a green check.

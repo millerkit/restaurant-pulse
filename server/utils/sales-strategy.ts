@@ -74,11 +74,14 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
   const lead = computeBookingLeadTimes(db)
   const shape = weekdayShape(db)
   const promoteLead = lead.available ? lead.all.p80Days : null
-  // Event and buyout lead time isn't recorded; large parties are the closest stand-in. Until there are
-  // enough of them, all bookings' lead time is a floor (events are booked earlier than a dinner for two).
+  // Event outreach lead time, best source first: real booked-on dates on dated events/buyouts (migration
+  // 0027), else large-party reservations as a stand-in, else all bookings as a floor (events are booked
+  // earlier than a dinner for two).
+  const eventLeads = computeEventLeadTimes(db)
   const eventLeadLarge = lead.available ? lead.large.p80Days : null
-  const eventLead = eventLeadLarge ?? promoteLead
-  const eventLeadBasis: 'large-parties' | 'all-bookings' | null = eventLead == null ? null : eventLeadLarge != null ? 'large-parties' : 'all-bookings'
+  const eventLead = eventLeads.p80Days ?? eventLeadLarge ?? promoteLead
+  const eventLeadBasis: 'booked-events' | 'large-parties' | 'all-bookings' | null = eventLead == null ? null
+    : eventLeads.p80Days != null ? 'booked-events' : eventLeadLarge != null ? 'large-parties' : 'all-bookings'
 
   const months = []
   for (let month = firstMonth; month <= 12; month++) {
@@ -190,6 +193,7 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
     todayIso: todayIso(),
     realisticFillPct: REALISTIC_FILL_PCT,
     leadTimes: lead,
+    eventLeadTimes: eventLeads,
     months
   }
 }

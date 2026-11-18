@@ -691,7 +691,7 @@ async function saveRevenue() {
 // nights. A backtest of Aug–Oct put the old method at 8.1% average month-end error vs.
 // 4.0–4.9% for this one once special nights are entered (see CLAUDE.md).
 type SpecialNightKind = 'buyout' | 'closed' | 'offsite' | 'event' | 'catering'
-type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null }
+type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, bookedOn?: string | null }
 const SPECIAL_KIND_LABEL: Record<SpecialNightKind, string> = {
   buyout: 'Buyout',
   closed: 'Closed',
@@ -760,7 +760,7 @@ async function loadSpecialNights() {
 onMounted(loadSpecialNights)
 watch(editMonth, loadSpecialNights)
 
-const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, eventAmount: string, note: string }>({ date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' })
+const newSpecial = ref<{ date: string, kind: SpecialNightKind, amount: string, eventAmount: string, note: string, bookedOn: string }>({ date: '', kind: 'buyout', amount: '', eventAmount: '', note: '', bookedOn: '' })
 function utcDow(iso: string) {
   return new Date(`${iso}T00:00:00Z`).getUTCDay()
 }
@@ -794,7 +794,7 @@ async function afterSpecialChange() {
   if (editMonth.value === asOfMonth) await loadNightlyProjection()
 }
 async function addSpecialNight() {
-  const { date, kind, amount, eventAmount, note } = newSpecial.value
+  const { date, kind, amount, eventAmount, note, bookedOn } = newSpecial.value
   if (!date) {
     specialStatus.value = 'error'
     specialMessage.value = 'Pick a date first.'
@@ -804,9 +804,9 @@ async function addSpecialNight() {
   try {
     await $fetch('/api/special-nights', {
       method: 'POST',
-      body: { date, kind, expectedRevenue: SPECIAL_USES_DINE_IN[kind] ? Math.max(0, parseEditableAmount(amount)) : 0, eventRevenue: SPECIAL_USES_EVENT[kind] ? Math.max(0, parseEditableAmount(eventAmount)) : 0, note }
+      body: { date, kind, expectedRevenue: SPECIAL_USES_DINE_IN[kind] ? Math.max(0, parseEditableAmount(amount)) : 0, eventRevenue: SPECIAL_USES_EVENT[kind] ? Math.max(0, parseEditableAmount(eventAmount)) : 0, note, bookedOn: bookedOn || null }
     })
-    newSpecial.value = { date: '', kind: 'buyout', amount: '', eventAmount: '', note: '' }
+    newSpecial.value = { date: '', kind: 'buyout', amount: '', eventAmount: '', note: '', bookedOn: '' }
     specialStatus.value = 'idle'
     specialMessage.value = ''
     await afterSpecialChange()
@@ -917,7 +917,7 @@ function formatNightDate(iso: string) {
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>
-              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Event revenue</th><th scope="col" class="num">Regular dine-in revenue</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
+              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Event revenue</th><th scope="col" class="num">Regular dine-in revenue</th><th scope="col">Booked on</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
             </thead>
             <tbody>
               <tr v-for="n in specialNights" :key="n.date">
@@ -925,6 +925,7 @@ function formatNightDate(iso: string) {
                 <td>{{ SPECIAL_KIND_LABEL[n.kind] }}</td>
                 <td class="num">{{ SPECIAL_USES_EVENT[n.kind] ? dollars(n.eventRevenue) : '—' }}</td>
                 <td class="num">{{ n.kind === 'catering' ? 'normal night' : dollars(n.expectedRevenue) }}</td>
+                <td class="note-cell">{{ n.kind === 'closed' ? '—' : n.bookedOn ? formatNightDate(n.bookedOn) : 'not recorded' }}</td>
                 <td class="note-cell">{{ n.note ?? '' }}</td>
                 <td><button class="mini-btn" :disabled="specialStatus === 'saving'" @click="removeSpecialNight(n.date)">Remove</button></td>
               </tr>
@@ -948,6 +949,10 @@ function formatNightDate(iso: string) {
                 :disabled="!SPECIAL_USES_DINE_IN[newSpecial.kind]" aria-label="Expected regular dine-in revenue"
               />
             </label>
+            <label class="special-field">
+              <span class="special-field-label">Booked on</span>
+              <input v-model="newSpecial.bookedOn" type="date" class="rate-input date-input" :max="newSpecial.date || undefined" aria-label="Date the job was booked (deposit paid or agreement signed)" :disabled="newSpecial.kind === 'closed'" />
+            </label>
             <input v-model="newSpecial.note" type="text" class="rate-input note-input" placeholder="Note (optional)" maxlength="200" aria-label="Note" />
             <button type="submit" class="mini-btn" :disabled="specialStatus === 'saving'">Add night</button>
             <span v-if="newSpecialIsMonday" class="chip warning">⚠ Mondays are already closed</span>
@@ -961,7 +966,7 @@ function formatNightDate(iso: string) {
             <template v-else-if="newSpecial.kind === 'offsite'"> No dinner service that night, so no dine-in revenue.</template>
             <template v-else-if="newSpecial.kind === 'catering'"> Catering runs alongside a normal night.</template>
           </div>
-          <div class="quiet-note small">Adding a date that's already listed replaces it.</div>
+          <div class="quiet-note small">Adding a date that's already listed replaces it (a blank "Booked on" keeps the one already saved). "Booked on" is when the deposit was paid or the agreement signed; Sales Strategy uses it to time event outreach.</div>
           <div class="section-note buyout-rates-row">
             <span>Buyout guaranteed minimum: Tue–Thu $</span>
             <input v-model="weekdayRateInput" type="text" inputmode="numeric" class="rate-input" aria-label="Tuesday to Thursday buyout minimum" />

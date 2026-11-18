@@ -19,7 +19,7 @@ type StrategyMonth = {
   bookedEvents: number, bookedBuyouts: number, bookedEventRevenue: number,
   focus: { weekday: string, area: string, nights: number, spareCoversPerNight: number, monthlyProfit: number }[],
   buyoutNights: { weekday: string, normalNightSales: number }[],
-  actBy: { promote: string | null, events: string | null, eventsBasis: 'large-parties' | 'all-bookings' | null }
+  actBy: { promote: string | null, events: string | null, eventsBasis: 'booked-events' | 'large-parties' | 'all-bookings' | null }
 }
 type LeadStat = { n: number, medianDays: number | null, p80Days: number | null }
 type LeadTimes =
@@ -31,7 +31,7 @@ type LeadTimes =
 type Strategy = {
   year: number, today: { year: number, month: number }, firstMonth: number, realisticLiftPct: number,
   avgEventSize: number | null, asOfDate: string | null, todayIso: string, realisticFillPct: number,
-  leadTimes: LeadTimes, months: StrategyMonth[]
+  leadTimes: LeadTimes, eventLeadTimes: LeadStat & { withoutDate: number }, months: StrategyMonth[]
 }
 
 const { year: selYear } = useBudgetYearSelection()
@@ -154,6 +154,8 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
                 <td>
                   <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}{{ m.actBy.eventsBasis === 'all-bookings' && (m.actBy.events ?? '') >= data.todayIso ? ' or earlier' : '' }}</span><span v-else>—</span>
                   <span v-if="m.actBy.eventsBasis === 'all-bookings'" class="ss-sub">at least; events book earlier</span>
+                  <span v-else-if="m.actBy.eventsBasis === 'large-parties'" class="ss-sub">from large-party bookings</span>
+                  <span v-else-if="m.actBy.eventsBasis === 'booked-events'" class="ss-sub">from your booked events</span>
                 </td>
                 <td>
                   <div v-for="f in m.focus" :key="f.weekday + f.area" class="ss-focus">
@@ -182,6 +184,8 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
           <div class="ss-summary">
             <span class="chip">Half book within {{ dayWord(data.leadTimes.all.medianDays) }}</span>
             <span class="chip">8 in 10 within {{ dayWord(data.leadTimes.all.p80Days) }}</span>
+            <span v-if="data.eventLeadTimes.p80Days != null" class="chip">Events and buyouts: 8 in 10 booked {{ dayWord(data.eventLeadTimes.p80Days) }} ahead ({{ data.eventLeadTimes.n }} booked)</span>
+            <span v-else class="chip quiet">Events and buyouts: {{ data.eventLeadTimes.n }} with a booked-on date, need 5 (add it on the Sales Plan)</span>
             <span v-if="data.leadTimes.large.p80Days != null" class="chip">Parties of {{ data.leadTimes.largePartyMinSize }}+: 8 in 10 within {{ dayWord(data.leadTimes.large.p80Days) }}</span>
             <span v-else class="chip quiet">Parties of {{ data.leadTimes.largePartyMinSize }}+: only {{ data.leadTimes.large.n }} so far, not enough to say</span>
           </div>
@@ -198,8 +202,8 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
           </table>
           <div class="ss-basis">
             From {{ data.leadTimes.all.n.toLocaleString() }} OpenTable reservations for visits {{ fmtDate(data.leadTimes.from) }} to {{ fmtDate(data.leadTimes.to) }} (walk-ins and cancellations left out; upload of {{ fmtDate(data.leadTimes.uploadDate) }}).
-            "Promote dining by" is the month's first night minus the days within which 8 in 10 bookings are made. Nothing records how far ahead an event or buyout is booked,
-            so event outreach uses parties of {{ data.leadTimes.largePartyMinSize }}+ when there are enough, otherwise all bookings as a floor.
+            "Promote dining by" is the month's first night minus the days within which 8 in 10 bookings are made. Event outreach uses the "booked on" dates entered for dated events and buyouts once there are 5;
+            until then, parties of {{ data.leadTimes.largePartyMinSize }}+ when there are enough, otherwise all bookings as a floor.
           </div>
         </template>
         <div v-else class="ss-basis">{{ data.leadTimes.reason }}</div>

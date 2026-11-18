@@ -367,7 +367,7 @@ needs events (with about-N-events at the typical event size) / not enough data. 
 **Step 2 (2026-11-18)**: an Action plan table for every month that isn't covered (booked events/buyouts → events still
 needed; "promote dining by" and "event outreach by" dates = month start minus the days within which 8 in 10 bookings are
 made, from `server/utils/booking-lead-times.ts`: OpenTable, walk-ins/cancellations out, past visits only; event outreach uses
-parties of 8+ when ≥ 25 exist, else all bookings as a floor, because event lead time isn't recorded anywhere; "where the room
+the `special_nights.booked_on` dates (migration 0027, entered on the Sales Plan; ≥ 5 events/buyouts) when there are enough, else parties of 8+ (≥ 25), else all bookings as a floor; "where the room
 is" = top 3 weekday × area slots by seats the forecast leaves empty up to `REALISTIC_FILL_PCT` 85%, weekday pattern from real
 area covers since the move, valued at profit per cover; best buyout nights = the quietest normal weekdays). Plus a "How far
 ahead guests book" card by source. **Not built yet** (step 3): the campaigns log and results vs. the frozen plan. See history.

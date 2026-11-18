@@ -70,3 +70,27 @@ export function computeBookingLeadTimes(db: Database.Database) {
     sources
   }
 }
+
+// How far ahead events, buyouts and catering jobs are actually booked: night date minus special_nights.booked_on
+// (migration 0027, entered on the Sales Plan). Only nights with a booked-on date count; closures never do.
+// Events are few, so the bar is lower than for reservations, and the count is shown beside the figure.
+export const MIN_EVENT_LEAD_SAMPLE = 5
+
+export function computeEventLeadTimes(db: Database.Database): LeadStat & { withoutDate: number } {
+  try {
+    const rows = db.prepare(`
+      SELECT date, booked_on AS bookedOn FROM special_nights WHERE kind <> 'closed'
+    `).all() as { date: string, bookedOn: string | null }[]
+    const leads = rows.filter(r => r.bookedOn).map(r => daysBetween(r.bookedOn!, r.date)).filter(n => n >= 0)
+    const s = [...leads].sort((a, b) => a - b)
+    const enough = s.length >= MIN_EVENT_LEAD_SAMPLE
+    return {
+      n: s.length,
+      medianDays: enough ? Math.round(percentile(s, 0.5)) : null,
+      p80Days: enough ? Math.round(percentile(s, 0.8)) : null,
+      withoutDate: rows.length - leads.length
+    }
+  } catch {
+    return { n: 0, medianDays: null, p80Days: null, withoutDate: 0 }
+  }
+}

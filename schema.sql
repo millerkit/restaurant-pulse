@@ -999,7 +999,10 @@ CREATE TABLE special_nights (
   expected_revenue REAL NOT NULL DEFAULT 0 CHECK (expected_revenue >= 0),
   event_revenue    REAL NOT NULL DEFAULT 0 CHECK (event_revenue >= 0),
   note             TEXT,
-  updated_at       TEXT NOT NULL
+  updated_at       TEXT NOT NULL,
+  -- booked_on (2026-11-18, migration 0027): when the event/buyout/catering job was booked (deposit paid or
+  -- agreement signed), YYYY-MM-DD, nullable. Sales Strategy's event outreach dates use date - booked_on.
+  booked_on        TEXT
 );
 
 -- Forecast snapshots (2026-11-11, server/utils/forecast-snapshots.ts). The forecast overwrites
