@@ -6558,3 +6558,15 @@ month reads "not enough data"); check it against production numbers after deploy
 (the local Basic Auth login couldn't be used). Remaining: step 2 (event targets vs. booked, booking-by dates from
 `reservations.created_at`, marketing focus from `reservations.source` and spare seats), step 3 (campaigns log, results vs.
 `forecast_snapshots` plan).
+
+
+## 2026-11-18 — Sales Strategy, step 2
+
+Added to `server/utils/sales-strategy.ts` and the page: booked events/buyouts per month (`special_nights`), act-by dates,
+room-to-grow slots and buyout nights, plus `server/utils/booking-lead-times.ts`. Choices: the Capacity forecast has one level per
+area per month with no weekday shape (every weekday tied), so the weekday pattern comes from real `daily_toast_area_metrics` since
+the move (normal nights, ≥ 3 per weekday, else index 1); `REALISTIC_FILL_PCT` 0.85 is a judgment call. Lead times use only visits
+before the upload date (upcoming visits hold only bookings made so far, which skews early). Locally: 2,712 usable reservations,
+median 10 days, 8 in 10 within 24; parties of 8+ were only 19 (< `MIN_LEAD_SAMPLE` 25), so event outreach fell back to all-bookings
+and says so. The local capacity config gives implausible spare-seat counts (Salon ~45 per night); check production's. Page checked
+by server render only (HTTP 200, cards present), not in a browser. Remaining: step 3, the campaigns log.

@@ -364,8 +364,13 @@ The Breakeven math for every open month of a year (`server/utils/sales-strategy.
 route is a thin wrapper, output verified byte-identical for all months). Each month is sorted at the **P&L line, after planned
 events & retail**: covered / more covers (lift ≤ `REALISTIC_LIFT_PCT` 10%, a judgment call, and within Capacity's max covers) /
 needs events (with about-N-events at the typical event size) / not enough data. Cash short (with loan principal) shown beside.
-**Not built yet** (steps 2–3): booking-by dates from `reservations.created_at`, marketing focus by weekday/area, the campaigns
-log and results vs. the frozen plan. See history.
+**Step 2 (2026-11-18)**: an Action plan table for every month that isn't covered (booked events/buyouts → events still
+needed; "promote dining by" and "event outreach by" dates = month start minus the days within which 8 in 10 bookings are
+made, from `server/utils/booking-lead-times.ts`: OpenTable, walk-ins/cancellations out, past visits only; event outreach uses
+parties of 8+ when ≥ 25 exist, else all bookings as a floor, because event lead time isn't recorded anywhere; "where the room
+is" = top 3 weekday × area slots by seats the forecast leaves empty up to `REALISTIC_FILL_PCT` 85%, weekday pattern from real
+area covers since the move, valued at profit per cover; best buyout nights = the quietest normal weekdays). Plus a "How far
+ahead guests book" card by source. **Not built yet** (step 3): the campaigns log and results vs. the frozen plan. See history.
 
 ## Cash & Loans Year-End Outlook
 

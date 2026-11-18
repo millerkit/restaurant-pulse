@@ -15,11 +15,23 @@ type StrategyMonth = {
   maxCoversPerNight: number | null, headroomPct: number | null, liftPct: number | null,
   coversNeededPerNight: number | null,
   eventSalesNeeded: number, eventsNeeded: number | null, plannedEventsRevenue: number,
-  nights: number, laborBudgeted: boolean
+  nights: number, laborBudgeted: boolean,
+  bookedEvents: number, bookedBuyouts: number, bookedEventRevenue: number,
+  focus: { weekday: string, area: string, nights: number, spareCoversPerNight: number, monthlyProfit: number }[],
+  buyoutNights: { weekday: string, normalNightSales: number }[],
+  actBy: { promote: string | null, events: string | null, eventsBasis: 'large-parties' | 'all-bookings' | null }
 }
+type LeadStat = { n: number, medianDays: number | null, p80Days: number | null }
+type LeadTimes =
+  | { available: false, reason: string }
+  | {
+    available: true, uploadDate: string, from: string, to: string, all: LeadStat, small: LeadStat, large: LeadStat,
+    largePartyMinSize: number, sources: { source: string, n: number, share: number, avgSize: number, medianLeadDays: number | null }[]
+  }
 type Strategy = {
   year: number, today: { year: number, month: number }, firstMonth: number, realisticLiftPct: number,
-  avgEventSize: number | null, asOfDate: string | null, months: StrategyMonth[]
+  avgEventSize: number | null, asOfDate: string | null, todayIso: string, realisticFillPct: number,
+  leadTimes: LeadTimes, months: StrategyMonth[]
 }
 
 const { year: selYear } = useBudgetYearSelection()
@@ -43,6 +55,11 @@ const counts = computed(() => {
   for (const m of data.value?.months ?? []) c[m.kind]++
   return c
 })
+// Dates read "Dec 8"; one already behind us means the window to reach that month has opened.
+const fmtDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+const actByView = (iso: string | null) => iso == null ? null : iso < (data.value?.todayIso ?? '') ? { cls: 'serious', text: `⚠ Start now (was ${fmtDate(iso)})` } : { cls: 'good', text: `✓ by ${fmtDate(iso)}` }
+const actionMonths = computed(() => (data.value?.months ?? []).filter(m => m.kind !== 'covered'))
+const dayWord = (n: number | null) => n == null ? '—' : `${n} day${n === 1 ? '' : 's'}`
 const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m) => s + (m.kind === 'events' ? (m.eventsNeeded ?? 0) : 0), 0))
 </script>
 
@@ -111,6 +128,83 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
         <div class="ss-basis"><NuxtLink to="/budget/revenue">Add events and buyouts on the Sales Plan →</NuxtLink></div>
       </section>
 
+      <section class="ss-card">
+        <div class="ss-title">Action plan — months that aren't covered</div>
+        <div v-if="actionMonths.length === 0" class="ss-basis">Every open month is covered at expected covers and planned events.</div>
+        <div v-else class="ss-scroll">
+          <table class="ss-table">
+            <thead>
+              <tr>
+                <td>month</td>
+                <td class="num">events<span class="ss-sub">booked → still needed</span></td>
+                <td>promote dining by<span class="ss-sub">to reach the month's bookers</span></td>
+                <td>event outreach by<span class="ss-sub">see note below</span></td>
+                <td>where the room is<span class="ss-sub">weekday · area · spare covers/night</span></td>
+                <td>best nights for a buyout<span class="ss-sub">quietest normal nights</span></td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in actionMonths" :key="m.month">
+                <td><strong>{{ MONTH_NAMES[m.month - 1] }}</strong></td>
+                <td class="num">
+                  {{ m.bookedEvents }} <template v-if="m.bookedBuyouts">+ {{ m.bookedBuyouts }} buyout{{ m.bookedBuyouts === 1 ? '' : 's' }}</template>
+                  → <strong>{{ m.eventsNeeded != null ? m.eventsNeeded : '—' }}</strong>
+                </td>
+                <td><span v-if="actByView(m.actBy.promote)" :class="['chip', actByView(m.actBy.promote)!.cls]">{{ actByView(m.actBy.promote)!.text }}</span><span v-else>—</span></td>
+                <td>
+                  <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}</span><span v-else>—</span>
+                  <span v-if="m.actBy.eventsBasis === 'all-bookings'" class="ss-sub">at least; events book earlier</span>
+                </td>
+                <td>
+                  <div v-for="f in m.focus" :key="f.weekday + f.area" class="ss-focus">
+                    <strong>{{ f.weekday }}</strong> · {{ f.area }} · {{ fmtCovers(f.spareCoversPerNight) }}
+                    <span class="ss-sub inline">about {{ fmtMoney(f.monthlyProfit) }} a month if filled</span>
+                  </div>
+                  <span v-if="m.focus.length === 0">—</span>
+                </td>
+                <td>
+                  <span v-for="(b, i) in m.buyoutNights" :key="b.weekday">{{ b.weekday }}{{ i < m.buyoutNights.length - 1 ? ', ' : '' }}</span>
+                  <span v-if="m.buyoutNights.length === 0">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ss-basis">
+          "Where the room is" is seats the forecast leaves empty, up to {{ pct(data.realisticFillPct) }} of a night's seats, by weekday (using each area's real weekday pattern since the move),
+          valued at profit per cover after food & drink cost, variable expenses and front-of-house hours. It is a ceiling for marketing to aim at, not a prediction of what a campaign delivers.
+        </div>
+      </section>
+
+      <section class="ss-card">
+        <div class="ss-title">How far ahead guests book</div>
+        <template v-if="data.leadTimes.available">
+          <div class="ss-summary">
+            <span class="chip">Half book within {{ dayWord(data.leadTimes.all.medianDays) }}</span>
+            <span class="chip">8 in 10 within {{ dayWord(data.leadTimes.all.p80Days) }}</span>
+            <span v-if="data.leadTimes.large.p80Days != null" class="chip">Parties of {{ data.leadTimes.largePartyMinSize }}+: 8 in 10 within {{ dayWord(data.leadTimes.large.p80Days) }}</span>
+            <span v-else class="chip quiet">Parties of {{ data.leadTimes.largePartyMinSize }}+: only {{ data.leadTimes.large.n }} so far, not enough to say</span>
+          </div>
+          <table class="ss-table">
+            <thead><tr><td>how they book</td><td class="num">share</td><td class="num">average party</td><td class="num">typical lead</td></tr></thead>
+            <tbody>
+              <tr v-for="src in data.leadTimes.sources" :key="src.source">
+                <td><strong>{{ src.source }}</strong></td>
+                <td class="num">{{ pct(src.share) }}</td>
+                <td class="num">{{ src.avgSize.toFixed(1) }}</td>
+                <td class="num">{{ dayWord(src.medianLeadDays) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="ss-basis">
+            From {{ data.leadTimes.all.n.toLocaleString() }} OpenTable reservations for visits {{ fmtDate(data.leadTimes.from) }} to {{ fmtDate(data.leadTimes.to) }} (walk-ins and cancellations left out; upload of {{ fmtDate(data.leadTimes.uploadDate) }}).
+            "Promote dining by" is the month's first night minus the days within which 8 in 10 bookings are made. Nothing records how far ahead an event or buyout is booked,
+            so event outreach uses parties of {{ data.leadTimes.largePartyMinSize }}+ when there are enough, otherwise all bookings as a floor.
+          </div>
+        </template>
+        <div v-else class="ss-basis">{{ data.leadTimes.reason }}</div>
+      </section>
+
       <div class="ss-foot">
         Each month is the Breakeven page's gap at the P&L line (fixed labor, kitchen crew and fixed opex, with labor at an average payroll month),
         using the Capacity forecast for covers and the saved budget for costs, events and retail. "Needs events" means the lift every night would need
@@ -138,6 +232,8 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
 .ss-table tbody td { padding: 7px 8px; border-top: 1px solid var(--hair); vertical-align: middle; }
 .ss-table .num { text-align: right; white-space: nowrap; }
 .ss-sub { display: block; font-size: 10.5px; color: var(--ink-3); font-weight: 400; margin-top: 1px; }
+.ss-focus { white-space: nowrap; }
+.ss-sub.inline { display: inline; margin-left: 4px; }
 .ss-foot { font-size: 11px; color: var(--ink-3); margin-bottom: 24px; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
 @media (max-width: 640px) {
