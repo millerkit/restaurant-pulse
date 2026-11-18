@@ -60,6 +60,60 @@ const fmtDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString
 const actByView = (iso: string | null) => iso == null ? null : iso < (data.value?.todayIso ?? '') ? { cls: 'serious', text: `⚠ Start now (was ${fmtDate(iso)})` } : { cls: '', text: `by ${fmtDate(iso)}` }
 const actionMonths = computed(() => (data.value?.months ?? []).filter(m => m.kind !== 'covered'))
 const dayWord = (n: number | null) => n == null ? '—' : `${n} day${n === 1 ? '' : 's'}`
+// ---- Campaigns (step 3) ----
+type Lift = { perNight: number, pct: number } | null
+type CampaignResult = {
+  status: 'upcoming' | 'running' | 'done', nights: number, beforeNights: number,
+  avgActual: number | null, avgBefore: number | null, avgPlan: number | null, vsBefore: Lift, vsPlan: Lift,
+  addedCovers: number | null, profitPerCover: number | null, addedProfit: number | null, net: number | null,
+  read: 'ahead' | 'flat' | 'behind' | 'mixed' | 'too-early'
+}
+type Campaign = {
+  id: number, name: string, channel: string, startDate: string, endDate: string,
+  targetDows: number[] | null, targetArea: string | null, cost: number, note: string | null, results: CampaignResult
+}
+type Campaigns = { campaigns: Campaign[], areas: string[], channels: string[], todayIso: string, minNights: number, flatBand: number }
+const { data: camp, refresh: refreshCampaigns } = await useFetch<Campaigns>('/api/campaigns', { lazy: true })
+
+const DOW_CHOICES = [{ dow: 2, label: 'Tue' }, { dow: 3, label: 'Wed' }, { dow: 4, label: 'Thu' }, { dow: 5, label: 'Fri' }, { dow: 6, label: 'Sat' }, { dow: 0, label: 'Sun' }]
+const blankCampaign = () => ({ name: '', channel: 'email', startDate: '', endDate: '', dows: [] as number[], area: '', cost: '', note: '' })
+const newCampaign = ref(blankCampaign())
+const campaignStatus = ref<'idle' | 'saving' | 'error'>('idle')
+const campaignMessage = ref('')
+async function addCampaign() {
+  const c = newCampaign.value
+  campaignStatus.value = 'saving'
+  try {
+    await $fetch('/api/campaigns', {
+      method: 'POST',
+      body: { name: c.name, channel: c.channel, startDate: c.startDate, endDate: c.endDate, targetDows: c.dows.length ? c.dows : null, targetArea: c.area || null, cost: Math.max(0, Number(String(c.cost).replace(/[$,\s]/g, '')) || 0), note: c.note }
+    })
+    newCampaign.value = blankCampaign()
+    campaignStatus.value = 'idle'
+    campaignMessage.value = ''
+    await refreshCampaigns()
+  } catch (err: unknown) {
+    campaignStatus.value = 'error'
+    campaignMessage.value = (err as { data?: { statusMessage?: string } })?.data?.statusMessage ?? 'Could not save that campaign.'
+  }
+}
+async function removeCampaign(c: Campaign) {
+  if (!window.confirm(`Remove "${c.name}"?`)) return
+  await $fetch('/api/campaigns', { method: 'DELETE', query: { id: c.id } })
+  await refreshCampaigns()
+}
+const READ: Record<CampaignResult['read'], { cls: string, text: string }> = {
+  'ahead': { cls: 'good', text: '✓ Ahead' },
+  'flat': { cls: 'warning', text: '▲ Flat' },
+  'mixed': { cls: 'warning', text: '▲ Mixed' },
+  'behind': { cls: 'serious', text: '⚠ Behind' },
+  'too-early': { cls: 'quiet', text: '— Too early' }
+}
+const liftText = (l: Lift) => l == null ? '—' : `${l.pct >= 0 ? '+' : '−'}${Math.round(Math.abs(l.pct) * 100)}%`
+const targetText = (c: Campaign) => {
+  const days = c.targetDows ? DOW_CHOICES.filter(d => c.targetDows!.includes(d.dow)).map(d => d.label).join(', ') : 'every night'
+  return `${days} · ${c.targetArea ?? 'whole restaurant'}`
+}
 const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m) => s + (m.kind === 'events' ? (m.eventsNeeded ?? 0) : 0), 0))
 </script>
 
@@ -209,6 +263,72 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
         <div v-else class="ss-basis">{{ data.leadTimes.reason }}</div>
       </section>
 
+      <section class="ss-card">
+        <div class="ss-title">Campaigns — what each push did</div>
+        <div v-if="camp && camp.campaigns.length === 0" class="ss-basis">No campaigns logged yet. Log one before it starts, and its result fills in as the nights go by.</div>
+        <div v-if="camp && camp.campaigns.length" class="ss-scroll">
+          <table class="ss-table">
+            <thead>
+              <tr>
+                <td>campaign</td>
+                <td class="num">nights<span class="ss-sub">measured</span></td>
+                <td class="num">covers/night<span class="ss-sub">during</span></td>
+                <td class="num">vs before<span class="ss-sub">same weekdays, prior 4 weeks</span></td>
+                <td class="num">vs plan<span class="ss-sub">frozen month plan</span></td>
+                <td class="num">extra profit<span class="ss-sub">estimate</span></td>
+                <td class="num">cost</td>
+                <td class="num">net</td>
+                <td>read</td>
+                <td><span class="visually-hidden">Remove</span></td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in camp.campaigns" :key="c.id">
+                <td>
+                  <strong>{{ c.name }}</strong>
+                  <span class="ss-sub">{{ c.channel }} · {{ fmtDate(c.startDate) }}–{{ fmtDate(c.endDate) }} · {{ targetText(c) }}</span>
+                  <span v-if="c.note" class="ss-sub">{{ c.note }}</span>
+                </td>
+                <td class="num">{{ c.results.nights }}<span v-if="c.results.status !== 'done'" class="ss-sub">{{ c.results.status === 'upcoming' ? 'not started' : 'still running' }}</span></td>
+                <td class="num">{{ fmtCovers(c.results.avgActual) }}</td>
+                <td class="num">{{ liftText(c.results.vsBefore) }}<span v-if="c.results.avgBefore != null" class="ss-sub">was {{ fmtCovers(c.results.avgBefore) }}</span></td>
+                <td class="num">{{ liftText(c.results.vsPlan) }}<span v-if="c.results.avgPlan != null" class="ss-sub">planned {{ fmtCovers(c.results.avgPlan) }}</span></td>
+                <td class="num">{{ c.results.addedProfit != null ? fmtMoney(c.results.addedProfit) : '—' }}<span v-if="c.results.addedCovers != null" class="ss-sub">{{ c.results.addedCovers >= 0 ? '+' : '−' }}{{ fmtCovers(Math.abs(c.results.addedCovers)) }} covers</span></td>
+                <td class="num">{{ fmtMoney(c.cost) }}</td>
+                <td class="num">{{ c.results.net != null ? fmtMoney(c.results.net) : '—' }}</td>
+                <td><span :class="['chip', READ[c.results.read].cls]">{{ READ[c.results.read].text }}</span></td>
+                <td><button type="button" class="mini-btn" @click="removeCampaign(c)">Remove</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <form v-if="camp" class="ss-form" @submit.prevent="addCampaign">
+          <input v-model="newCampaign.name" type="text" class="ss-input wide" placeholder="Campaign name" maxlength="80" aria-label="Campaign name" required />
+          <select v-model="newCampaign.channel" class="ss-input" aria-label="Channel">
+            <option v-for="ch in camp.channels" :key="ch" :value="ch">{{ ch }}</option>
+          </select>
+          <label class="ss-field">From <input v-model="newCampaign.startDate" type="date" class="ss-input" required /></label>
+          <label class="ss-field">to <input v-model="newCampaign.endDate" type="date" class="ss-input" :min="newCampaign.startDate || undefined" required /></label>
+          <span class="ss-field" role="group" aria-label="Target nights">
+            <label v-for="d in DOW_CHOICES" :key="d.dow" class="ss-check"><input v-model="newCampaign.dows" type="checkbox" :value="d.dow" /> {{ d.label }}</label>
+          </span>
+          <select v-model="newCampaign.area" class="ss-input" aria-label="Target area">
+            <option value="">Whole restaurant</option>
+            <option v-for="a in camp.areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <label class="ss-field">Cost $ <input v-model="newCampaign.cost" type="text" inputmode="numeric" class="ss-input narrow" placeholder="0" /></label>
+          <input v-model="newCampaign.note" type="text" class="ss-input wide" placeholder="Note (optional)" maxlength="200" aria-label="Note" />
+          <button type="submit" class="mini-btn" :disabled="campaignStatus === 'saving'">Add campaign</button>
+          <span v-if="campaignStatus === 'error'" class="chip warning">{{ campaignMessage }}</span>
+        </form>
+        <div class="ss-basis">
+          Tick the nights the push aims at (none = every service night) and pick an area if it targets one. Each result compares the targeted nights' real covers with the same weekdays in the
+          four weeks before it started and, for whole-restaurant campaigns, with the month's frozen plan. "Extra profit" is the extra covers (against "before", or the plan if there's no "before")
+          at profit per cover, so it ignores anything else that moved. It needs {{ camp?.minNights ?? 3 }} nights to read; ✓ and ⚠ need every comparison to clear ±{{ pct(camp?.flatBand ?? 0.05) }}.
+          Seasonality, weather, holidays and events also move covers, so treat a single campaign as a hint and several as a pattern.
+        </div>
+      </section>
+
       <div class="ss-foot">
         Each month is the Breakeven page's gap at the P&L line (fixed labor, kitchen crew and fixed opex, with labor at an average payroll month),
         using the Capacity forecast for covers and the saved budget for costs, events and retail. "Needs events" means the lift every night would need
@@ -236,7 +356,16 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
 .ss-table tbody td { padding: 7px 8px; border-top: 1px solid var(--hair); vertical-align: middle; }
 .ss-table .num { text-align: right; white-space: nowrap; }
 .ss-sub { display: block; font-size: 10.5px; color: var(--ink-3); font-weight: 400; margin-top: 1px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .ss-focus { white-space: nowrap; }
+.ss-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ss-input { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--hair); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.ss-input.wide { width: 200px; }
+.ss-input.narrow { width: 80px; }
+.ss-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-2); flex-wrap: wrap; }
+.ss-check { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; }
+.mini-btn { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--hair); border-radius: 8px; background: var(--surface-alt); color: var(--ink); cursor: pointer; }
+.mini-btn:disabled { opacity: 0.5; cursor: default; }
 .ss-sub.inline { display: inline; margin-left: 4px; }
 .ss-foot { font-size: 11px; color: var(--ink-3); margin-bottom: 24px; }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }

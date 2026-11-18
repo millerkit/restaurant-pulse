@@ -370,7 +370,11 @@ made, from `server/utils/booking-lead-times.ts`: OpenTable, walk-ins/cancellatio
 the `special_nights.booked_on` dates (migration 0027, entered on the Sales Plan; ≥ 5 events/buyouts) when there are enough, else parties of 8+ (≥ 25), else all bookings as a floor; "where the room
 is" = top 3 weekday × area slots by seats the forecast leaves empty up to `REALISTIC_FILL_PCT` 85%, weekday pattern from real
 area covers since the move, valued at profit per cover; best buyout nights = the quietest normal weekdays). Plus a "How far
-ahead guests book" card by source. **Not built yet** (step 3): the campaigns log and results vs. the frozen plan. See history.
+ahead guests book" card by source. **Step 3 (2026-11-18)**: a Campaigns card (`marketing_campaigns`, migration 0028; `server/utils/campaigns.ts`,
+`/api/campaigns` GET/POST/DELETE). Log a push (channel, dates, target weekdays, area, cost); its result compares the targeted
+nights' real covers with the same weekdays in the prior 4 weeks and, for whole-restaurant campaigns, the month's frozen
+`month_start` plan (per operating night × real weekday shape); extra profit = extra covers × profit per cover (Breakeven's, or the
+area's own spend). Needs 3 nights; ✓/⚠ only when every comparison clears ±5%. A comparison, not proof of cause. See history.
 
 ## Cash & Loans Year-End Outlook
 

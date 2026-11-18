@@ -6583,3 +6583,17 @@ event outreach = month start − P80 of (night − booked_on) over all dated non
 20–100 days → P80 84 days → June outreach Mar 9; rows removed). Existing production nights have no booked_on: Kit has to re-add
 each (a blank re-save of other fields keeps it) before the figure appears. Also earlier today: buyout nights now use each area's
 real weekday pattern; future act-by chips are neutral, not a green check.
+
+
+## 2026-11-18 — Sales Strategy, step 3: campaigns log
+
+`marketing_campaigns` (migration 0028) + `server/utils/campaigns.ts` + `/api/campaigns` (GET with results, POST add/update by id,
+DELETE ?id=) + a Campaigns card on Sales Strategy (add form, results table, remove; no edit UI, delete and re-add). Counted nights:
+not Monday, holiday, dated special night, or under 15 covers. "Before" = same-weekday counted nights in the 28 days before the
+start (≥ 3); "plan" = whole-restaurant only, `month_start` covers snapshot ÷ the month's operating nights × the weekday's share
+of an average night since the move, needs a snapshot for every measured night's month (snapshots start 2026-11-11, so campaigns
+before that read against "before" only). Per-area plans aren't snapshotted. Read = ahead/behind only when all available
+comparisons clear ±`FLAT_BAND` 5%, mixed/flat otherwise, too early under `MIN_CAMPAIGN_NIGHTS` 3. Verified locally with throwaway
+campaigns over Oct 13–Nov 1 real nights (whole restaurant Tue–Thu: +11% vs before; dining room Tue–Wed: +19%, extra profit
+computed from the area's spend); rows removed. Whole-restaurant profit per cover was blank locally (no recent core revenue) and the
+plan comparison blank (no local snapshots): neither exercised until production. Page checked by server render only.

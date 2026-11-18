@@ -1042,3 +1042,21 @@ CREATE TABLE home_summary_note (
   updated_at  TEXT NOT NULL,
   updated_by  TEXT
 );
+
+-- Marketing campaigns (2026-11-18, migration 0028, Sales Strategy step 3): one row per marketing push, entered on
+-- Planning > Sales Strategy. target_dows = comma-separated weekdays (0=Sun, 2..6; NULL = every service night),
+-- target_area = a capacity_areas name (NULL = whole restaurant). Results (server/utils/campaigns.ts) compare the
+-- targeted nights' real covers with the 4 same-weekday nights before it and, for whole-restaurant campaigns,
+-- the month's frozen plan (forecast_snapshots). A comparison, not proof of cause.
+CREATE TABLE marketing_campaigns (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT NOT NULL,
+  channel      TEXT NOT NULL,
+  start_date   TEXT NOT NULL,
+  end_date     TEXT NOT NULL,
+  target_dows  TEXT,
+  target_area  TEXT,
+  cost         REAL NOT NULL DEFAULT 0 CHECK (cost >= 0),
+  note         TEXT,
+  created_at   TEXT NOT NULL
+);
