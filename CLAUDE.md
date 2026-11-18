@@ -249,7 +249,7 @@ and profit views; the profit view leaves out Mondays and holiday closures unless
 Cost (`/kitchen-labor`), FOH Hours (`/foh-hours`, GM/Floor Manager; hours per person, no dollars; `server/utils/foh-hours-report.ts`, see "FOH Hours" below), Benefits Eligibility (`/staff-hours`). Money: Profit & Loss (`/pl`, month and year to date
 from QBO actuals via `/api/pl`), Budget Check (`/budget`), Cash & Loans (`/cashflow`), Forecast Accuracy (`/forecast-accuracy`, owner). Planning: Budget (`/budget/edit`), Sales Plan
 (`/budget/revenue`), Staffing Plan (`/budget/labor`), Capacity (`/capacity?tab=edit`), Breakeven
-(`/breakeven`, owner), What-If (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
+(`/breakeven`, owner), Sales Strategy (`/sales-strategy`, owner), What-If (`/revenue-modeling`). Settings (`/settings`, owner): targets and alert levels, restaurant setup (seats,
 turns, weekly area closures, holidays), staff and pay rules, people and access, connections, reservation
 upload, database updates.
 
@@ -356,6 +356,16 @@ not modeled. By-weekday: every night grows by the same % over expected covers (t
 retail / dine-in only). **Payroll** (2026-11-17): labor defaults to an *average payroll month* (wages, OT and
 their payroll taxes × the year's paychecks ÷ 12 ÷ the month's Fridays; benefits and flat pay unchanged);
 "This month's N paychecks" (`?payroll=month`) is the cash view the Budget and Cash & Loans use. See history.
+
+## Sales Strategy (Planning › Sales Strategy, `/sales-strategy`, owner-only) — step 1 built 2026-11-18
+
+The Breakeven math for every open month of a year (`server/utils/sales-strategy.ts`, `server/api/sales-strategy.get.ts`,
+`app/pages/sales-strategy.vue`). The Breakeven calculation now lives in `server/utils/breakeven.ts` (`computeBreakeven`; the
+route is a thin wrapper, output verified byte-identical for all months). Each month is sorted at the **P&L line, after planned
+events & retail**: covered / more covers (lift ≤ `REALISTIC_LIFT_PCT` 10%, a judgment call, and within Capacity's max covers) /
+needs events (with about-N-events at the typical event size) / not enough data. Cash short (with loan principal) shown beside.
+**Not built yet** (steps 2–3): booking-by dates from `reservations.created_at`, marketing focus by weekday/area, the campaigns
+log and results vs. the frozen plan. See history.
 
 ## Cash & Loans Year-End Outlook
 

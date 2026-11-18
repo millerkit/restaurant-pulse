@@ -6543,3 +6543,18 @@ kitchen $60,005 -> $53,004, FOH $19,089 -> $16,862; $17,125 of timing, so P&L "s
 Four-paycheck months move the other way (February 2027 +$12,055 of labor). Budget, Cash & Loans and the labor
 forecast are unchanged. Verified with production numbers via a read-only script and in the browser with a mocked
 production-shaped response (local data has no recent revenue, so the page shows "Not enough data yet" locally).
+
+
+## 2026-11-18 — Sales Strategy, step 1
+
+Design (Kit's ask: use the 2027 breakeven for sales plan recommendations, marketing focus and targeted event months):
+gap by month → which levers are realistic → actions, in three steps. Step 1 built: `computeBreakeven(db, year, month, payrollMode)`
+moved from the route into `server/utils/breakeven.ts` (helper named `restaurantYearMonth`, not `localToday`, which collides with
+`boh-hours-report.ts` in Nitro's auto-imports); `/api/breakeven` output compared for 2026/2027 × 12 months × both payroll modes
+before and after: identical. New `/api/sales-strategy` + Planning › Sales Strategy page (nav entry after Breakeven, owner-only by
+default deny). Classification needs the lift at the P&L line after events (`liftPct.withOther`) vs. `REALISTIC_LIFT_PCT` and the
+Capacity model's max covers per night. **Local data is too thin to exercise the classification** (no recent core revenue, so every
+month reads "not enough data"); check it against production numbers after deploy. The page's rendering was not checked in a browser
+(the local Basic Auth login couldn't be used). Remaining: step 2 (event targets vs. booked, booking-by dates from
+`reservations.created_at`, marketing focus from `reservations.source` and spare seats), step 3 (campaigns log, results vs.
+`forecast_snapshots` plan).
