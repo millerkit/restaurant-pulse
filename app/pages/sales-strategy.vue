@@ -57,7 +57,7 @@ const counts = computed(() => {
 })
 // Dates read "Dec 8"; one already behind us means the window to reach that month has opened.
 const fmtDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-const actByView = (iso: string | null) => iso == null ? null : iso < (data.value?.todayIso ?? '') ? { cls: 'serious', text: `⚠ Start now (was ${fmtDate(iso)})` } : { cls: 'good', text: `✓ by ${fmtDate(iso)}` }
+const actByView = (iso: string | null) => iso == null ? null : iso < (data.value?.todayIso ?? '') ? { cls: 'serious', text: `⚠ Start now (was ${fmtDate(iso)})` } : { cls: '', text: `by ${fmtDate(iso)}` }
 const actionMonths = computed(() => (data.value?.months ?? []).filter(m => m.kind !== 'covered'))
 const dayWord = (n: number | null) => n == null ? '—' : `${n} day${n === 1 ? '' : 's'}`
 const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m) => s + (m.kind === 'events' ? (m.eventsNeeded ?? 0) : 0), 0))
@@ -152,7 +152,7 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
                 </td>
                 <td><span v-if="actByView(m.actBy.promote)" :class="['chip', actByView(m.actBy.promote)!.cls]">{{ actByView(m.actBy.promote)!.text }}</span><span v-else>—</span></td>
                 <td>
-                  <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}</span><span v-else>—</span>
+                  <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}{{ m.actBy.eventsBasis === 'all-bookings' && (m.actBy.events ?? '') >= data.todayIso ? ' or earlier' : '' }}</span><span v-else>—</span>
                   <span v-if="m.actBy.eventsBasis === 'all-bookings'" class="ss-sub">at least; events book earlier</span>
                 </td>
                 <td>

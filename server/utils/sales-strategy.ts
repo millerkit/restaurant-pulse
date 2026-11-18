@@ -116,10 +116,16 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
     for (let d = start; d <= end; d = addDaysIso(d, 1)) {
       const dow = new Date(`${d}T00:00:00Z`).getUTCDay()
       if (dow === 1 || model.replaced.has(d)) continue
-      const night = model.nightlyExpectedOn(d)
-      if (night.revenue > 0) {
+      // The night's expected sales with each area's real weekday pattern applied (the forecast alone has
+      // none, so the quietest nights would just be whichever areas are closed).
+      let nightRevenue = 0
+      for (const area of model.areas) {
+        const e = model.areaExpectedOn(area, d)
+        if (e) nightRevenue += e.covers * (shape.get(`${dow}:${area.id}`) ?? 1) * (area.per_cover_revenue_food + area.per_cover_revenue_beverage)
+      }
+      if (nightRevenue > 0) {
         const agg = dowRevenue.get(dow) ?? { total: 0, n: 0 }
-        dowRevenue.set(dow, { total: agg.total + night.revenue, n: agg.n + 1 })
+        dowRevenue.set(dow, { total: agg.total + nightRevenue, n: agg.n + 1 })
       }
       if (be.contribRate == null) continue
       for (const area of model.areas) {
