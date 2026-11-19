@@ -230,7 +230,8 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
             <thead>
               <tr>
                 <td>month</td>
-                <td class="num">booked<span class="ss-sub">events · buyouts</span></td>
+                <td class="num">events<span class="ss-sub">booked</span></td>
+                <td class="num">buyouts<span class="ss-sub">booked</span></td>
                 <td>promote dining by<span class="ss-sub">to reach the month's bookers</span></td>
                 <td>event outreach by<span class="ss-sub">see note below</span></td>
                 <td>where the room is<span class="ss-sub">weekday · area · spare covers/night</span></td>
@@ -240,9 +241,8 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
             <tbody>
               <tr v-for="m in actionMonths" :key="m.month">
                 <td><strong>{{ MONTH_NAMES[m.month - 1] }}</strong></td>
-                <td class="num">
-                  {{ m.bookedEvents }} · {{ m.bookedBuyouts }}
-                </td>
+                <td class="num">{{ m.bookedEvents }}</td>
+                <td class="num">{{ m.bookedBuyouts }}</td>
                 <td><span v-if="actByView(m.actBy.promote)" :class="['chip', actByView(m.actBy.promote)!.cls]">{{ actByView(m.actBy.promote)!.text }}</span><span v-else>—</span></td>
                 <td>
                   <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}{{ m.actBy.eventsBasis === 'all-bookings' && (m.actBy.events ?? '') >= data.todayIso ? ' or earlier' : '' }}</span><span v-else>—</span>
