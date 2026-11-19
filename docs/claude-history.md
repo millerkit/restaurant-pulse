@@ -6613,3 +6613,15 @@ synced (Tuesdays). Kitchen/Floor: This Week link moved to the this-week block; l
 by running the builder as owner and kitchen for Nov 2/3/4/6 (local Toast data ends Nov 4; QBO ends Jul 28, so the sales
 sentences weren't exercised locally) and by screenshots at desktop and phone width with the API temporarily back-dated.
 Typecheck unchanged (282). A "Hydration completed but contains mismatches" console warning on `/` predates this change.
+
+## 2026-11-19 — Home › Summary: sales vs. goal leads each week
+
+Kit, on "So far this week, dine-in sales are 30% ahead of goal, though guest counts are 14% behind expected": if sales meet the
+goal, guest counts don't matter; only explain a shortfall. Facts now carry `salesSide` (a guest/spend concern), `calm` (neutral
+wording when sales are fine) and `reason` (a clause explaining a shortfall). When a week's sales fact (`sales` / `tw-sales`) is
+good or neutral, its `salesSide` concerns are replaced by `calm` (guest counts become "N guests over K nights") or dropped
+(quiet night, lower spend). When sales are short, the headline is "A slower start to the week:" / "A quieter week:" + the sales
+clause + ", with " + the reasons (guest counts behind, lower spend per guest). Closures aren't a reason: closed nights are
+already left out of the goal. Good-news headlines put sales first. This week also gained a spend-per-guest fact (≥ 2 regular
+nights) so a shortfall can be explained by spend. Roles without the sales fact (Sous Chef, Floor Manager) are unchanged.
+Verified locally on in-memory copies of the database trimmed to Jul 3/10/17/24/29 (owner) and Jul 24 (kitchen).

@@ -39,6 +39,12 @@ type Fact = {
   text: string
   roles: Role[]
   headline?: string // short clause for the headline, lower case ("guest counts were up 7%")
+  // Week concerns about guests or spend (2026-11-19, Kit): they only matter when dine-in sales miss
+  // the goal. Sales on or above goal → `calm` replaces the sentence (neutral), or it is dropped when
+  // there's no calm version. Sales short → `reason` explains the shortfall in the headline.
+  salesSide?: boolean // a guest/spend concern that only matters when sales miss the goal
+  reason?: string
+  calm?: string
   primary?: boolean // a section's main fact (sales vs. goal, guest counts, profit); listed before details of the same tone
   order?: number // Looking ahead keeps its own order (soonest first)
 }
@@ -302,7 +308,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       if (chg >= STEADY_PCT) {
         facts.push({ id: 'covers', primary: true, section: 'week', tone: 'good', weight: chg, roles: ALL, text: `Guest counts were up ${pctWhole(chg)} on the past four weeks, with ${over}.`, headline: `guest counts were up ${pctWhole(chg)}` })
       } else if (chg <= -STEADY_PCT) {
-        facts.push({ id: 'covers', primary: true, section: 'week', tone: 'concern', weight: -chg, roles: ALL, text: `Guest counts came in ${pctWhole(chg)} below the past four weeks, at ${over}.`, headline: `guest counts were ${pctWhole(chg)} below recent weeks` })
+        facts.push({ id: 'covers', primary: true, section: 'week', tone: 'concern', weight: -chg, roles: ALL, text: `Guest counts came in ${pctWhole(chg)} below the past four weeks, at ${over}.`, headline: `guest counts were ${pctWhole(chg)} below recent weeks`, salesSide: true, reason: `guest counts ${pctWhole(chg)} below recent weeks`, calm: `Guest counts came in at ${over}.` })
       } else {
         facts.push({ id: 'covers', primary: true, section: 'week', tone: 'neutral', weight: 0, roles: ALL, text: `Guest counts held steady at ${over}, in line with the past four weeks.` })
       }
@@ -322,7 +328,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
         const off = quiet.covers! / quiet.coversTarget! - 1
         if (off <= -0.1) {
           facts.push({
-            id: 'quiet', section: 'week', tone: 'concern', weight: -off, roles: ALL,
+            id: 'quiet', section: 'week', tone: 'concern', weight: -off, roles: ALL, salesSide: true,
             text: `${weekdayName(quiet.date)} was quieter than usual, with ${quiet.covers} guests against a typical ${Math.round(quiet.coversTarget!)}.`
           })
         }
@@ -352,7 +358,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
         const spend = spendNights.reduce((s, n) => s + n.core!, 0) / spendNights.reduce((s, n) => s + n.covers!, 0)
         const chg = spend / typical - 1
         if (chg >= 0.04) facts.push({ id: 'spend', section: 'week', tone: 'good', weight: chg, roles: MONEY, text: `Guests spent about ${money(spend)} each, up from a typical ${money(typical)}.`, headline: 'guests spent more per visit' })
-        else if (chg <= -0.04) facts.push({ id: 'spend', section: 'week', tone: 'concern', weight: -chg, roles: MONEY, text: `Spend per guest eased to about ${money(spend)}, from a typical ${money(typical)}.`, headline: 'spend per guest dipped' })
+        else if (chg <= -0.04) facts.push({ id: 'spend', section: 'week', tone: 'concern', weight: -chg, roles: MONEY, text: `Spend per guest eased to about ${money(spend)}, from a typical ${money(typical)}.`, headline: 'spend per guest dipped', salesSide: true, reason: 'lower spend per guest' })
         else facts.push({ id: 'spend', section: 'week', tone: 'neutral', weight: 0, roles: MONEY, text: `Spend per guest held steady at about ${money(spend)}.` })
       }
     }
@@ -381,7 +387,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       const r = guests / expected - 1
       const over = `${guests.toLocaleString()} guests over ${judged.length} regular night${judged.length === 1 ? '' : 's'} so far`
       if (r >= STEADY_PCT) facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'good', weight: r, roles: ALL, text: `${cap(over)}, ${pctWhole(r)} more than expected for those nights.`, headline: `guest counts are ${pctWhole(r)} ahead of expected` })
-      else if (r <= -STEADY_PCT) facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'concern', weight: -r, roles: ALL, text: `${cap(over)}, ${pctWhole(r)} fewer than expected for those nights.`, headline: `guest counts are ${pctWhole(r)} behind expected` })
+      else if (r <= -STEADY_PCT) facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'concern', weight: -r, roles: ALL, text: `${cap(over)}, ${pctWhole(r)} fewer than expected for those nights.`, headline: `guest counts are ${pctWhole(r)} behind expected`, salesSide: true, reason: `guest counts ${pctWhole(r)} behind expected`, calm: `${cap(over)}.` })
       else facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'neutral', weight: 0, roles: ALL, text: `${cap(over)}, about what’s expected for those nights.` })
     }
 
@@ -398,6 +404,15 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
         if (diff >= 0.02) facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'good', weight: diff, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, ${pctWhole(diff)} above the ${money(goal)} goal for those nights.`, headline: `dine-in sales are ${pctWhole(diff)} ahead of goal` })
         else if (diff > -STEADY_PCT) facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'neutral', weight: 0, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, close to the ${money(goal)} goal for those nights.` })
         else facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'concern', weight: -diff, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, about ${pctWhole(diff)} short of the ${money(goal)} goal for those nights.`, headline: `dine-in sales are about ${pctWhole(diff)} behind goal` })
+      }
+      // Spend per guest on regular nights so far (two or more), mainly to explain a sales shortfall.
+      const spendNights = past.filter(n => n.kind === 'ordinary' && (n.core ?? 0) > 0 && (n.covers ?? 0) > 0)
+      const typical = weekly.forDate(thisStart).avgSpendPerCover
+      if (spendNights.length >= 2 && typical) {
+        const spend = spendNights.reduce((s, n) => s + n.core!, 0) / spendNights.reduce((s, n) => s + n.covers!, 0)
+        const chg = spend / typical - 1
+        if (chg >= 0.04) facts.push({ id: 'tw-spend', section: 'thisweek', tone: 'good', weight: chg, roles: MONEY, text: `Guests are spending about ${money(spend)} each, up from a typical ${money(typical)}.`, headline: 'guests are spending more per visit' })
+        else if (chg <= -0.04) facts.push({ id: 'tw-spend', section: 'thisweek', tone: 'concern', weight: -chg, roles: MONEY, text: `Spend per guest is about ${money(spend)}, below a typical ${money(typical)}.`, headline: 'spend per guest is down', salesSide: true, reason: 'lower spend per guest' })
       }
     }
 
@@ -592,7 +607,19 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
   }
 
   // ---- Role filter FIRST, then everything is assembled from what's left ----
-  const visible = facts.filter(f => f.roles.includes(role))
+  const roleFacts = facts.filter(f => f.roles.includes(role))
+  // Sales first (Kit, 2026-11-19): when a week's dine-in sales are on or above goal, all is good, so
+  // its guest and spend concerns are calmed or dropped. Only roles that see the sales fact are affected.
+  const SALES_FACT: Record<'thisweek' | 'week', string> = { thisweek: 'tw-sales', week: 'sales' }
+  const salesOk = (section: SectionKey) => {
+    if (section !== 'thisweek' && section !== 'week') return false
+    const sf = roleFacts.find(f => f.id === SALES_FACT[section])
+    return !!sf && sf.tone !== 'concern'
+  }
+  const visible: Fact[] = roleFacts.flatMap((f) => {
+    if (f.tone !== 'concern' || !f.salesSide || !salesOk(f.section)) return [f]
+    return f.calm ? [{ ...f, tone: 'neutral' as const, weight: 0, text: f.calm, headline: undefined }] : []
+  })
   const toneRank: Record<Tone, number> = { good: 0, neutral: 1, concern: 2 }
   const sorted = (key: SectionKey) => visible
     .filter(f => f.section === key)
@@ -610,10 +637,18 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
     .map(s => ({ ...s, items: sorted(s.key).map(f => ({ tone: f.tone, text: f.text })) }))
     .filter(s => s.items.length > 0)
 
-  // Headlines: the biggest good news first, then the biggest concern, from that week's facts only.
+  // Headlines. With a sales fact (owner, GM): sales vs. goal leads; on/above goal it's good news only,
+  // short of goal it is explained by the week's reasons (fewer guests, lower spend). Without one
+  // (Sous Chef, Floor Manager): the biggest good news first, then the biggest concern.
   const headlineFor = (key: 'thisweek' | 'week') => {
+    const sales = visible.find(f => f.id === SALES_FACT[key])
+    if (sales?.tone === 'concern') {
+      const reasons = visible.filter(f => f.section === key && f.tone === 'concern' && f.reason).sort((a, b) => b.weight - a.weight).map(f => f.reason!)
+      const why = reasons.length ? `, with ${listJoin(reasons)}` : ''
+      return key === 'thisweek' ? `A slower start to the week: ${sales.headline}${why}.` : `A quieter week: ${sales.headline}${why}.`
+    }
     const hs = visible.filter(f => f.section === key && f.headline)
-    const good = hs.filter(f => f.tone === 'good').sort((a, b) => b.weight - a.weight)
+    const good = hs.filter(f => f.tone === 'good').sort((a, b) => Number(b === sales) - Number(a === sales) || b.weight - a.weight)
     const concern = hs.filter(f => f.tone === 'concern').sort((a, b) => b.weight - a.weight)
     if (key === 'thisweek') {
       if (good[0] && concern[0]) return `So far this week, ${good[0].headline}, though ${concern[0].headline}.`

@@ -293,6 +293,9 @@ cost % (5010+5220 over all food sales, vs. plan, else the month before), never d
 closed, fully synced month. Booking sentences only from a fresh OpenTable upload. Owner's reserve figures come from
 calling the Cash & Loans handler directly. Stale Toast/QBO data adds a "Data note" and drops the affected sentences.
 This week is judged against the same nights' goals (sales) and each weekday's expected guests, not the past four weeks.
+**Sales first** (Kit, 2026-11-19): for owner/GM a week's headline leads with dine-in sales vs. goal. On or above goal, all is
+good: guest-count/spend/quiet-night concerns (`salesSide` facts) become a plain count or are dropped. Short of goal, the
+headline explains why ("…, with guest counts 14% behind expected and lower spend per guest"). Kitchen/Floor keep the guests-based headline.
 
 ## FOH Hours (Team › FOH Hours, `/foh-hours`) — built 2026-11-17
 
