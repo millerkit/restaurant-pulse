@@ -156,7 +156,8 @@ the nightly sync, after any input save, and lazily on page load (`refreshForecas
 - **Capacity drivers** (Planning › Capacity): per-area **spend per guest** = the area's real Toast blend
   over the two most recently closed, fully synced months (≥ 30 covers), updated at month close.
   **Expected covers per night** for every month that hasn't started = Cambridge St's de-seasonalized demand
-  level (`coversPerNightLevel`, covers per regular night since the move) × that month's covers index, split
+  level (`coversPerNightLevel`, covers per regular night since the move, **full months only** (≥ 15 regular nights;
+the June 2026 opening nights are out, 2026-11-19)) × that month's covers index, split
   across areas in proportion to capacity × each area's real fill rate (capped; demand, not seats: Outdoor's
   winter closure moves guests indoors). The **covers index** (`server/utils/capacity-history.ts`, rebuilt
   2026-11-17): regular nights only (location's own service nights, no holidays/special nights/party nights

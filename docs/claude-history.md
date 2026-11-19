@@ -6645,3 +6645,28 @@ covers lift / buyouts / still to find; the at-a-glance card totals events, buyou
 own `avgEventSize` (incl. catering) is unchanged. Checked the ladder against the 2027 production screenshot's numbers (e.g.
 Jan: event $10.2K + 10% covers $11.6K + 2 buyouts → covered; Nov: $8.6K still to find); local data has no 2027 forecast, so
 the page was only checked rendering, not with real rows.
+
+## 2026-11-19 — Cambridge St demand level uses full months only
+
+Kit noticed the Seasonal Trends covers index runs a few points higher at Cambridge St (Aug–Nov 2026) than at
+Mass Ave in 2025 and asked whether the Capacity forecast underestimates covers. Findings:
+- The two columns aren't comparable. 2025 months are measured against a full centered year (which includes
+  the busy May/June/January), so Jul–Nov 2025 average ~95%. Cambridge St has no full year yet, so its
+  months are measured against its own average so far (mostly Jul–Nov) and average ~100% by construction.
+  Rescaled to the same footing the shapes are close; the one real difference is October (94 vs 101), which
+  four months can't separate from the opening ramp-up. Left alone: Cambridge St joins the index
+  automatically once it has 12 full months (mid-2027).
+- The Mass Ave shape doesn't set the overall level: the level is Cambridge St's real covers ÷ the index, so
+  a too-low fall index would raise the level and compensate.
+- But the level **was** ~3% low. The 9 opening nights of June 2026 (87 covers/night) were divided by June's
+  index (~125, a single strong Mass Ave June 2025), counting as ~70/night of demand; the first nights of
+  the month in progress pulled it down too. Fitted Jul–Oct covers came out 2.9% below actual.
+- Fix (`loadCapacityHistory`, `server/utils/capacity-history.ts`): only nights in full location-months
+  (`MIN_NIGHTS_FOR_FULL_MONTH` = 15 regular nights, the index's own rule) count toward the level.
+  Local data (Toast through 2026-11-04): level 88.5 → 91.1; fitted Jul–Oct now matches actual covers in
+  total (Jul −0.2%, Aug −0.1%, Sep +6.0%, Oct −4.6%). After `refreshForecasts`, budgeted food + beverage
+  sales (4010, 4022–4028) Dec 2026–Dec 2027 rose 2.0–3.4% a month, $2,611,760 → $2,669,999 (Nov 2027
+  reuses the frozen current-month row, unchanged; pinned Chef's Counter covers and capacity caps damp
+  some months). A month in progress now counts once it reaches 15 regular nights.
+- Still worth watching: June's ~125 index comes from one Mass Ave year and pushes June 2027 to ~111
+  covers/night before Cambridge St has its own June.

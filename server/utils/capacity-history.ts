@@ -205,10 +205,14 @@ export function loadCapacityHistory(db: Db) {
   // for a month is this level × that month's index. Demand, not seats: November (no outdoor
   // seating) ran about as busy as October, so the forecast no longer scales covers with each
   // month's capacity.
+  // Full months only (MIN_NIGHTS_FOR_FULL_MONTH, the same rule as the index): the 9 opening
+  // nights of June 2026 divided by June's Mass Ave-driven index (~125) counted as ~70/night of
+  // demand and pulled the level ~3% low, as did the first few nights of a month in progress.
   let levelCovers = 0
   let levelIndex = 0
   for (const n of nights) {
     if (n.loc !== 'cambridgeSt' || !n.regular) continue
+    if (!isFull(stats.get(`${n.loc}:${n.ym}`))) continue
     const idx = monthlyIndex[Number(n.date.slice(5, 7)) - 1]?.indexPct
     if (idx == null) continue
     levelCovers += n.covers
