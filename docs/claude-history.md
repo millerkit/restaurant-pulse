@@ -6670,3 +6670,31 @@ Mass Ave in 2025 and asked whether the Capacity forecast underestimates covers. 
   some months). A month in progress now counts once it reaches 15 regular nights.
 - Still worth watching: June's ~125 index comes from one Mass Ave year and pushes June 2027 to ~111
   covers/night before Cambridge St has its own June.
+
+## 2026-11-19 — Sales Strategy: annual plan card, simpler action plan, buyouts on any night
+
+Kit wanted a full-year, not month-specific, scenario for closing the 2027 budget gap (net income −$107K, −$283K after
+$176K of loan principal) with extra special events ($150–250K), buyouts (about 1.5 a month), retail ($3–4K a month) and
+more guests in the Chef's Counter, dining room, bar and salon. A one-off analysis from production data came first (low /
+middle / high: +$199K / +$288K / +$359K of profit; the middle case covers principal by about $5K), then this card so the
+owners can try their own numbers.
+
+- `server/utils/annual-sales-plan.ts` (`computeAnnualPlan`): the year's leaf budget by category (net income matches the
+  Budget page's Total tab), loan principal from `loan_schedule`, the Capacity model walked over every normal night of the
+  year (Mondays and replaced nights out) for each area's expected covers, seats and open nights, the average forecast
+  night (what a buyout displaces), and the Breakeven contribution rate (first month that has one) as the dine-in % kept.
+  Saved inputs merge over defaults so a new area gets 0. `validateAnnualPlanInputs` bounds every number.
+- `/api/sales-strategy/annual` GET and POST (`{ year, inputs }` saves; `{ year, reset: true }` deletes the row). Owner-only by
+  default deny. Migration 0029 adds `annual_sales_plan` (year, inputs JSON, updated_at, updated_by).
+- `AnnualSalesPlan.vue`: inputs per source, added sales, % kept, profit; per-area rows show expected vs seats and flag
+  ▲ over 85% full / ⚠ over the seats; outcome line for total sales, net income and after principal (✓ covers principal,
+  ▲ profitable but short of principal, ⚠ still a loss); Save, Undo changes, Back to defaults.
+- Buyouts on any night (Kit: "we're thrilled to book any day"): both the card and the monthly ladder now value a buyout
+  as the average rate (Tue–Thu weekday, Fri–Sun weekend) minus the average forecast night, instead of the best weekday.
+  At $10K/$12K against 2027's ~$8.6K average forecast night that's only ~$2.4K of extra sales each, much less than on a
+  quiet Tuesday or Sunday: a reason to revisit buyout minimums. Production has no `buyout_rates` row (defaults in use).
+- Action plan simplified: kept events booked and buyouts booked (separate columns), merged the two outreach dates into
+  one "reach out by" (the earlier), removed "where the room is" (weekday × area slots) and "best nights for a buyout".
+  The weekday-shape helper and `REALISTIC_FILL_PCT` went with them.
+- Verified locally: the API, the card rendering, save and reset against the local DB; local has only a partial 2027
+  budget, so the real figures show only in production.

@@ -1060,3 +1060,13 @@ CREATE TABLE marketing_campaigns (
   note         TEXT,
   created_at   TEXT NOT NULL
 );
+
+-- Annual sales plan (2026-11-19, migration 0029): the owners' saved inputs for Planning > Sales Strategy's full-year
+-- scenario card (extra event sales, buyouts and their price, retail per month, extra covers per night by area, and the
+-- share of each kept as profit). One row per year; inputs is JSON (server/utils/annual-sales-plan.ts). No row = defaults.
+CREATE TABLE annual_sales_plan (
+  year        INTEGER PRIMARY KEY,
+  inputs      TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  updated_by  TEXT
+);

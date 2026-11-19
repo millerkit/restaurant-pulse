@@ -372,14 +372,19 @@ route is a thin wrapper, output verified byte-identical for all months). Each mo
 events & retail** is closed by a ladder (`planMonthGap`, Kit 2026-11-19: **at most one special event a month**, `MAX_EVENTS_PER_MONTH`;
 catering is separate and doesn't count): covers alone if the lift is ≤ `REALISTIC_LIFT_PCT` 10% and within Capacity's max covers;
 else one on-site/off-site event at the typical size (skipped if one is dated), covers up to 10%, up to `MAX_BUYOUTS_PER_MONTH` 2
-buyouts (less any dated) on the weekday where buyout rate − forecast normal night is largest, and the rest is "still to find"
-(catering, retail or a bigger lift). Kinds: covered / dine-in / event / buyouts / gap / no-data. Cash short (with loan principal) beside.
-**Step 2 (2026-11-18)**: an Action plan table for every month that isn't covered (booked events/buyouts → events still
-needed; "promote dining by" and "event outreach by" dates = month start minus the days within which 8 in 10 bookings are
-made, from `server/utils/booking-lead-times.ts`: OpenTable, walk-ins/cancellations out, past visits only; event outreach uses
-the `special_nights.booked_on` dates (migration 0027, entered on the Sales Plan; ≥ 5 events/buyouts) when there are enough, else parties of 8+ (≥ 25), else all bookings as a floor; "where the room
-is" = top 3 weekday × area slots by seats the forecast leaves empty up to `REALISTIC_FILL_PCT` 85%, weekday pattern from real
-area covers since the move, valued at profit per cover; best buyout nights = the quietest normal weekdays). Plus a "How far
+buyouts (less any dated) on **any night** (average buyout rate − the month's average forecast night; Kit: bookings land any day), and the
+rest is "still to find" (catering, retail or a bigger lift). Kinds: covered / dine-in / event / buyouts / gap / no-data. Cash short beside.
+**Annual plan card** (top of the page, 2026-11-19; `app/components/AnnualSalesPlan.vue`, `server/utils/annual-sales-plan.ts`,
+`/api/sales-strategy/annual` GET/POST, inputs saved per year in `annual_sales_plan`, migration 0029): the year's budget net income and
+loan principal plus extra event sales, buyouts × price (each adds price − average forecast night), retail per month and extra guests
+per night by area (Capacity forecast spend and open nights), each with a % kept as profit (dine-in defaults to Breakeven's contribution
+rate; events 55%, retail 45%, judgment calls). Math runs in the page; defaults are Kit's middle case ($200K events, 18 buyouts, $3.5K
+retail a month, +4 dining room / +2 bar / +2 salon).
+**Step 2 (2026-11-18, simplified 2026-11-19)**: an Action plan table for every month that isn't covered: events booked,
+buyouts booked, and one "reach out by" date = the earlier of month start minus the days within which 8 in 10 OpenTable bookings
+are made (`server/utils/booking-lead-times.ts`) and the same for events (`special_nights.booked_on`, migration 0027, once ≥ 5; else
+parties of 8+ if ≥ 25; else all bookings as a floor). The per-weekday "where the room is" and "best buyout nights" columns were removed
+(Kit: always the same days, and bookings land any day). Plus a "How far
 ahead guests book" card by source. **Step 3 (2026-11-18)**: a Campaigns card (`marketing_campaigns`, migration 0028; `server/utils/campaigns.ts`,
 `/api/campaigns` GET/POST/DELETE). Log a push (channel, dates, target weekdays, area, cost); its result compares the targeted
 nights' real covers with the same weekdays in the prior 4 weeks and, for whole-restaurant campaigns, the month's frozen

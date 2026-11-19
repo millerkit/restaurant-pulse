@@ -23,8 +23,6 @@ type StrategyMonth = {
   },
   nights: number, laborBudgeted: boolean,
   bookedEvents: number, bookedSpecialEvents: number, bookedBuyouts: number, bookedEventRevenue: number,
-  focus: { weekday: string, area: string, nights: number, spareCoversPerNight: number, monthlyProfit: number }[],
-  buyoutNights: { weekday: string, normalNightSales: number }[],
   actBy: { promote: string | null, events: string | null, eventsBasis: 'booked-events' | 'large-parties' | 'all-bookings' | null }
 }
 type LeadStat = { n: number, medianDays: number | null, p80Days: number | null }
@@ -37,7 +35,7 @@ type LeadTimes =
 type Strategy = {
   year: number, today: { year: number, month: number }, firstMonth: number, realisticLiftPct: number,
   avgEventSize: number | null, typicalEventCount: number, maxEventsPerMonth: number, maxBuyoutsPerMonth: number,
-  buyoutRates: { weekday: number, weekend: number }, asOfDate: string | null, todayIso: string, realisticFillPct: number,
+  buyoutRates: { weekday: number, weekend: number }, asOfDate: string | null, todayIso: string,
   leadTimes: LeadTimes, eventLeadTimes: LeadStat & { withoutDate: number }, months: StrategyMonth[]
 }
 
@@ -132,14 +130,15 @@ const totals = computed(() => {
     stillToFindSales: ms.reduce((s, m) => s + (m.plan.stillToFindSales ?? 0), 0)
   }
 })
-const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.count} on ${b.nights[0]?.weekday ?? ''}${b.count > 1 ? 's' : ''}`
+// One outreach date per month: the earlier of promoting dining and reaching out for events.
+const reachOutBy = (m: StrategyMonth) => [m.actBy.promote, m.actBy.events].filter((x): x is string => x != null).sort()[0] ?? null
 </script>
 
 <template>
   <div>
     <PageHeader
       page-name="Sales Strategy"
-      description="Which months fall short of breakeven, and how one event a month, more covers and buyouts can close each gap."
+      description="A full-year plan for closing the budget gap with events, buyouts, retail and more guests, then which months fall short and how each one closes."
       @synced="refresh()"
     />
 
@@ -147,6 +146,8 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
     <div v-else-if="pending && !data" class="state-note">Loading…</div>
     <template v-else-if="data">
       <BudgetYearToggle />
+
+      <AnnualSalesPlan :year="data.year" />
 
       <section class="ss-card">
         <div class="ss-title">At a glance — {{ data.year }}</div>
@@ -179,7 +180,7 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
                 <td>closes it</td>
                 <td class="num">1 event<span class="ss-sub">profit</span></td>
                 <td class="num">covers lift<span class="ss-sub">up to {{ pct(data.realisticLiftPct) }}</span></td>
-                <td class="num">buyouts<span class="ss-sub">up to {{ data.maxBuyoutsPerMonth }}</span></td>
+                <td class="num">buyouts<span class="ss-sub">up to {{ data.maxBuyoutsPerMonth }}, any night</span></td>
                 <td class="num">still to find<span class="ss-sub">catering, retail…</span></td>
                 <td class="num">cash short<span class="ss-sub">with loan principal</span></td>
               </tr>
@@ -205,7 +206,7 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
                 </td>
                 <td class="num">{{ m.plan.covers ? pct(m.plan.covers.liftPct) : '—' }}<span v-if="m.plan.covers" class="ss-sub">{{ fmtMoney(m.plan.covers.profit) }}</span></td>
                 <td class="num">
-                  <template v-if="m.plan.buyouts">{{ buyoutText(m.plan.buyouts) }}<span class="ss-sub">{{ fmtMoney(m.plan.buyouts.profit) }}</span></template>
+                  <template v-if="m.plan.buyouts">{{ m.plan.buyouts.count }}<span class="ss-sub">{{ fmtMoney(m.plan.buyouts.profit) }}</span></template>
                   <template v-else-if="m.plan.buyoutSlotsLeft === 0 && m.kind !== 'covered'">{{ m.bookedBuyouts }} booked</template>
                   <template v-else>—</template>
                 </td>
@@ -232,10 +233,7 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
                 <td>month</td>
                 <td class="num">events<span class="ss-sub">booked</span></td>
                 <td class="num">buyouts<span class="ss-sub">booked</span></td>
-                <td>promote dining by<span class="ss-sub">to reach the month's bookers</span></td>
-                <td>event outreach by<span class="ss-sub">see note below</span></td>
-                <td>where the room is<span class="ss-sub">weekday · area · spare covers/night</span></td>
-                <td>best nights for a buyout<span class="ss-sub">quietest normal nights</span></td>
+                <td>reach out by<span class="ss-sub">events and dining promotion</span></td>
               </tr>
             </thead>
             <tbody>
@@ -243,31 +241,16 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
                 <td><strong>{{ MONTH_NAMES[m.month - 1] }}</strong></td>
                 <td class="num">{{ m.bookedEvents }}</td>
                 <td class="num">{{ m.bookedBuyouts }}</td>
-                <td><span v-if="actByView(m.actBy.promote)" :class="['chip', actByView(m.actBy.promote)!.cls]">{{ actByView(m.actBy.promote)!.text }}</span><span v-else>—</span></td>
                 <td>
-                  <span v-if="actByView(m.actBy.events)" :class="['chip', actByView(m.actBy.events)!.cls]">{{ actByView(m.actBy.events)!.text }}{{ m.actBy.eventsBasis === 'all-bookings' && (m.actBy.events ?? '') >= data.todayIso ? ' or earlier' : '' }}</span><span v-else>—</span>
-                  <span v-if="m.actBy.eventsBasis === 'all-bookings'" class="ss-sub">at least; events book earlier</span>
-                  <span v-else-if="m.actBy.eventsBasis === 'large-parties'" class="ss-sub">from large-party bookings</span>
-                  <span v-else-if="m.actBy.eventsBasis === 'booked-events'" class="ss-sub">from your booked events</span>
-                </td>
-                <td>
-                  <div v-for="f in m.focus" :key="f.weekday + f.area" class="ss-focus">
-                    <strong>{{ f.weekday }}</strong> · {{ f.area }} · {{ fmtCovers(f.spareCoversPerNight) }}
-                    <span class="ss-sub inline">about {{ fmtMoney(f.monthlyProfit) }} a month if filled</span>
-                  </div>
-                  <span v-if="m.focus.length === 0">—</span>
-                </td>
-                <td>
-                  <span v-for="(b, i) in m.buyoutNights" :key="b.weekday">{{ b.weekday }}{{ i < m.buyoutNights.length - 1 ? ', ' : '' }}</span>
-                  <span v-if="m.buyoutNights.length === 0">—</span>
+                  <span v-if="actByView(reachOutBy(m))" :class="['chip', actByView(reachOutBy(m))!.cls]">{{ actByView(reachOutBy(m))!.text }}</span><span v-else>—</span>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="ss-basis">
-          "Where the room is" is seats the forecast leaves empty, up to {{ pct(data.realisticFillPct) }} of a night's seats, by weekday (using each area's real weekday pattern since the move),
-          valued at profit per cover after food & drink cost, variable expenses and front-of-house hours. It is a ceiling for marketing to aim at, not a prediction of what a campaign delivers.
+          "Reach out by" is the earlier of two dates: the month's first night minus the days within which 8 in 10 OpenTable bookings are made, and the
+          same for events and buyouts (from their "booked on" dates once there are 5, else large parties, else all bookings, which is only a floor: events book earlier).
         </div>
       </section>
 
@@ -372,8 +355,8 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
         Each month is the Breakeven page's gap at the P&L line (fixed labor, kitchen crew and fixed opex, with labor at an average payroll month),
         using the Capacity forecast for covers and the saved budget for costs, events and retail. Each gap is closed in order: one special event
         (on-site or off-site, at most {{ data.maxEventsPerMonth }} a month, skipped if one is already dated; catering doesn't count toward it), then more covers up to {{ pct(data.realisticLiftPct) }}
-        every night (a judgment call, not a measurement) and within the seats, then up to {{ data.maxBuyoutsPerMonth }} buyouts on the night where one adds most
-        (your {{ fmtMoney(data.buyoutRates.weekday) }} weekday / {{ fmtMoney(data.buyoutRates.weekend) }} weekend rate minus that night's forecast sales). Whatever is left is "still to find".
+        every night (a judgment call, not a measurement) and within the seats, then up to {{ data.maxBuyoutsPerMonth }} buyouts on any night
+        (the average of your {{ fmtMoney(data.buyoutRates.weekday) }} weekday / {{ fmtMoney(data.buyoutRates.weekend) }} weekend rates minus the month's average forecast night). Whatever is left is "still to find".
         The event is the typical size of {{ data.typicalEventCount }} dated on-site and off-site events; profit is sales at the dine-in contribution rate.
         Cash short adds scheduled loan principal.
         Months with no labor budget saved yet, or without recent covers, read as "not enough data".
@@ -399,7 +382,6 @@ const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.co
 .ss-table .num { text-align: right; white-space: nowrap; }
 .ss-sub { display: block; font-size: 10.5px; color: var(--ink-3); font-weight: 400; margin-top: 1px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.ss-focus { white-space: nowrap; }
 .ss-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ss-input { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--hair); border-radius: 8px; background: var(--surface); color: var(--ink); }
 .ss-input.wide { width: 200px; }
