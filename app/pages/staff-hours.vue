@@ -8,13 +8,16 @@ type EmployeeRow = {
   name: string
   nameMissing: boolean
   eligibility: 'hours' | 'grandfathered'
+  startDate: string | null
+  eligibleOn: string | null
   totalHours: number
   avgPerWeek: number
   daysWorked: number
   firstShift: string | null
   lastShift: string | null
   partialWindow: boolean
-  avgPerWeekSinceFirstShift: number | null
+  fullWeeks: number
+  countedFrom: string | null
   recentAutoClockOutShifts: number
   recentAutoClockOutHours: number
 }
@@ -36,6 +39,8 @@ type StaffHours =
     tbd: EligibleRow[]
     enrolled: EligibleRow[]
     notEnrolled: EligibleRow[]
+    upcoming: (EmployeeRow & { daysUntilEligible: number })[]
+    waitingPeriodDays: number
     partTime: EmployeeRow[]
     excludedLogins: { name: string, totalHours: number }[]
     unmatchedSalaried: string[]
@@ -208,7 +213,7 @@ const partTimeNote = computed(() => {
                       <span v-if="e.eligibility === 'grandfathered'" class="chip good tag">✓ Grandfathered</span>
                       <template v-if="e.eligibility === 'hours'">
                         <span v-if="e.partialWindow" class="hint">
-                          First shift {{ formatDate(e.firstShift ?? '') }} — pace since then {{ fmtHours(e.avgPerWeekSinceFirstShift ?? 0) }} hrs/week
+                          First shift {{ formatDate(e.firstShift ?? '') }} — {{ e.fullWeeks > 0 ? `average of ${e.fullWeeks} full week${e.fullWeeks === 1 ? '' : 's'} since ${formatDate(e.countedFrom ?? '')}` : 'no full week yet' }}
                         </span>
                         <span v-if="e.recentAutoClockOutShifts" class="hint">
                           ⚠ {{ e.recentAutoClockOutShifts }} auto clock-out{{ e.recentAutoClockOutShifts === 1 ? '' : 's' }} in the last 7 days ({{ fmtTotal(e.recentAutoClockOutHours) }} hrs) — check Toast for a missed clock-out
@@ -279,6 +284,37 @@ const partTimeNote = computed(() => {
           </div>
         </section>
 
+        <section v-if="data.upcoming.length">
+          <div class="section-head">
+            <div class="section-label">Upcoming Eligibility · Waiting Period</div>
+            <div class="section-note">Averaging {{ data.threshold }}+ hours a week, but not yet {{ data.waitingPeriodDays }} days since their start date. They move to the eligible list on the date shown.</div>
+          </div>
+          <div class="pl-table-card">
+            <table class="pl-table">
+              <caption>Employees averaging full-time hours who become eligible after the waiting period</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Employee</th>
+                  <th scope="col">Avg hrs/week</th>
+                  <th scope="col">Start date</th>
+                  <th scope="col">Eligible on</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="e in data.upcoming" :key="e.guid">
+                  <th scope="row">
+                    {{ e.name }}
+                    <span class="hint">{{ e.fullWeeks }} full week{{ e.fullWeeks === 1 ? '' : 's' }} averaged · {{ e.daysUntilEligible }} day{{ e.daysUntilEligible === 1 ? '' : 's' }} to go</span>
+                  </th>
+                  <td class="amount">{{ fmtHours(e.avgPerWeek) }}</td>
+                  <td>{{ formatDate(e.startDate ?? '', true) }}</td>
+                  <td class="amount">{{ formatDate(e.eligibleOn ?? '', true) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <section>
           <div class="section-head">
             <div class="section-label">Not Health Benefits Eligible · Part-time</div>
@@ -299,7 +335,7 @@ const partTimeNote = computed(() => {
                   <th scope="row">
                     {{ e.name }}
                     <span v-if="e.partialWindow" class="hint">
-                      First shift {{ formatDate(e.firstShift ?? '') }} — pace since then {{ fmtHours(e.avgPerWeekSinceFirstShift ?? 0) }} hrs/week
+                      First shift {{ formatDate(e.firstShift ?? '') }} — {{ e.fullWeeks > 0 ? `average of ${e.fullWeeks} full week${e.fullWeeks === 1 ? '' : 's'} since ${formatDate(e.countedFrom ?? '')}` : 'no full week yet' }}
                     </span>
                     <span v-if="e.recentAutoClockOutShifts" class="hint">
                       ⚠ {{ e.recentAutoClockOutShifts }} auto clock-out{{ e.recentAutoClockOutShifts === 1 ? '' : 's' }} in the last 7 days ({{ fmtTotal(e.recentAutoClockOutHours) }} hrs) — check Toast for a missed clock-out
@@ -319,7 +355,7 @@ const partTimeNote = computed(() => {
 
         <div class="method-note">
           <strong>How this is calculated.</strong>
-          Hours are Toast time-entry hours (regular + overtime) summed over the {{ data.coverageDays }}-day window, divided by {{ (data.coverageDays / 7).toFixed(1) }} weeks. Full-time means averaging at least {{ data.threshold }} hours a week. Every job counts. Salaried staff are always eligible for health benefits and show "Salaried" instead of hours, since their Toast clock-ins don't reliably reflect hours worked; Katie Janik is grandfathered into full-time. Former employees are left out. Everyone eligible starts as Enrollment TBD (shown at the top, shaded green) until you mark them Enrolled, Declined or Canceled; Declined and Canceled move to "Not Enrolled". A mark on someone who isn't currently eligible is ignored. Anyone else who doesn't clock in won't appear. Auto clock-outs (a forgotten clock-out Toast closes automatically, which can inflate a shift) are only flagged when one happened in the last 7 days; older ones are assumed fixed in payroll. A recent hire's average is measured against the whole window, so the "pace since first shift" line shows where they're running. Employees are listed by their name in Toast.
+          Hours are Toast time-entry hours (regular + overtime) summed over the {{ data.coverageDays }}-day window, counting full Monday–Sunday weeks only: the week someone started in is skipped unless their first shift was a Monday or Tuesday, the unfinished current week is left out, and weeks before someone started don't count as zeros. Full-time means averaging at least {{ data.threshold }} hours a week. Someone who qualifies on hours but is under {{ data.waitingPeriodDays }} days since their first Toast shift sits in Upcoming Eligibility with the date they qualify (start date + {{ data.waitingPeriodDays }} days); anyone whose start we didn't see in the synced data is assumed to be past the wait. Every job counts. Salaried staff are always eligible for health benefits and show "Salaried" instead of hours, since their Toast clock-ins don't reliably reflect hours worked; Katie Janik is grandfathered into full-time. Former employees are left out. Everyone eligible starts as Enrollment TBD (shown at the top, shaded green) until you mark them Enrolled, Declined or Canceled; Declined and Canceled move to "Not Enrolled". A mark on someone who isn't currently eligible is ignored. Anyone else who doesn't clock in won't appear. Auto clock-outs (a forgotten clock-out Toast closes automatically, which can inflate a shift) are only flagged when one happened in the last 7 days; older ones are assumed fixed in payroll. A recent hire's line shows how many full weeks their average covers. Employees are listed by their name in Toast.
           <template v-if="data.excludedLogins.length">
             Not listed, because {{ data.excludedLogins.length === 1 ? "it's a shared station login rather than a person" : "they're shared station logins rather than people" }}:
             {{ data.excludedLogins.map(l => `${l.name} (${fmtTotal(l.totalHours)} hrs)`).join(', ') }}.

@@ -6704,3 +6704,15 @@ owners can try their own numbers.
   The weekday-shape helper and `REALISTIC_FILL_PCT` went with them.
 - Verified locally: the API, the card rendering, save and reset against the local DB; local has only a partial 2027
   budget, so the real figures show only in production.
+
+## Benefits Eligibility: full-week averages and Upcoming Eligibility (2026-11-19)
+
+- **Average hours per week counts full Mon–Sun weeks only** (`server/api/staff-hours.get.ts`). Counting starts at a person's
+  first full week (a first shift on Monday or Tuesday keeps that week, since we're closed Mondays), weeks before they started
+  are no longer zeros, and the unfinished current week is left out for everyone. No full week yet shows 0 with a note. Before,
+  everyone's total was divided by the whole 90-day window, which understated new hires (Jay 22.5 → ~45, Elijah 15.0 → ~32 on
+  local data through Nov 5). The old "pace since first shift" line was replaced by "average of N full weeks since <date>".
+- **Upcoming Eligibility section**: hourly people averaging 30+ who are under 90 days (`WAITING_PERIOD_DAYS`) from their start
+  date (first Toast shift on record) are listed with start date and eligible-on date, and are held out of the eligible /
+  Enrollment TBD groups until that date. A start is trusted only if the first shift is more than 6 days after our data begins;
+  otherwise the person is assumed past the wait. Grandfathered and salaried skip it.

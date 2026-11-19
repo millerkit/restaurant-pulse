@@ -2,11 +2,12 @@
 // 90 days, split at the 30 hr/week full-time (benefits-eligible) line. See
 // schema.sql's daily_toast_employee_hours for what the hours are.
 //
-// "Average" is the policy's own reading — total hours in the window divided
-// by the window's weeks (90 / 7) — so someone who worked 35 hrs/week for the
-// last 4 weeks only averages ~11 and lands in part-time. That's correct
-// against a 90-day test but misleading on its own, so a row whose first shift
-// falls well inside the window also carries its pace since that first shift.
+// "Average" counts FULL Mon–Sun weeks only (Kit, 2026-11-19): hours in complete
+// weeks divided by the number of those weeks. The week someone started in is
+// dropped unless their first shift was Monday or Tuesday (closed Mondays, so
+// Tuesday is the first service day), the weeks before they started don't count
+// as zeros, and the current unfinished week is left out for everyone. A new hire
+// with no full week yet shows 0 and a "no full week yet" note.
 
 const WINDOW_DAYS = 90
 const FULL_TIME_THRESHOLD_HOURS = 30
@@ -21,6 +22,10 @@ const DATA_GAP_GRACE_DAYS = 6
 // days (user's call 2026-10-27): older ones have presumably been corrected in
 // payroll already, so flagging them is noise.
 const AUTO_CLOCKOUT_FLAG_DAYS = 7
+// Benefits start after this many days since an employee's start date (first
+// Toast shift on record). Someone already averaging full-time but still inside
+// the wait shows in "Upcoming eligibility" with the date they qualify.
+const WAITING_PERIOD_DAYS = 90
 // Salaried / grandfathered people and shared station logins now live in the
 // staff_overrides table (Settings > Benefits eligibility rules); see
 // server/utils/staff-overrides.ts for what each kind means.
@@ -30,6 +35,18 @@ type Eligibility = 'hours' | 'grandfathered' | 'salaried'
 function addDays(iso: string, n: number): string {
   const [y, m, d] = iso.split('-').map(Number) as [number, number, number]
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+}
+function dow(iso: string): number {
+  return new Date(`${iso}T00:00:00Z`).getUTCDay() // 0 = Sunday
+}
+function mondayOnOrAfter(iso: string): string {
+  return addDays(iso, (8 - dow(iso)) % 7)
+}
+// First Monday of the person's first full week: first shift on Mon/Tue keeps
+// that week, a later first shift starts counting the following Monday.
+function firstFullWeekStart(firstShift: string): string {
+  const d = dow(firstShift)
+  return d === 1 || d === 2 ? addDays(firstShift, -(d - 1)) : mondayOnOrAfter(firstShift)
 }
 function daysBetween(fromIso: string, toIso: string): number {
   return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86_400_000)
@@ -70,7 +87,10 @@ export default defineEventHandler(() => {
   const effectiveStart = dataGap ? range.minDate : windowStart
   const coverageDays = daysBetween(effectiveStart, windowEnd) + 1
   const recentStart = addDays(windowEnd, -(AUTO_CLOCKOUT_FLAG_DAYS - 1))
-  const weeks = coverageDays / 7
+  // Counted weeks run Mon–Sun inside the window: from its first Monday to the
+  // last Sunday on or before the last synced day.
+  const firstMonday = mondayOnOrAfter(effectiveStart)
+  const lastSunday = addDays(windowEnd, -dow(windowEnd))
 
   const rows = db.prepare(`
     SELECT h.employee_guid AS guid,
@@ -88,6 +108,25 @@ export default defineEventHandler(() => {
     WHERE h.date BETWEEN ? AND ?
     GROUP BY h.employee_guid
   `).all(recentStart, recentStart, effectiveStart, windowEnd) as HoursRow[]
+
+  const dailyRows = db.prepare(
+    'SELECT employee_guid AS guid, date, hours FROM daily_toast_employee_hours WHERE date BETWEEN ? AND ?'
+  ).all(effectiveStart, windowEnd) as { guid: string; date: string; hours: number }[]
+  const dailyByGuid = new Map<string, { date: string; hours: number }[]>()
+  for (const d of dailyRows) {
+    const list = dailyByGuid.get(d.guid)
+    if (list) list.push(d)
+    else dailyByGuid.set(d.guid, [d])
+  }
+
+  // True start date = first shift on record (not just within the window). Only
+  // trusted when we saw them start: someone whose first shift is at the very
+  // start of our data may have been working long before it.
+  const firstEverByGuid = new Map(
+    (db.prepare('SELECT employee_guid AS guid, MIN(date) AS firstEver FROM daily_toast_employee_hours GROUP BY employee_guid').all() as
+      { guid: string; firstEver: string }[]).map(r => [r.guid, r.firstEver])
+  )
+  const startObservedAfter = addDays(range.minDate, DATA_GAP_GRACE_DAYS)
 
   const { salaried: SALARIED_EMPLOYEES, grandfathered: GRANDFATHERED_EMPLOYEES, excluded: NON_PERSON_LOGIN_NAMES } = loadStaffOverrides(db)
 
@@ -107,22 +146,32 @@ export default defineEventHandler(() => {
       const eligibility: Eligibility = SALARIED_EMPLOYEES.has(key) ? 'salaried'
         : GRANDFATHERED_EMPLOYEES.has(key) ? 'grandfathered' : 'hours'
 
-      const avgPerWeek = r.totalHours / weeks
+      const countedFrom = [firstFullWeekStart(r.firstShift), firstMonday].sort().pop() as string
+      const fullWeeks = lastSunday >= countedFrom ? (daysBetween(countedFrom, lastSunday) + 1) / 7 : 0
+      const countedHours = (dailyByGuid.get(r.guid) ?? [])
+        .filter(d => d.date >= countedFrom && d.date <= lastSunday)
+        .reduce((sum, d) => sum + d.hours, 0)
+      const avgPerWeek = fullWeeks > 0 ? countedHours / fullWeeks : 0
       const partialWindow = daysBetween(effectiveStart, r.firstShift) > PARTIAL_WINDOW_GRACE_DAYS
-      const weeksSinceFirstShift = (daysBetween(r.firstShift, windowEnd) + 1) / 7
+
+      const firstEver = firstEverByGuid.get(r.guid) ?? r.firstShift
+      const startDate = firstEver > startObservedAfter ? firstEver : null
 
       return {
         guid: r.guid,
         name,
         nameMissing: !r.hasEmployeeRow,
         eligibility,
+        startDate: startDate as string | null,
+        eligibleOn: (startDate ? addDays(startDate, WAITING_PERIOD_DAYS) : null) as string | null,
         totalHours: r.totalHours,
         avgPerWeek,
         daysWorked: r.daysWorked,
         firstShift: r.firstShift as string | null,
         lastShift: r.lastShift as string | null,
         partialWindow,
-        avgPerWeekSinceFirstShift: partialWindow ? r.totalHours / weeksSinceFirstShift : null,
+        fullWeeks,
+        countedFrom: fullWeeks > 0 ? countedFrom : null,
         recentAutoClockOutShifts: r.autoShifts,
         recentAutoClockOutHours: r.autoHours
       }
@@ -144,13 +193,16 @@ export default defineEventHandler(() => {
       name: [(p.chosenName || p.firstName || '').trim(), (p.lastName ?? '').trim()].filter(Boolean).join(' '),
       nameMissing: false,
       eligibility: 'salaried',
+      startDate: null,
+      eligibleOn: null,
       totalHours: 0,
       avgPerWeek: 0,
       daysWorked: 0,
       firstShift: null,
       lastShift: null,
       partialWindow: false,
-      avgPerWeekSinceFirstShift: null,
+      fullWeeks: 0,
+      countedFrom: null,
       recentAutoClockOutShifts: 0,
       recentAutoClockOutHours: 0
     })
@@ -172,8 +224,16 @@ export default defineEventHandler(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
   const hourly = employees.filter(e => e.eligibility !== 'salaried')
   // Grandfathered people sit in the full-time group whatever their average.
-  const fullTimeAll = hourly.filter(e => e.eligibility === 'grandfathered' || e.avgPerWeek >= FULL_TIME_THRESHOLD_HOURS)
-  const partTime = hourly.filter(e => !fullTimeAll.includes(e))
+  const qualifiesOnHours = (e: { eligibility: Eligibility; avgPerWeek: number }) =>
+    e.eligibility === 'grandfathered' || e.avgPerWeek >= FULL_TIME_THRESHOLD_HOURS
+  // Averaging full-time but still inside the waiting period: listed with the
+  // date they become eligible, not yet in the eligible/enrollment groups.
+  const upcoming = hourly
+    .filter(e => e.eligibility === 'hours' && qualifiesOnHours(e) && e.eligibleOn && e.eligibleOn > windowEnd)
+    .sort((a, b) => (a.eligibleOn as string).localeCompare(b.eligibleOn as string) || a.name.localeCompare(b.name))
+    .map(e => ({ ...e, daysUntilEligible: daysBetween(windowEnd, e.eligibleOn as string) }))
+  const fullTimeAll = hourly.filter(e => qualifiesOnHours(e) && !upcoming.some(u => u.guid === e.guid))
+  const partTime = hourly.filter(e => !qualifiesOnHours(e))
 
   // Every eligible person has an enrollment status: no mark means TBD (a new
   // qualifier we haven't resolved), otherwise enrolled / declined / canceled.
@@ -206,6 +266,8 @@ export default defineEventHandler(() => {
     tbd,
     enrolled,
     notEnrolled,
+    upcoming,
+    waitingPeriodDays: WAITING_PERIOD_DAYS,
     partTime,
     excludedLogins,
     unmatchedSalaried
