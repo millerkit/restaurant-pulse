@@ -6670,6 +6670,12 @@ Mass Ave in 2025 and asked whether the Capacity forecast underestimates covers. 
   some months). A month in progress now counts once it reaches 15 regular nights.
 - Still worth watching: June's ~125 index comes from one Mass Ave year and pushes June 2027 to ~111
   covers/night before Cambridge St has its own June.
+- Production after deploy + Sync now (2026-11-19, Toast through Nov 18): November 2026 reached 15 nights, so it now
+  counts in the level. Level ≈ 89.2 → 91.1 (+2.1%; production already had more November nights than local). Capacity
+  grid total covers/night rose 1–3 per month (e.g. Jan 98→99, Jun 113→116, Sep 83→85, Dec 89→91; Nov frozen at 85).
+  Areas' covers are whole numbers, so month-by-month changes are lumpy. Food + beverage sales Jan–Oct 2027 went
+  $2,143,504 (Capacity grid before) → $2,181,826 now (+1.8%). Note: the 2026-11-16 weekly snapshot predates the
+  2026-11-17 seasonality rebuild, so it is not a clean before/after baseline.
 
 ## 2026-11-19 — Sales Strategy: annual plan card, simpler action plan, buyouts on any night
 
