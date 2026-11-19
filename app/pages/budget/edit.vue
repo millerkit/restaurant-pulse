@@ -1234,17 +1234,6 @@ function exportForQuickBooks() {
       <!-- The starter is for an empty year. Once the year already has budget entries it is tucked away
            behind a warning, since re-running it replaces them (see planningYearHasBudget below). -->
       <BuildNextYearBudget v-if="isPlanningYear && planningYearStartedWithBudget === false" :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
-      <details v-else-if="isPlanningYear && planningYearStartedWithBudget === true" class="rebuild-details">
-        <summary>Rebuild {{ YEAR }} from scratch…</summary>
-        <div class="quiet-note rebuild-warning">
-          {{ YEAR }} already has a budget, so you probably don't want this. Rebuilding replaces the starter's accounts with fresh numbers:
-          Food/Beverage revenue from the Capacity planning page (which undoes any buyout amounts applied from the Sales Plan's planner, so they'd need re-applying),
-          fixed expenses carried from December (including seasonal gas and electricity, if you'd adjusted them), and labor from the Staffing Plan.
-          If you only changed labor, save it on the Staffing Plan instead; it already writes all twelve months of {{ YEAR }}.
-          Keep this for starting a new year from an empty budget.
-        </div>
-        <BuildNextYearBudget :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
-      </details>
       <!-- Month tabs at the top (2026-11-11): the panels below are for the selected month. -->
       <div class="month-tabs page-tabs" role="tablist" aria-label="Month">
         <button
@@ -1680,6 +1669,22 @@ function exportForQuickBooks() {
         <div v-if="actionStatus === 'done'" class="chip good">{{ actionMessage }}</div>
         <div v-if="actionStatus === 'error'" class="chip warning">{{ actionMessage }}</div>
       </section>
+
+      <!-- Reset control, kept at the bottom of the page: it replaces entries in a year that already has a budget. -->
+      <section v-if="isPlanningYear && planningYearStartedWithBudget === true" class="danger-zone">
+        <h3 class="danger-zone-title">Danger zone</h3>
+        <details class="rebuild-details">
+          <summary>Rebuild {{ YEAR }} from scratch…</summary>
+          <div class="quiet-note rebuild-warning">
+            {{ YEAR }} already has a budget, so you probably don't want this. Rebuilding replaces the starter's accounts with fresh numbers:
+            Food/Beverage revenue from the Capacity planning page (which undoes any buyout amounts applied from the Sales Plan's planner, so they'd need re-applying),
+            fixed expenses carried from December (including seasonal gas and electricity, if you'd adjusted them), and labor from the Staffing Plan.
+            If you only changed labor, save it on the Staffing Plan instead; it already writes all twelve months of {{ YEAR }}.
+            Keep this for starting a new year from an empty budget.
+          </div>
+          <BuildNextYearBudget :year="YEAR" :monthly-data="monthlyData" @applied="loadYear()" />
+        </details>
+      </section>
     </template>
 
     <footer>
@@ -1700,6 +1705,8 @@ function exportForQuickBooks() {
   gap: 14px;
 }
 .quiet-note { font-size: 12.5px; color: var(--ink-2); }
+.danger-zone { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--border, rgba(128,128,128,.25)); }
+.danger-zone-title { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted, inherit); }
 .rebuild-details { margin-bottom: 18px; }
 .rebuild-details > summary { font-size: 12.5px; font-weight: 700; color: var(--accent-text); cursor: pointer; }
 .rebuild-details .rebuild-warning { margin: 8px 0 10px; line-height: 1.5; }
