@@ -7,16 +7,22 @@ import { MONTH_NAMES, useBudgetYearSelection } from '~/composables/useBudgetData
 
 useHead({ title: `${site.restaurantName} — Sales Strategy` })
 
-type Kind = 'covered' | 'dine-in' | 'events' | 'no-data'
+type Kind = 'covered' | 'dine-in' | 'event' | 'buyouts' | 'gap' | 'no-data'
 type StrategyMonth = {
   month: number, kind: Kind, costs: number,
   stillShort: number | null, cashStillShort: number | null,
   expectedCoversPerNight: number | null, coversSource: 'recent' | 'forecast',
   maxCoversPerNight: number | null, headroomPct: number | null, liftPct: number | null,
   coversNeededPerNight: number | null,
-  eventSalesNeeded: number, eventsNeeded: number | null, plannedEventsRevenue: number,
+  eventSalesNeeded: number, plannedEventsRevenue: number,
+  plan: {
+    event: { sales: number, profit: number } | null,
+    covers: { liftPct: number, profit: number } | null,
+    buyouts: { count: number, nights: { weekday: string, extraSales: number }[], profit: number } | null,
+    stillToFind: number, stillToFindSales: number | null, eventSlotUsed: boolean, buyoutSlotsLeft: number
+  },
   nights: number, laborBudgeted: boolean,
-  bookedEvents: number, bookedBuyouts: number, bookedEventRevenue: number,
+  bookedEvents: number, bookedSpecialEvents: number, bookedBuyouts: number, bookedEventRevenue: number,
   focus: { weekday: string, area: string, nights: number, spareCoversPerNight: number, monthlyProfit: number }[],
   buyoutNights: { weekday: string, normalNightSales: number }[],
   actBy: { promote: string | null, events: string | null, eventsBasis: 'booked-events' | 'large-parties' | 'all-bookings' | null }
@@ -30,7 +36,8 @@ type LeadTimes =
   }
 type Strategy = {
   year: number, today: { year: number, month: number }, firstMonth: number, realisticLiftPct: number,
-  avgEventSize: number | null, asOfDate: string | null, todayIso: string, realisticFillPct: number,
+  avgEventSize: number | null, typicalEventCount: number, maxEventsPerMonth: number, maxBuyoutsPerMonth: number,
+  buyoutRates: { weekday: number, weekend: number }, asOfDate: string | null, todayIso: string, realisticFillPct: number,
   leadTimes: LeadTimes, eventLeadTimes: LeadStat & { withoutDate: number }, months: StrategyMonth[]
 }
 
@@ -46,12 +53,14 @@ const pct = (n: number | null | undefined) => n == null ? '—' : `${n < 0 ? '�
 const KIND: Record<Kind, { cls: string, text: string, help: string }> = {
   'covered': { cls: 'good', text: '✓ Covered', help: 'At expected covers and planned events, the P&L breakeven is met.' },
   'dine-in': { cls: 'warning', text: '▲ More covers', help: 'A realistic lift in covers closes it.' },
-  'events': { cls: 'serious', text: '⚠ Needs events', help: 'More covers alone is not realistic; events, catering or buyouts have to close it.' },
+  'event': { cls: 'warning', text: '▲ Event + covers', help: 'One special event plus a realistic lift in covers closes it.' },
+  'buyouts': { cls: 'warning', text: '▲ Needs buyouts', help: 'Even with one event and a realistic lift in covers, it also takes buyouts (within the monthly limit).' },
+  'gap': { cls: 'serious', text: '⚠ Still short', help: 'One event, a realistic lift in covers and the buyout limit together don\'t close it: catering, retail or a bigger lift has to.' },
   'no-data': { cls: 'quiet', text: '— Not enough data', help: 'Needs recent Toast covers with matching revenue, cost targets, and a labor budget.' }
 }
 
 const counts = computed(() => {
-  const c: Record<Kind, number> = { 'covered': 0, 'dine-in': 0, 'events': 0, 'no-data': 0 }
+  const c: Record<Kind, number> = { 'covered': 0, 'dine-in': 0, 'event': 0, 'buyouts': 0, 'gap': 0, 'no-data': 0 }
   for (const m of data.value?.months ?? []) c[m.kind]++
   return c
 })
@@ -114,14 +123,23 @@ const targetText = (c: Campaign) => {
   const days = c.targetDows ? DOW_CHOICES.filter(d => c.targetDows!.includes(d.dow)).map(d => d.label).join(', ') : 'every night'
   return `${days} · ${c.targetArea ?? 'whole restaurant'}`
 }
-const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m) => s + (m.kind === 'events' ? (m.eventsNeeded ?? 0) : 0), 0))
+const totals = computed(() => {
+  const ms = data.value?.months ?? []
+  return {
+    events: ms.reduce((s, m) => s + (m.plan.event ? 1 : 0), 0),
+    buyouts: ms.reduce((s, m) => s + (m.plan.buyouts?.count ?? 0), 0),
+    stillToFind: ms.reduce((s, m) => s + m.plan.stillToFind, 0),
+    stillToFindSales: ms.reduce((s, m) => s + (m.plan.stillToFindSales ?? 0), 0)
+  }
+})
+const buyoutText = (b: NonNullable<StrategyMonth['plan']['buyouts']>) => `${b.count} on ${b.nights[0]?.weekday ?? ''}${b.count > 1 ? 's' : ''}`
 </script>
 
 <template>
   <div>
     <PageHeader
       page-name="Sales Strategy"
-      description="Which months fall short of breakeven, and whether more covers or more events is the realistic way to close each gap."
+      description="Which months fall short of breakeven, and how one event a month, more covers and buyouts can close each gap."
       @synced="refresh()"
     />
 
@@ -135,11 +153,15 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
         <div class="ss-summary">
           <span class="chip good">✓ {{ counts.covered }} covered</span>
           <span class="chip warning">▲ {{ counts['dine-in'] }} need more covers</span>
-          <span class="chip serious">⚠ {{ counts.events }} need events</span>
+          <span v-if="counts.event" class="chip warning">▲ {{ counts.event }} need an event + covers</span>
+          <span v-if="counts.buyouts" class="chip warning">▲ {{ counts.buyouts }} need buyouts too</span>
+          <span v-if="counts.gap" class="chip serious">⚠ {{ counts.gap }} still short</span>
           <span v-if="counts['no-data']" class="chip quiet">— {{ counts['no-data'] }} not enough data</span>
         </div>
-        <div v-if="totalEventsNeeded > 0" class="ss-basis">
-          About <strong>{{ totalEventsNeeded }} more events</strong> across the months that need them<template v-if="data.avgEventSize"> at your typical {{ fmtMoney(data.avgEventSize) }}</template>, beyond what's already planned.
+        <div v-if="totals.events || totals.buyouts" class="ss-basis">
+          The plan below adds <strong>{{ totals.events }} special event{{ totals.events === 1 ? '' : 's' }}</strong> (at most {{ data.maxEventsPerMonth }} a month<template v-if="data.avgEventSize">, your typical {{ fmtMoney(data.avgEventSize) }}</template>)
+          and <strong>{{ totals.buyouts }} buyout{{ totals.buyouts === 1 ? '' : 's' }}</strong> (at most {{ data.maxBuyoutsPerMonth }} a month), beyond what's already dated.
+          <template v-if="totals.stillToFind > 0"> That still leaves <strong>{{ fmtMoney(totals.stillToFind) }}</strong> of profit to find (about {{ fmtMoney(totals.stillToFindSales) }} in catering or retail sales, or a bigger lift in covers).</template>
         </div>
       </section>
 
@@ -153,9 +175,12 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
                 <td class="num">covers/night<span class="ss-sub">expected</span></td>
                 <td class="num">room to grow<span class="ss-sub">to full seats</span></td>
                 <td class="num">still short<span class="ss-sub">after planned events</span></td>
-                <td class="num">lift needed<span class="ss-sub">every night</span></td>
+                <td class="num">lift needed<span class="ss-sub">covers alone</span></td>
                 <td>closes it</td>
-                <td class="num">events needed<span class="ss-sub">more than planned</span></td>
+                <td class="num">1 event<span class="ss-sub">profit</span></td>
+                <td class="num">covers lift<span class="ss-sub">up to {{ pct(data.realisticLiftPct) }}</span></td>
+                <td class="num">buyouts<span class="ss-sub">up to {{ data.maxBuyoutsPerMonth }}</span></td>
+                <td class="num">still to find<span class="ss-sub">catering, retail…</span></td>
                 <td class="num">cash short<span class="ss-sub">with loan principal</span></td>
               </tr>
             </thead>
@@ -173,7 +198,22 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
                 </td>
                 <td class="num">{{ m.kind === 'covered' || m.liftPct == null ? '—' : pct(m.liftPct) }}</td>
                 <td><span :class="['chip', KIND[m.kind].cls]" :title="KIND[m.kind].help">{{ KIND[m.kind].text }}</span></td>
-                <td class="num">{{ m.eventsNeeded != null ? m.eventsNeeded : '—' }}<span v-if="m.eventsNeeded != null && m.eventSalesNeeded > 0" class="ss-sub">{{ fmtMoney(m.eventSalesNeeded) }} in sales</span></td>
+                <td class="num">
+                  <template v-if="m.plan.event">{{ fmtMoney(m.plan.event.profit) }}</template>
+                  <template v-else-if="m.plan.eventSlotUsed && m.kind !== 'covered'">booked<span class="ss-sub">already dated</span></template>
+                  <template v-else>—</template>
+                </td>
+                <td class="num">{{ m.plan.covers ? pct(m.plan.covers.liftPct) : '—' }}<span v-if="m.plan.covers" class="ss-sub">{{ fmtMoney(m.plan.covers.profit) }}</span></td>
+                <td class="num">
+                  <template v-if="m.plan.buyouts">{{ buyoutText(m.plan.buyouts) }}<span class="ss-sub">{{ fmtMoney(m.plan.buyouts.profit) }}</span></template>
+                  <template v-else-if="m.plan.buyoutSlotsLeft === 0 && m.kind !== 'covered'">{{ m.bookedBuyouts }} booked</template>
+                  <template v-else>—</template>
+                </td>
+                <td class="num">
+                  <template v-if="m.plan.stillToFind > 0">{{ fmtMoney(m.plan.stillToFind) }}<span v-if="m.plan.stillToFindSales != null" class="ss-sub">{{ fmtMoney(m.plan.stillToFindSales) }} in sales</span></template>
+                  <template v-else-if="m.kind !== 'no-data'">✓</template>
+                  <template v-else>—</template>
+                </td>
                 <td class="num">{{ m.cashStillShort != null ? (m.cashStillShort > 0 ? fmtMoney(m.cashStillShort) : '✓') : '—' }}</td>
               </tr>
             </tbody>
@@ -190,7 +230,7 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
             <thead>
               <tr>
                 <td>month</td>
-                <td class="num">events<span class="ss-sub">booked → still needed</span></td>
+                <td class="num">booked<span class="ss-sub">events · buyouts</span></td>
                 <td>promote dining by<span class="ss-sub">to reach the month's bookers</span></td>
                 <td>event outreach by<span class="ss-sub">see note below</span></td>
                 <td>where the room is<span class="ss-sub">weekday · area · spare covers/night</span></td>
@@ -201,8 +241,7 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
               <tr v-for="m in actionMonths" :key="m.month">
                 <td><strong>{{ MONTH_NAMES[m.month - 1] }}</strong></td>
                 <td class="num">
-                  {{ m.bookedEvents }} <template v-if="m.bookedBuyouts">+ {{ m.bookedBuyouts }} buyout{{ m.bookedBuyouts === 1 ? '' : 's' }}</template>
-                  → <strong>{{ m.eventsNeeded != null ? m.eventsNeeded : '—' }}</strong>
+                  {{ m.bookedEvents }} · {{ m.bookedBuyouts }}
                 </td>
                 <td><span v-if="actByView(m.actBy.promote)" :class="['chip', actByView(m.actBy.promote)!.cls]">{{ actByView(m.actBy.promote)!.text }}</span><span v-else>—</span></td>
                 <td>
@@ -331,9 +370,12 @@ const totalEventsNeeded = computed(() => (data.value?.months ?? []).reduce((s, m
 
       <div class="ss-foot">
         Each month is the Breakeven page's gap at the P&L line (fixed labor, kitchen crew and fixed opex, with labor at an average payroll month),
-        using the Capacity forecast for covers and the saved budget for costs, events and retail. "Needs events" means the lift every night would need
-        is more than {{ pct(data.realisticLiftPct) }} (a judgment call, not a measurement) or more than the seats allow.
-        Cash short adds scheduled loan principal. Event counts use the typical size of dated event nights.
+        using the Capacity forecast for covers and the saved budget for costs, events and retail. Each gap is closed in order: one special event
+        (on-site or off-site, at most {{ data.maxEventsPerMonth }} a month, skipped if one is already dated; catering doesn't count toward it), then more covers up to {{ pct(data.realisticLiftPct) }}
+        every night (a judgment call, not a measurement) and within the seats, then up to {{ data.maxBuyoutsPerMonth }} buyouts on the night where one adds most
+        (your {{ fmtMoney(data.buyoutRates.weekday) }} weekday / {{ fmtMoney(data.buyoutRates.weekend) }} weekend rate minus that night's forecast sales). Whatever is left is "still to find".
+        The event is the typical size of {{ data.typicalEventCount }} dated on-site and off-site events; profit is sales at the dine-in contribution rate.
+        Cash short adds scheduled loan principal.
         Months with no labor budget saved yet, or without recent covers, read as "not enough data".
         Click a month for the full Breakeven detail.
       </div>

@@ -367,9 +367,12 @@ their payroll taxes × the year's paychecks ÷ 12 ÷ the month's Fridays; benefi
 
 The Breakeven math for every open month of a year (`server/utils/sales-strategy.ts`, `server/api/sales-strategy.get.ts`,
 `app/pages/sales-strategy.vue`). The Breakeven calculation now lives in `server/utils/breakeven.ts` (`computeBreakeven`; the
-route is a thin wrapper, output verified byte-identical for all months). Each month is sorted at the **P&L line, after planned
-events & retail**: covered / more covers (lift ≤ `REALISTIC_LIFT_PCT` 10%, a judgment call, and within Capacity's max covers) /
-needs events (with about-N-events at the typical event size) / not enough data. Cash short (with loan principal) shown beside.
+route is a thin wrapper, output verified byte-identical for all months). Each month's gap at the **P&L line, after planned
+events & retail** is closed by a ladder (`planMonthGap`, Kit 2026-11-19: **at most one special event a month**, `MAX_EVENTS_PER_MONTH`;
+catering is separate and doesn't count): covers alone if the lift is ≤ `REALISTIC_LIFT_PCT` 10% and within Capacity's max covers;
+else one on-site/off-site event at the typical size (skipped if one is dated), covers up to 10%, up to `MAX_BUYOUTS_PER_MONTH` 2
+buyouts (less any dated) on the weekday where buyout rate − forecast normal night is largest, and the rest is "still to find"
+(catering, retail or a bigger lift). Kinds: covered / dine-in / event / buyouts / gap / no-data. Cash short (with loan principal) beside.
 **Step 2 (2026-11-18)**: an Action plan table for every month that isn't covered (booked events/buyouts → events still
 needed; "promote dining by" and "event outreach by" dates = month start minus the days within which 8 in 10 bookings are
 made, from `server/utils/booking-lead-times.ts`: OpenTable, walk-ins/cancellations out, past visits only; event outreach uses

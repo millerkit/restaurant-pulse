@@ -3,14 +3,18 @@
 // Strategy (/sales-strategy, owner-only by default deny). Nothing here is new math: each month is one
 // computeBreakeven() call (server/utils/breakeven.ts), plus the Capacity model's seat limit for headroom.
 //
-// Each month is sorted into one of four kinds, measured at the P&L breakeven (fixed labor + kitchen crew
-// + fixed opex) after planned events and retail, the same "still short" the Breakeven page headlines:
-//   covered   — still short is zero or negative at expected covers
-//   dine-in   — closable by more covers: the lift every night would need is within REALISTIC_LIFT_PCT
-//               and within the seats the Capacity model says we have (max covers)
-//   events    — dine-in alone can't close it (lift too big or beyond the seats): needs event,
-//               catering or buyout money; reported as event sales and about-N-events
-//   no-data   — Breakeven couldn't be computed (no recent covers / spend, or no cost targets)
+// Each month is sorted by what closes its gap at the P&L breakeven (fixed labor + kitchen crew + fixed
+// opex) after planned events and retail, the same "still short" the Breakeven page headlines. Kit's
+// constraint (2026-11-19): at most MAX_EVENTS_PER_MONTH special event (on-site or off-site; catering is a
+// separate lever) a month; the rest has to come from covers, buyouts (at most MAX_BUYOUTS_PER_MONTH),
+// catering or retail. The levers are applied in this order:
+//   1. one event at the typical on-site/off-site size, unless one is already dated that month
+//   2. more covers, up to REALISTIC_LIFT_PCT every night and within Capacity's max covers
+//   3. buyouts on the nights where one adds most (its rate − that weekday's forecast normal night),
+//      up to the cap less any already dated
+//   4. whatever is left is "still to find": catering, retail, or covers beyond the realistic lift
+// Kinds: covered (no gap) / dine-in (covers alone, within the realistic lift) / event (one event + covers)
+// / buyouts (also needs buyouts, within the cap) / gap (still short after all of it) / no-data.
 // The cash line (+ loan principal) is returned alongside, not used for the kind.
 import { computeBreakeven, restaurantYearMonth } from './breakeven'
 
@@ -22,6 +26,10 @@ export const REALISTIC_LIFT_PCT = 0.10
 // seats (another judgment call, like REALISTIC_LIFT_PCT).
 export const REALISTIC_FILL_PCT = 0.85
 const FOCUS_SLOTS_SHOWN = 3
+// Kit, 2026-11-19: realistically no more than one special event a month (catering doesn't count toward
+// it), and buyouts capped at two a month so a month that needs more reads as a real gap.
+export const MAX_EVENTS_PER_MONTH = 1
+export const MAX_BUYOUTS_PER_MONTH = 2
 const BUYOUT_NIGHTS_SHOWN = 2
 
 const addDaysIso = (iso: string, n: number) => {
@@ -31,7 +39,7 @@ const addDaysIso = (iso: string, n: number) => {
 }
 const todayIso = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
 
-export type MonthKind = 'covered' | 'dine-in' | 'events' | 'no-data'
+export type MonthKind = 'covered' | 'dine-in' | 'event' | 'buyouts' | 'gap' | 'no-data'
 
 // How much each weekday runs above or below an area's own average night, from real Toast area covers since
 // the move (the Capacity forecast is one level per area per month with no weekday shape, so on its own
@@ -66,6 +74,56 @@ function weekdayShape(db: ReturnType<typeof useDb>): Map<string, number> {
   return shape
 }
 
+// Float leftovers (covers sized to close a gap exactly) must not trigger the next lever.
+const CENT = 0.01
+
+export type GapPlan = {
+  event: null | { sales: number, profit: number }
+  covers: null | { liftPct: number, profit: number }
+  buyouts: null | { count: number, nights: { weekday: string, extraSales: number }[], profit: number }
+  stillToFind: number, stillToFindSales: number | null
+  eventSlotUsed: boolean, buyoutSlotsLeft: number
+}
+
+// The ladder for one month, pure so it can be checked by hand. short = P&L still short after planned
+// events & retail; lift = the every-night covers lift that would close it alone (profit is linear in lift:
+// Breakeven's lift = gap ÷ dine-in margin at expected covers); profits are sales × contribRate.
+export function planMonthGap(i: {
+  short: number | null, lift: number | null, headroomPct: number | null, contribRate: number | null,
+  eventSize: number | null, eventSlotUsed: boolean, buyoutSlotsLeft: number,
+  bestBuyout: { weekday: string, extraSales: number } | null
+}): { kind: MonthKind, plan: GapPlan } {
+  const c = i.contribRate
+  const plan: GapPlan = { event: null, covers: null, buyouts: null, stillToFind: 0, stillToFindSales: null, eventSlotUsed: i.eventSlotUsed, buyoutSlotsLeft: i.buyoutSlotsLeft }
+  if (i.short == null) return { kind: 'no-data', plan }
+  if (i.short <= 0) return { kind: 'covered', plan }
+  const liftCap = Math.max(0, Math.min(REALISTIC_LIFT_PCT, i.headroomPct ?? Infinity))
+  if (i.lift != null && i.lift <= liftCap) {
+    plan.covers = { liftPct: i.lift, profit: i.short }
+    return { kind: 'dine-in', plan }
+  }
+  let remaining = i.short
+  if (!i.eventSlotUsed && i.eventSize && c) {
+    plan.event = { sales: i.eventSize, profit: i.eventSize * c }
+    remaining -= plan.event.profit
+  }
+  const profitPerLift = i.lift != null && i.lift > 0 ? i.short / i.lift : null
+  if (remaining > CENT && profitPerLift && liftCap > 0) {
+    const l = Math.min(liftCap, remaining / profitPerLift)
+    plan.covers = { liftPct: l, profit: l * profitPerLift }
+    remaining -= plan.covers.profit
+  }
+  if (remaining > CENT && c && i.buyoutSlotsLeft > 0 && i.bestBuyout) {
+    const b = i.bestBuyout
+    const count = Math.min(i.buyoutSlotsLeft, Math.ceil(remaining / (b.extraSales * c)))
+    plan.buyouts = { count, nights: Array.from({ length: count }, () => b), profit: count * b.extraSales * c }
+    remaining -= plan.buyouts.profit
+  }
+  plan.stillToFind = remaining > CENT ? remaining : 0
+  plan.stillToFindSales = c ? plan.stillToFind / c : null
+  return { kind: plan.stillToFind > 0 ? 'gap' : plan.buyouts ? 'buyouts' : 'event', plan }
+}
+
 export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number) {
   const today = restaurantYearMonth()
   const firstMonth = year === today.year ? today.month : 1
@@ -83,6 +141,15 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
   const eventLeadBasis: 'booked-events' | 'large-parties' | 'all-bookings' | null = eventLead == null ? null
     : eventLeads.p80Days != null ? 'booked-events' : eventLeadLarge != null ? 'large-parties' : 'all-bookings'
 
+  // Typical special event: dated on-site/off-site nights with event revenue (catering is its own lever,
+  // so it's left out here, unlike Breakeven's avgEventSize).
+  const typicalEvent = (db.prepare(`
+    SELECT AVG(event_revenue) AS avg, COUNT(*) AS n FROM special_nights
+    WHERE kind IN ('event', 'offsite') AND event_revenue > 0
+  `).get() as { avg: number | null, n: number })
+  const eventSize = typicalEvent.n > 0 ? typicalEvent.avg : null
+  const buyoutRates = loadBuyoutRates(db)
+
   const months = []
   for (let month = firstMonth; month <= 12; month++) {
     const be = computeBreakeven(db, year, month)
@@ -99,15 +166,10 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
 
     const lift = pl.liftPct.withOther
     const short = pl.stillShort
-    let kind: MonthKind
-    if (short == null) kind = 'no-data'
-    else if (short <= 0) kind = 'covered'
-    else if (lift != null && lift <= REALISTIC_LIFT_PCT && (headroomPct == null || lift <= headroomPct)) kind = 'dine-in'
-    else kind = 'events'
-
     // ---- Step 2: what's booked, where the room is, and when to act ----
     const special = [...loadSpecialNights(db, start, end).values()]
     const bookedEvents = special.filter(n => n.kind === 'event' || n.kind === 'offsite' || n.kind === 'catering').length
+    const bookedSpecialEvents = special.filter(n => n.kind === 'event' || n.kind === 'offsite').length
     const bookedBuyouts = special.filter(n => n.kind === 'buyout').length
     const bookedEventRevenue = special.reduce((sum, n) => sum + (n.kind === 'closed' ? 0 : n.eventRevenue), 0)
 
@@ -159,8 +221,19 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
       eventsBasis: eventLeadBasis
     }
 
-    const eventsNeeded = short != null && short > 0 && be.planned.avgEventSize
-      ? Math.ceil(pl.eventSalesNeeded / be.planned.avgEventSize) : null
+    // ---- The ladder (Kit, 2026-11-19): one event, realistic covers, capped buyouts, then what's left ----
+    // Where a buyout adds most: its rate minus that weekday's forecast normal night (dowRevenue).
+    const bestBuyout = buyoutWeekdaysFor(buyoutRates, start)
+      .filter(w => w.dow !== 1 && dowRevenue.has(w.dow))
+      .map(w => ({ weekday: w.short, extraSales: w.rate - dowRevenue.get(w.dow)!.total / dowRevenue.get(w.dow)!.n }))
+      .filter(w => w.extraSales > 0)
+      .sort((a, b) => b.extraSales - a.extraSales)[0] ?? null
+    const { kind, plan } = planMonthGap({
+      short, lift, headroomPct, contribRate: be.contribRate, eventSize,
+      eventSlotUsed: bookedSpecialEvents >= MAX_EVENTS_PER_MONTH,
+      buyoutSlotsLeft: Math.max(0, MAX_BUYOUTS_PER_MONTH - bookedBuyouts),
+      bestBuyout
+    })
 
     months.push({
       month, kind,
@@ -174,21 +247,24 @@ export function computeSalesStrategy(db: ReturnType<typeof useDb>, year: number)
       liftPct: lift,
       coversNeededPerNight: pl.coversPerNightWithOther,
       eventSalesNeeded: pl.eventSalesNeeded,
-      eventsNeeded,
+      plan,
       plannedEventsRevenue: be.planned.eventsRevenue,
       nights: be.nights,
       laborBudgeted: be.laborBudgeted,
-      bookedEvents, bookedBuyouts, bookedEventRevenue,
+      bookedEvents, bookedSpecialEvents, bookedBuyouts, bookedEventRevenue,
       focus, buyoutNights, actBy
     })
   }
 
-  // Event size is the same for every month (all dated event nights), so read it once.
   const probe = computeBreakeven(db, year, firstMonth)
   return {
     year, today, firstMonth,
     realisticLiftPct: REALISTIC_LIFT_PCT,
-    avgEventSize: probe.planned.avgEventSize,
+    avgEventSize: eventSize,
+    typicalEventCount: typicalEvent.n,
+    maxEventsPerMonth: MAX_EVENTS_PER_MONTH,
+    maxBuyoutsPerMonth: MAX_BUYOUTS_PER_MONTH,
+    buyoutRates: { weekday: buyoutRates.weekdayRate, weekend: buyoutRates.weekendRate },
     asOfDate: probe.asOfDate,
     todayIso: todayIso(),
     realisticFillPct: REALISTIC_FILL_PCT,

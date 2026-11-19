@@ -6625,3 +6625,23 @@ clause + ", with " + the reasons (guest counts behind, lower spend per guest). C
 already left out of the goal. Good-news headlines put sales first. This week also gained a spend-per-guest fact (≥ 2 regular
 nights) so a shortfall can be explained by spend. Roles without the sales fact (Sous Chef, Floor Manager) are unchanged.
 Verified locally on in-memory copies of the database trimmed to Jul 3/10/17/24/29 (owner) and Jul 24 (kitchen).
+
+
+## 2026-11-19 — Sales Strategy: one special event a month, then covers, then buyouts
+
+Kit: realistically no more than one special event a month; anything beyond that has to come from buyouts, retail and more
+covers. Before this, "events needed" was the whole remaining gap ÷ the typical event size (event/off-site/catering nights;
+buyouts were never in that average, but the count implicitly stood for any event-type money), which asked for 2–4 events a
+month in 2027. Decisions (Kit): catering is a separate lever and doesn't count toward the one event; buyouts are capped at
+two a month so a month that needs more shows as a real gap.
+
+`planMonthGap` in `server/utils/sales-strategy.ts` (pure): if covers alone close it within the 10% realistic lift and the
+seats → dine-in. Otherwise: one event at the typical on-site/off-site size × contribution rate (skipped when an event or
+off-site night is already dated that month); covers up to 10% (profit linear in lift: gap ÷ covers-alone lift); up to 2
+buyouts (minus dated buyouts) on the weekday where the buyout rate (Sales Plan buyout rates, $10K weekday / $12K weekend)
+minus that weekday's forecast normal-night sales is largest; the rest is "still to find" (profit and sales). A one-cent
+tolerance keeps float leftovers from triggering the next lever. Page: the month table shows covers-alone lift, then 1 event /
+covers lift / buyouts / still to find; the at-a-glance card totals events, buyouts and the profit still to find. Breakeven's
+own `avgEventSize` (incl. catering) is unchanged. Checked the ladder against the 2027 production screenshot's numbers (e.g.
+Jan: event $10.2K + 10% covers $11.6K + 2 buyouts → covered; Nov: $8.6K still to find); local data has no 2027 forecast, so
+the page was only checked rendering, not with real rows.
