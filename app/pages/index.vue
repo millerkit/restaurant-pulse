@@ -8,16 +8,16 @@ import site from '~/config/site.json'
 useHead({ title: `${site.restaurantName} — Summary` })
 
 type Tone = 'good' | 'neutral' | 'concern'
-type Night = { date: string, short: string, status: 'up' | 'on' | 'down' | 'event' | 'closed' | 'none', value: string, detail: string }
+type Night = { date: string, short: string, status: 'up' | 'on' | 'down' | 'event' | 'closed' | 'none' | 'upcoming', value: string, detail: string }
+type Item = { tone: Tone, text: string }
+type Week = { key: 'thisweek' | 'week', title: string, start: string, end: string, headline: string, link: { to: string, label: string } | null, nights: { basis: 'sales' | 'covers', items: Night[] }, items: Item[] }
 type Payload = {
   today: string
   toastThrough: string | null
   salesThrough: string | null
-  week: { start: string, end: string } | null
-  headline: string
+  weeks: Week[]
   notices: string[]
-  sections: { key: string, title: string, link: { to: string, label: string } | null, items: { tone: Tone, text: string }[] }[]
-  nights: { basis: 'sales' | 'covers', items: Night[] } | null
+  sections: { key: string, title: string, link: { to: string, label: string } | null, items: Item[] }[]
   progress: { label: string, actual: number, target: number, status: 'up' | 'on' | 'down', note: string } | null
   note: { body: string, updatedAt: string, updatedBy: string | null } | null
   canEditNote: boolean
@@ -43,7 +43,8 @@ const NIGHT_MARK: Record<Night['status'], { icon: string, cls: string }> = {
   down: { icon: '▼', cls: 'warning' },
   event: { icon: '★', cls: 'event' },
   closed: { icon: '◦', cls: 'neutral' },
-  none: { icon: '–', cls: 'neutral' }
+  none: { icon: '', cls: 'neutral' },
+  upcoming: { icon: '', cls: 'upcoming' }
 }
 const PROGRESS_MARK = { up: '▲ Ahead', on: '✓ On pace', down: '▼ Behind' } as const
 
@@ -92,8 +93,6 @@ async function saveNote() {
       <PageHeader page-name="Summary" :description="`How we've been doing · ${longDate(data.today)}`" :as-of-label="data.toastThrough ? shortDate(data.toastThrough) : undefined" @synced="refresh()" />
 
       <div class="summary">
-        <p class="headline">{{ data.headline }}</p>
-
         <div v-for="n in data.notices" :key="n" class="notice">
           <span class="chip warning">⚠ Data note</span>
           <span>{{ n }}</span>
@@ -122,17 +121,35 @@ async function saveNote() {
           </div>
         </div>
 
-        <!-- Last week, night by night -->
-        <div v-if="data.nights" class="nights" role="list" :aria-label="data.nights.basis === 'sales' ? 'Last week, sales against each night’s goal' : 'Last week, guests each night against expected'">
-          <div v-for="n in data.nights.items" :key="n.date" class="night" role="listitem" :title="n.detail" :aria-label="n.detail">
-            <span class="night-day">{{ n.short }}</span>
-            <span :class="['night-value', NIGHT_MARK[n.status].cls]"><span aria-hidden="true">{{ NIGHT_MARK[n.status].icon }}</span> {{ n.value }}</span>
+        <p v-if="!data.weeks.length" class="headline">There isn’t enough synced data yet to summarize a week.</p>
+
+        <!-- This week so far, then last week: each with its own headline and night strip -->
+        <section v-for="(w, wi) in data.weeks" :key="w.key" :class="['block', 'week-block', { first: wi === 0 }]">
+          <div class="block-head">
+            <h2>{{ w.title }}</h2>
+            <NuxtLink v-if="w.link" :to="w.link.to" class="more">{{ w.link.label }} →</NuxtLink>
           </div>
-        </div>
-        <div v-if="data.nights" class="strip-note">
-          {{ data.nights.basis === 'sales' ? 'Each night’s dine-in sales against its goal.' : 'Guests each night; ▲ ✓ ▼ against what’s expected for that weekday.' }}
-          ★ special night · ◦ closed.
-        </div>
+          <p :class="['headline', { lead: wi === 0 }]">{{ w.headline }}</p>
+
+          <div class="nights" role="list" :aria-label="`${w.title}: ${w.nights.basis === 'sales' ? 'sales against each night’s goal' : 'guests each night against expected'}`">
+            <div v-for="n in w.nights.items" :key="n.date" :class="['night', { upcoming: n.status === 'upcoming' }]" role="listitem" :title="n.detail" :aria-label="n.detail">
+              <span class="night-day">{{ n.short }}</span>
+              <span :class="['night-value', NIGHT_MARK[n.status].cls]"><span v-if="NIGHT_MARK[n.status].icon" aria-hidden="true">{{ `${NIGHT_MARK[n.status].icon}\u00a0` }}</span>{{ n.value }}</span>
+            </div>
+          </div>
+          <div class="strip-note">
+            {{ w.nights.basis === 'sales' ? 'Each night’s dine-in sales against its goal.' : 'Guests each night; ▲ ✓ ▼ against what’s expected for that weekday.' }}
+            ★ special night · ◦ closed.
+          </div>
+
+          <ul v-if="w.items.length" class="items">
+            <li v-for="(it, i) in w.items" :key="i" :class="['item', it.tone]">
+              <span class="mark" :title="TONE_MARK[it.tone].label" aria-hidden="true">{{ TONE_MARK[it.tone].icon }}</span>
+              <span class="sr-only">{{ TONE_MARK[it.tone].label }}: </span>
+              <span>{{ it.text }}</span>
+            </li>
+          </ul>
+        </section>
 
         <section v-for="s in data.sections" :key="s.key" class="block">
           <div class="block-head">
@@ -180,7 +197,10 @@ async function saveNote() {
 }
 .quiet { font-size: 12.5px; color: var(--ink-3); }
 .error { font-size: 12.5px; color: var(--critical-text); }
-.headline { font-size: 21px; line-height: 1.4; font-weight: 600; color: var(--ink); margin: 18px 0 14px; }
+.headline { font-size: 17px; line-height: 1.4; font-weight: 600; color: var(--ink); margin: 2px 0 12px; }
+.headline.lead { font-size: 21px; }
+.week-block .items { margin-top: 12px; }
+.week-block.first .block-head { border-top: none; padding-top: 4px; }
 .notice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
 
 .owners-note { margin: 4px 0 16px; border-left: 4px solid var(--accent); border-radius: 0 18px 18px 0; }
@@ -205,6 +225,8 @@ async function saveNote() {
 .night-value.good { color: var(--good-text); }
 .night-value.warning { color: var(--warning-text); }
 .night-value.event, .night-value.neutral { color: var(--ink-2); }
+.night.upcoming { background: transparent; border: 1px dashed var(--hair); }
+.night-value.upcoming { color: var(--ink-3); font-weight: 600; }
 .strip-note { font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
 
 .block { margin: 22px 0 0; gap: 8px; }
@@ -228,7 +250,7 @@ async function saveNote() {
 .footnote { font-size: 12px; color: var(--ink-3); margin: 28px 0 0; line-height: 1.5; }
 @media (max-width: 760px) {
   .nights { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .headline { font-size: 19px; }
+  .headline.lead { font-size: 19px; }
   .item { font-size: 14.5px; }
 }
 </style>

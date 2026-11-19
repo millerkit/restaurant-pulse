@@ -29,7 +29,7 @@ import { computeRevenueProjection } from './revenue-projection'
 
 type Db = Database.Database
 export type Tone = 'good' | 'neutral' | 'concern'
-type SectionKey = 'week' | 'month' | 'cash' | 'ahead'
+type SectionKey = 'thisweek' | 'week' | 'month' | 'cash' | 'ahead'
 
 type Fact = {
   id: string
@@ -46,20 +46,32 @@ type Fact = {
 export type SummaryNight = {
   date: string
   short: string
-  status: 'up' | 'on' | 'down' | 'event' | 'closed' | 'none'
+  status: 'up' | 'on' | 'down' | 'event' | 'closed' | 'none' | 'upcoming'
   value: string // what the dot shows: "+6%" vs goal, or a guest count
   detail: string // accessible description / tooltip
+}
+
+// A week block (2026-11-19): "This week so far" (the current Tue–Sun, synced nights only) on top,
+// then "Last week" (the most recent complete Tue–Sun). Each has its own headline and night strip so
+// it's always clear which week a sentence describes.
+export type WeekBlock = {
+  key: 'thisweek' | 'week'
+  title: string
+  start: string
+  end: string
+  headline: string
+  link: { to: string, label: string } | null
+  nights: { basis: 'sales' | 'covers', items: SummaryNight[] }
+  items: { tone: Tone, text: string }[]
 }
 
 export type HomeSummary = {
   today: string
   toastThrough: string | null
   salesThrough: string | null
-  week: { start: string, end: string } | null
-  headline: string
+  weeks: WeekBlock[]
   notices: string[]
   sections: { key: SectionKey, title: string, link: { to: string, label: string } | null, items: { tone: Tone, text: string }[] }[]
-  nights: { basis: 'sales' | 'covers', items: SummaryNight[] } | null
   progress: { label: string, actual: number, target: number, status: 'up' | 'on' | 'down', note: string } | null
 }
 
@@ -195,34 +207,85 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
     notices.push(`Sales from QuickBooks are only synced through ${shortDate(salesThrough)}, so dollar figures are left out until they catch up.`)
   }
 
-  // ---- Last week (the most recent complete Tue–Sun with covers synced) ----
+  // ---- Shared night helpers for both week blocks ----
   type Night = {
     date: string, covers: number | null, core: number | null, event: number,
     plan: SpecialNight | null, coversTarget: number | null, dollarTarget: number | null,
     kind: 'ordinary' | 'event' | 'closed'
   }
-  let week: HomeSummary['week'] = null
-  let nightsOut: HomeSummary['nights'] = null
+  const nightsFor = (from: string): Night[] => Array.from({ length: 6 }, (_, i) => {
+    const date = addDays(from, i)
+    const plan = planned.get(date) ?? null
+    const t = targetOn(date)
+    const covers = coversOn.get(date) ?? null
+    const core = coreOn.get(date) ?? null
+    const event = eventOn.get(date) ?? 0
+    let kind: Night['kind'] = 'ordinary'
+    if (plan && (plan.kind === 'closed' || plan.kind === 'offsite')) kind = 'closed'
+    else if ((covers ?? 0) < MIN_COVERS_FOR_OPEN_DAY && !(event > 0)) kind = 'closed'
+    else if (plan && (plan.kind === 'buyout' || plan.kind === 'event')) kind = 'event'
+    else if (t?.dollarTarget != null && isEventNight(core ?? 0, event, t.dollarTarget)) kind = 'event'
+    return { date, covers, core, event, plan, coversTarget: t?.coversTarget ?? null, dollarTarget: t?.dollarTarget ?? null, kind }
+  })
+
+  // Special nights that have happened (buyouts, events, closures) in a week block.
+  const specialFacts = (nights: Night[], section: SectionKey, salesSynced: boolean) => {
+    for (const n of nights) {
+      if (!n.plan && n.kind !== 'event') continue
+      const day = weekdayName(n.date)
+      if (n.plan?.kind === 'closed') {
+        facts.push({ id: `closed-${n.date}`, section, tone: 'neutral', weight: 0, roles: ALL, text: `We were closed ${day}${n.plan.holiday ? ` for ${n.plan.holiday}` : ''}.` })
+        continue
+      }
+      const label = n.plan?.note ? n.plan.note : n.plan?.kind === 'buyout' ? 'buyout' : n.plan?.kind === 'offsite' ? 'off-site event' : n.plan?.kind === 'catering' ? 'catering' : 'event'
+      const guests = n.covers && n.covers >= MIN_COVERS_FOR_OPEN_DAY ? `, with ${n.covers} guests` : ''
+      // Without synced sales, owner and GM get the same dollar-free sentence as the kitchen.
+      facts.push({ id: `special-${n.date}`, section, tone: 'neutral', weight: 0, roles: salesSynced ? GUESTS_ONLY : ALL, text: `${day} was the ${label}${guests}.` })
+      if (salesSynced) {
+        // Event sales (41xx) only; a buyout's price rings into dine-in, so that night's dine-in counts.
+        const brought = n.plan?.kind === 'buyout' ? (n.core ?? 0) : n.event
+        facts.push({
+          id: `special-$-${n.date}`, section, tone: brought > 0 ? 'good' : 'neutral', weight: 0, roles: MONEY,
+          text: brought > 0 ? `${day}’s ${label} brought in ${money(brought)}${guests}.` : `${day} was the ${label}${guests}.`
+        })
+      }
+    }
+  }
+
+  // The six-night strip: sales vs. goal for owner/GM (when synced), guests vs. expected otherwise.
+  // Nights after `through` haven't been synced yet ("Tonight" / "To come", or their planned closure/event).
+  const stripFor = (nights: Night[], basis: 'sales' | 'covers', through: string): SummaryNight[] => nights.map((n) => {
+    const short = WEEKDAYS.find(w => w.dow === dow(n.date))!.short
+    if (n.date > through) {
+      const p = n.plan
+      if (p && (p.kind === 'closed' || p.kind === 'offsite')) return { date: n.date, short, status: 'closed' as const, value: 'Closed', detail: `${weekdayName(n.date)}: ${p.kind === 'offsite' ? 'off-site event, no dinner service' : `closed${p.holiday ? ` (${p.holiday})` : ''}`}` }
+      if (p && (p.kind === 'buyout' || p.kind === 'event')) return { date: n.date, short, status: 'event' as const, value: p.kind === 'buyout' ? 'Buyout' : 'Event', detail: `${weekdayName(n.date)}: ${p.note ?? 'special night'} (still to come)` }
+      if (n.date < today) return { date: n.date, short, status: 'none' as const, value: '—', detail: `${weekdayName(n.date)}: not synced yet` }
+      return { date: n.date, short, status: 'upcoming' as const, value: n.date === today ? 'Tonight' : 'To come', detail: `${weekdayName(n.date)}: still to come` }
+    }
+    if (n.kind === 'closed') return { date: n.date, short, status: 'closed' as const, value: 'Closed', detail: `${weekdayName(n.date)}: closed${n.plan?.holiday ? ` (${n.plan.holiday})` : ''}` }
+    if (n.kind === 'event') return { date: n.date, short, status: 'event' as const, value: basis === 'sales' ? (n.plan?.kind === 'buyout' ? 'Buyout' : 'Event') : (n.covers ? `${n.covers}` : 'Event'), detail: `${weekdayName(n.date)}: ${n.plan?.note ?? 'special night'}` }
+    const actual = basis === 'sales' ? n.core : n.covers
+    const target = basis === 'sales' ? n.dollarTarget : n.coversTarget
+    if (actual == null || !target) return { date: n.date, short, status: 'none' as const, value: '—', detail: `${weekdayName(n.date)}: no data` }
+    const r = actual / target - 1
+    const status = r >= STEADY_PCT ? 'up' as const : r > -STEADY_PCT ? 'on' as const : 'down' as const
+    const value = basis === 'sales' ? `${r >= 0 ? '+' : '−'}${pctWhole(r)}` : `${actual}`
+    const detail = basis === 'sales'
+      ? `${weekdayName(n.date)}: ${money(actual)} against a ${money(target)} goal`
+      : `${weekdayName(n.date)}: ${actual} guests against about ${Math.round(target)} expected`
+    return { date: n.date, short, status, value, detail }
+  })
+
+  // ---- Last week (the most recent complete Tue–Sun with covers synced) ----
+  let week: { start: string, end: string } | null = null
+  let lastStrip: WeekBlock['nights'] | null = null
   if (toastThrough) {
     const lastSunday = addDays(toastThrough, -dow(toastThrough)) // Sunday on/before
     const start = addDays(lastSunday, -5)
     week = { start, end: lastSunday }
     const salesSynced = !!salesThrough && salesThrough >= lastSunday
 
-    const nightsFor = (from: string): Night[] => Array.from({ length: 6 }, (_, i) => {
-      const date = addDays(from, i)
-      const plan = planned.get(date) ?? null
-      const t = targetOn(date)
-      const covers = coversOn.get(date) ?? null
-      const core = coreOn.get(date) ?? null
-      const event = eventOn.get(date) ?? 0
-      let kind: Night['kind'] = 'ordinary'
-      if (plan && (plan.kind === 'closed' || plan.kind === 'offsite')) kind = 'closed'
-      else if ((covers ?? 0) < MIN_COVERS_FOR_OPEN_DAY && !(event > 0)) kind = 'closed'
-      else if (plan && (plan.kind === 'buyout' || plan.kind === 'event')) kind = 'event'
-      else if (t?.dollarTarget != null && isEventNight(core ?? 0, event, t.dollarTarget)) kind = 'event'
-      return { date, covers, core, event, plan, coversTarget: t?.coversTarget ?? null, dollarTarget: t?.dollarTarget ?? null, kind }
-    })
     const nights = nightsFor(start)
     const ordinary = nights.filter(n => n.kind === 'ordinary' && n.covers != null)
     const open = nights.filter(n => n.kind !== 'closed')
@@ -266,27 +329,7 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       }
     }
 
-    // Special nights that happened last week.
-    for (const n of nights) {
-      if (!n.plan && n.kind !== 'event') continue
-      const day = weekdayName(n.date)
-      if (n.plan?.kind === 'closed') {
-        facts.push({ id: `closed-${n.date}`, section: 'week', tone: 'neutral', weight: 0, roles: ALL, text: `We were closed ${day}${n.plan.holiday ? ` for ${n.plan.holiday}` : ''}.` })
-        continue
-      }
-      const label = n.plan?.note ? n.plan.note : n.plan?.kind === 'buyout' ? 'buyout' : n.plan?.kind === 'offsite' ? 'off-site event' : n.plan?.kind === 'catering' ? 'catering' : 'event'
-      const guests = n.covers && n.covers >= MIN_COVERS_FOR_OPEN_DAY ? `, with ${n.covers} guests` : ''
-      // Without synced sales, owner and GM get the same dollar-free sentence as the kitchen.
-      facts.push({ id: `special-${n.date}`, section: 'week', tone: 'neutral', weight: 0, roles: salesSynced ? GUESTS_ONLY : ALL, text: `${day} was the ${label}${guests}.` })
-      if (salesSynced) {
-        // Event sales (41xx) only; a buyout's price rings into dine-in, so that night's dine-in counts.
-        const brought = n.plan?.kind === 'buyout' ? (n.core ?? 0) : n.event
-        facts.push({
-          id: `special-$-${n.date}`, section: 'week', tone: brought > 0 ? 'good' : 'neutral', weight: 0, roles: MONEY,
-          text: brought > 0 ? `${day}’s ${label} brought in ${money(brought)}${guests}.` : `${day} was the ${label}${guests}.`
-        })
-      }
-    }
+    specialFacts(nights, 'week', salesSynced)
 
     // Sales vs. the weekly goal, and spend per guest (owner and GM).
     if (salesSynced) {
@@ -314,26 +357,52 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
       }
     }
 
-    // The six-night strip: sales vs. goal for owner/GM (when synced), guests vs. expected otherwise.
     const basis: 'sales' | 'covers' = !guestsOnly && salesSynced ? 'sales' : 'covers'
-    nightsOut = {
-      basis,
-      items: nights.map((n) => {
-        const short = WEEKDAYS.find(w => w.dow === dow(n.date))!.short
-        if (n.kind === 'closed') return { date: n.date, short, status: 'closed' as const, value: 'Closed', detail: `${weekdayName(n.date)}: closed${n.plan?.holiday ? ` (${n.plan.holiday})` : ''}` }
-        if (n.kind === 'event') return { date: n.date, short, status: 'event' as const, value: basis === 'sales' ? (n.plan?.kind === 'buyout' ? 'Buyout' : 'Event') : (n.covers ? `${n.covers}` : 'Event'), detail: `${weekdayName(n.date)}: ${n.plan?.note ?? 'special night'}` }
-        const actual = basis === 'sales' ? n.core : n.covers
-        const target = basis === 'sales' ? n.dollarTarget : n.coversTarget
-        if (actual == null || !target) return { date: n.date, short, status: 'none' as const, value: '—', detail: `${weekdayName(n.date)}: no data` }
-        const r = actual / target - 1
-        const status = r >= STEADY_PCT ? 'up' as const : r > -STEADY_PCT ? 'on' as const : 'down' as const
-        const value = basis === 'sales' ? `${r >= 0 ? '+' : '−'}${pctWhole(r)}` : `${actual}`
-        const detail = basis === 'sales'
-          ? `${weekdayName(n.date)}: ${money(actual)} against a ${money(target)} goal`
-          : `${weekdayName(n.date)}: ${actual} guests against about ${Math.round(target)} expected`
-        return { date: n.date, short, status, value, detail }
-      })
+    lastStrip = { basis, items: stripFor(nights, basis, lastSunday) }
+  }
+
+  // ---- This week so far (the current Tue–Sun, through the last synced night before today) ----
+  // Skipped when it is the same week as "Last week" (Mondays) or no night of it is synced yet.
+  let thisWeek: { start: string, end: string, through: string } | null = null
+  let thisStrip: WeekBlock['nights'] | null = null
+  const thisStart = addDays(today, -((dow(today) + 5) % 7)) // Tuesday on/before today
+  const thisThrough = toastThrough ? (toastThrough < today ? toastThrough : addDays(today, -1)) : null
+  if (thisThrough && thisThrough >= thisStart && (!week || thisStart > week.start)) {
+    thisWeek = { start: thisStart, end: addDays(thisStart, 5), through: thisThrough }
+    const salesSynced = !!salesThrough && salesThrough >= thisThrough
+    const nights = nightsFor(thisStart)
+    const past = nights.filter(n => n.date <= thisThrough)
+
+    // Guests on regular nights so far vs. what's expected for those weekdays (same targets as This Week).
+    const judged = past.filter(n => n.kind === 'ordinary' && n.covers != null && n.coversTarget && n.coversTarget > 0)
+    if (judged.length) {
+      const guests = judged.reduce((s, n) => s + n.covers!, 0)
+      const expected = judged.reduce((s, n) => s + n.coversTarget!, 0)
+      const r = guests / expected - 1
+      const over = `${guests.toLocaleString()} guests over ${judged.length} regular night${judged.length === 1 ? '' : 's'} so far`
+      if (r >= STEADY_PCT) facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'good', weight: r, roles: ALL, text: `${cap(over)}, ${pctWhole(r)} more than expected for those nights.`, headline: `guest counts are ${pctWhole(r)} ahead of expected` })
+      else if (r <= -STEADY_PCT) facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'concern', weight: -r, roles: ALL, text: `${cap(over)}, ${pctWhole(r)} fewer than expected for those nights.`, headline: `guest counts are ${pctWhole(r)} behind expected` })
+      else facts.push({ id: 'tw-covers', primary: true, section: 'thisweek', tone: 'neutral', weight: 0, roles: ALL, text: `${cap(over)}, about what’s expected for those nights.` })
     }
+
+    specialFacts(past, 'thisweek', salesSynced)
+
+    // Dine-in sales so far vs. the goal for the same nights (owner and GM).
+    if (salesSynced) {
+      const goalNights = past.filter(n => n.kind !== 'closed' && n.dollarTarget != null)
+      const goal = goalNights.reduce((s, n) => s + n.dollarTarget!, 0)
+      const actual = goalNights.reduce((s, n) => s + (n.core ?? 0) + (n.kind === 'event' ? n.event : 0), 0)
+      if (goal > 0) {
+        const diff = actual / goal - 1
+        const after = `after ${goalNights.length} night${goalNights.length === 1 ? '' : 's'}`
+        if (diff >= 0.02) facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'good', weight: diff, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, ${pctWhole(diff)} above the ${money(goal)} goal for those nights.`, headline: `dine-in sales are ${pctWhole(diff)} ahead of goal` })
+        else if (diff > -STEADY_PCT) facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'neutral', weight: 0, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, close to the ${money(goal)} goal for those nights.` })
+        else facts.push({ id: 'tw-sales', primary: true, section: 'thisweek', tone: 'concern', weight: -diff, roles: MONEY, text: `Dine-in sales are at ${money(actual)} ${after}, about ${pctWhole(diff)} short of the ${money(goal)} goal for those nights.`, headline: `dine-in sales are about ${pctWhole(diff)} behind goal` })
+      }
+    }
+
+    const basis: 'sales' | 'covers' = !guestsOnly && salesSynced ? 'sales' : 'covers'
+    thisStrip = { basis, items: stripFor(nights, basis, thisThrough) }
   }
 
   // ---- This month so far ----
@@ -533,7 +602,6 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
 
   const link = (to: string, label: string) => (roleCanViewPage(role, to) ? { to, label } : null)
   const sectionDefs: { key: SectionKey, title: string, link: { to: string, label: string } | null }[] = [
-    { key: 'week', title: week ? `Last week (${shortDate(week.start)} – ${shortDate(week.end)})` : 'Last week', link: guestsOnly ? link('/kitchen-week', 'This Week') : link('/pl/revenue-calendar', 'Daily Results') },
     { key: 'month', title: `${monthName} so far`, link: link('/budget', 'Budget Check') },
     { key: 'cash', title: 'Cash and loans', link: link('/cashflow', 'Cash & Loans') },
     { key: 'ahead', title: 'Looking ahead', link: guestsOnly ? link('/kitchen-week', 'Next 7 nights') : link('/this-week', 'Next 7 nights') }
@@ -542,16 +610,38 @@ export function buildHomeSummary(db: Db, role: Role, today: string, cash: CashIn
     .map(s => ({ ...s, items: sorted(s.key).map(f => ({ tone: f.tone, text: f.text })) }))
     .filter(s => s.items.length > 0)
 
-  // Headline: the biggest good news first, then the biggest concern, from last week's facts only.
-  const weekFacts = visible.filter(f => f.section === 'week' && f.headline)
-  const good = weekFacts.filter(f => f.tone === 'good').sort((a, b) => b.weight - a.weight)
-  const concern = weekFacts.filter(f => f.tone === 'concern').sort((a, b) => b.weight - a.weight)
-  let headline: string
-  if (!week) headline = 'There isn’t enough synced data yet to summarize a full week.'
-  else if (good[0] && concern[0]) headline = `${cap(good[0].headline!)} last week, though ${concern[0].headline}.`
-  else if (good[0]) headline = `A good week: ${good[0].headline}${good[1] ? ` and ${good[1].headline}` : ''}.`
-  else if (concern[0]) headline = `A quieter week: ${concern[0].headline}.`
-  else headline = 'A steady week, in line with recent weeks.'
+  // Headlines: the biggest good news first, then the biggest concern, from that week's facts only.
+  const headlineFor = (key: 'thisweek' | 'week') => {
+    const hs = visible.filter(f => f.section === key && f.headline)
+    const good = hs.filter(f => f.tone === 'good').sort((a, b) => b.weight - a.weight)
+    const concern = hs.filter(f => f.tone === 'concern').sort((a, b) => b.weight - a.weight)
+    if (key === 'thisweek') {
+      if (good[0] && concern[0]) return `So far this week, ${good[0].headline}, though ${concern[0].headline}.`
+      if (good[0]) return `A good start to the week: ${good[0].headline}${good[1] ? ` and ${good[1].headline}` : ''}.`
+      if (concern[0]) return `A slower start to the week: ${concern[0].headline}.`
+      return 'A steady start to the week, close to what’s expected so far.'
+    }
+    if (good[0] && concern[0]) return `${cap(good[0].headline!)} last week, though ${concern[0].headline}.`
+    if (good[0]) return `A good week: ${good[0].headline}${good[1] ? ` and ${good[1].headline}` : ''}.`
+    if (concern[0]) return `A quieter week: ${concern[0].headline}.`
+    return 'A steady week, in line with recent weeks.'
+  }
+  const range = (from: string, to: string) => (from === to ? `${weekdayName(from).slice(0, 3)}, ${shortDate(from)}` : `${shortDate(from)} – ${shortDate(to)}`)
+  const weeks: WeekBlock[] = []
+  if (thisWeek && thisStrip) {
+    weeks.push({
+      key: 'thisweek', title: `This week so far (${range(thisWeek.start, thisWeek.through)})`, start: thisWeek.start, end: thisWeek.end,
+      headline: headlineFor('thisweek'), link: guestsOnly ? link('/kitchen-week', 'This Week') : link('/this-week', 'This Week'),
+      nights: thisStrip, items: sorted('thisweek').map(f => ({ tone: f.tone, text: f.text }))
+    })
+  }
+  if (week && lastStrip) {
+    weeks.push({
+      key: 'week', title: `Last week (${range(week.start, week.end)})`, start: week.start, end: week.end,
+      headline: headlineFor('week'), link: guestsOnly ? null : link('/pl/revenue-calendar', 'Daily Results'),
+      nights: lastStrip, items: sorted('week').map(f => ({ tone: f.tone, text: f.text }))
+    })
+  }
 
-  return { today, toastThrough, salesThrough, week, headline, notices, sections, nights: nightsOut, progress }
+  return { today, toastThrough, salesThrough, weeks, notices, sections, progress }
 }

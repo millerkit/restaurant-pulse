@@ -6597,3 +6597,19 @@ comparisons clear ±`FLAT_BAND` 5%, mixed/flat otherwise, too early under `MIN_C
 campaigns over Oct 13–Nov 1 real nights (whole restaurant Tue–Thu: +11% vs before; dining room Tue–Wed: +19%, extra profit
 computed from the area's spend); rows removed. Whole-restaurant profit per cover was blank locally (no recent core revenue) and the
 plan comparison blank (no local snapshots): neither exercised until production. Page checked by server render only.
+
+
+## 2026-11-19 — Home › Summary: "This week so far" above "Last week"
+
+Kit: the headline at the top ("A good week: dine-in sales beat the weekly goal…") didn't say which week it meant. The page
+now opens with a **This week so far** block (current Tue–Sun, through min(Toast synced date, yesterday)), then a **Last week**
+block; each has its own title with dates, headline, six-night strip and sentences (`HomeSummary.weeks: WeekBlock[]`, replacing
+the single `headline`/`week`/`nights`). This week's facts: guests on regular nights so far vs. each weekday's expected covers
+(This Week's targets), dine-in sales so far vs. those nights' goals (owner/GM, when QBO is synced), and special nights so far
+(same helper as last week). Headlines: "A good start to the week: …" / "A slower start…" / "So far this week, …, though …" /
+"A steady start…". Strip tiles after the synced date show the planned closure/buyout, else "Tonight"/"To come" (dashed); a
+past night not yet synced shows "—". The block is skipped when it is the same week as Last week (Mondays) or none of it is
+synced (Tuesdays). Kitchen/Floor: This Week link moved to the this-week block; last week has no link for them. Verified locally
+by running the builder as owner and kitchen for Nov 2/3/4/6 (local Toast data ends Nov 4; QBO ends Jul 28, so the sales
+sentences weren't exercised locally) and by screenshots at desktop and phone width with the API temporarily back-dated.
+Typecheck unchanged (282). A "Hydration completed but contains mismatches" console warning on `/` predates this change.

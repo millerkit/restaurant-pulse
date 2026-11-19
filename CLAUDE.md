@@ -280,7 +280,9 @@ wrapper), skipped when the projection is incomplete. Runs in `runNightlySync()` 
 
 ## Home › Summary (`/`, every role) — built 2026-11-17
 
-A few plain sentences on how we've been doing: last complete Tue–Sun week, this month so far, Cash and loans (owner
+A few plain sentences on how we've been doing: **this week so far** (the current Tue–Sun through the last synced night,
+its own headline and night strip with "Tonight"/"To come" tiles; hidden on Mondays/Tuesdays until a night of it syncs), then
+**last week** (last complete Tue–Sun, own headline and strip), this month so far, Cash and loans (owner
 only), looking ahead (next 2 weeks), plus a six-night strip, one progress bar and an optional owners' note
 (`home_summary_note`, migration 0023, owner-only `POST /api/home-summary/note`). Rules-based, not an AI writer
 (`server/utils/home-summary.ts`): each finding is a fact with a tone, a size and the **roles allowed to see it, filtered
@@ -290,6 +292,7 @@ pay is folded into labor for non-owners, never removed); the Sous Chef sees gues
 cost % (5010+5220 over all food sales, vs. plan, else the month before), never dollars. Profit and cost % only for a
 closed, fully synced month. Booking sentences only from a fresh OpenTable upload. Owner's reserve figures come from
 calling the Cash & Loans handler directly. Stale Toast/QBO data adds a "Data note" and drops the affected sentences.
+This week is judged against the same nights' goals (sales) and each weekday's expected guests, not the past four weeks.
 
 ## FOH Hours (Team › FOH Hours, `/foh-hours`) — built 2026-11-17
 
