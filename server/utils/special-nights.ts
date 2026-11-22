@@ -2,13 +2,13 @@ import type Database from 'better-sqlite3'
 
 export const SPECIAL_NIGHT_KINDS = ['buyout', 'closed', 'offsite', 'event', 'catering'] as const
 export type SpecialNightKind = typeof SPECIAL_NIGHT_KINDS[number]
-export type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, bookedOn?: string | null, holiday?: string }
+export type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, bookedOn?: string | null, ticketPrice?: number | null, holiday?: string }
 
 // Dated one-off nights entered on the Sales Plan (special_nights). Raw table only.
 export function loadSpecialNights(db: Database.Database, from: string, to: string): Map<string, SpecialNight> {
   try {
     const rows = db.prepare(`
-      SELECT date, kind, expected_revenue AS expectedRevenue, event_revenue AS eventRevenue, note, booked_on AS bookedOn
+      SELECT date, kind, expected_revenue AS expectedRevenue, event_revenue AS eventRevenue, note, booked_on AS bookedOn, ticket_price AS ticketPrice
       FROM special_nights WHERE date >= ? AND date <= ? ORDER BY date
     `).all(from, to) as SpecialNight[]
     return new Map(rows.map(r => [r.date, r]))

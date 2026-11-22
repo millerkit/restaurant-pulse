@@ -6716,3 +6716,19 @@ owners can try their own numbers.
   date (first Toast shift on record) are listed with start date and eligible-on date, and are held out of the eligible /
   Enrollment TBD groups until that date. A start is trusted only if the first shift is more than 6 days after our data begins;
   otherwise the person is assumed past the wait. Grandfathered and salaried skip it.
+
+## 2026-11-22: Event reservations on the Sales Plan's Special Nights (display only)
+
+Kit asked whether OpenTable bookings for New Year's Eve feed the projections (they don't: reservations only drive booking
+pace and lead times; special-night event revenue is typed). Built a display-only suggestion:
+- Migration 0030 adds `special_nights.ticket_price` (per-guest price, nullable; schema.sql updated).
+- `GET /api/special-nights` adds `bookings` to **on-site event** nights: covers and parties from the latest OpenTable upload
+  (not canceled, walk-ins excluded), the upload's timestamp, and `suggestedRevenue` = covers x ticket price (when a price is set).
+- Sales Plan Special Nights table: new "Reservations (OpenTable)" column with an inline "Ticket $/guest" input (saves via the
+  same POST, event revenue unchanged) and "Suggests $X (entered $Y; ▲ under / ▼ over)". Nothing reads the suggestion;
+  budget and forecast still use the typed `event_revenue`. POST keeps a saved ticket price when the field is blank.
+- Relabeled "Regular dine-in revenue" to "Dine-in revenue"; buyout rows add "buyout price" beside the amount.
+- Verified the API against local data (migration, GET, POST). The page itself was not checked visually. Possible follow-ups: let
+  the owners adopt the suggestion with a button; filter reservations by OpenTable experience title if NYE uses one (not yet seen).
+
+- **Adopt this number (2026-11-22)**: a button beside the suggestion saves it as the night's event revenue (same POST, other fields unchanged; ticket price kept), then reloads special nights and the projection. Now the suggestion can reach the budget, but only by that click.

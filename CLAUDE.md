@@ -196,7 +196,7 @@ the June 2026 opening nights are out, 2026-11-19)) × that month's covers index,
   4180/4175 off-site, 4230/4210 catering; food/drink split by the real sales mix), puts a replaced night's
   dine-in back into Food/Beverage Sales, and event food counts in food cost. Those accounts are managed (typing
   pins them); a hand-budgeted row with no `auto_amount` is left alone in months with no dated event revenue.
-  The current month's Event Sales stay hand-budgeted (plan frozen). Existing nights got `event_revenue` 0:
+  The current month's Event Sales stay hand-budgeted (plan frozen). **Event reservations (2026-11-22, display only)**: on-site event rows show OpenTable covers booked and, with a per-guest `ticket_price`, a suggested event revenue with an "Adopt this number" button; only the click changes the budget. Existing nights got `event_revenue` 0:
   re-enter Nov 17 Wild Things ($6,500 of tickets) in the new field.
 - **Current month**: the plan is frozen; the live forecast is the night-by-night projection (synced sales
   + each remaining night's recent weekday average or special-night amount, nudged by bookings for the

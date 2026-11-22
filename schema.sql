@@ -1002,7 +1002,10 @@ CREATE TABLE special_nights (
   updated_at       TEXT NOT NULL,
   -- booked_on (2026-11-18, migration 0027): when the event/buyout/catering job was booked (deposit paid or
   -- agreement signed), YYYY-MM-DD, nullable. Sales Strategy's event outreach dates use date - booked_on.
-  booked_on        TEXT
+  booked_on        TEXT,
+  -- ticket_price (2026-11-22, migration 0030): price per guest of a ticketed on-site event. The Sales Plan shows
+  -- covers booked (latest OpenTable upload) x ticket_price as a suggested event_revenue; display only.
+  ticket_price     REAL
 );
 
 -- Forecast snapshots (2026-11-11, server/utils/forecast-snapshots.ts). The forecast overwrites

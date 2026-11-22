@@ -8,7 +8,7 @@ import { refreshForecastsAfterChange } from '../utils/capacity-forecast'
 // computed in server/utils/budget-forecast.ts.
 import { SPECIAL_NIGHT_KINDS, type SpecialNightKind } from '../utils/special-nights'
 
-type Body = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue?: number, note?: string | null, bookedOn?: string | null }
+type Body = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue?: number, note?: string | null, bookedOn?: string | null, ticketPrice?: number | null }
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<Body>(event)
@@ -30,15 +30,21 @@ export default defineEventHandler(async (event) => {
   if (bookedOn && (!/^\d{4}-\d{2}-\d{2}$/.test(bookedOn) || Number.isNaN(Date.parse(`${bookedOn}T00:00:00Z`)) || bookedOn > body.date)) {
     throw createError({ statusCode: 400, statusMessage: 'bookedOn must be a YYYY-MM-DD date on or before the night' })
   }
+  // ticketPrice (optional, on-site events): per-guest price. Left blank on an existing night, it keeps what was saved.
+  const ticketPrice = body.ticketPrice == null ? null : body.ticketPrice
+  if (ticketPrice != null && (typeof ticketPrice !== 'number' || !Number.isFinite(ticketPrice) || ticketPrice < 0)) {
+    throw createError({ statusCode: 400, statusMessage: 'ticketPrice must be a number of 0 or more' })
+  }
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 200) : null
   const db = useDb()
   try {
     db.prepare(`
-      INSERT INTO special_nights (date, kind, expected_revenue, event_revenue, note, updated_at, booked_on) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO special_nights (date, kind, expected_revenue, event_revenue, note, updated_at, booked_on, ticket_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (date) DO UPDATE SET kind = excluded.kind, expected_revenue = excluded.expected_revenue,
         event_revenue = excluded.event_revenue, note = excluded.note, updated_at = excluded.updated_at,
-        booked_on = COALESCE(excluded.booked_on, special_nights.booked_on)
-    `).run(body.date, body.kind, body.expectedRevenue, eventRevenue, note, new Date().toISOString(), bookedOn)
+        booked_on = COALESCE(excluded.booked_on, special_nights.booked_on),
+        ticket_price = COALESCE(excluded.ticket_price, special_nights.ticket_price)
+    `).run(body.date, body.kind, body.expectedRevenue, eventRevenue, note, new Date().toISOString(), bookedOn, ticketPrice)
   } catch (err) {
     if (err instanceof Error && /no such table/i.test(err.message)) {
       throw createError({ statusCode: 500, statusMessage: 'special_nights table is missing — database migrations have not been applied (see Settings)' })
@@ -47,5 +53,5 @@ export default defineEventHandler(async (event) => {
   }
   // A forecast input changed: recompute the automatic forecast and budget lines.
   refreshForecastsAfterChange(useDb(), useRuntimeConfig().qbo?.syncTimeZone)
-  return { date: body.date, kind: body.kind, expectedRevenue: body.expectedRevenue, eventRevenue, note, bookedOn }
+  return { date: body.date, kind: body.kind, expectedRevenue: body.expectedRevenue, eventRevenue, note, bookedOn, ticketPrice }
 })

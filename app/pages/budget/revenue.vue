@@ -691,7 +691,7 @@ async function saveRevenue() {
 // nights. A backtest of Aug–Oct put the old method at 8.1% average month-end error vs.
 // 4.0–4.9% for this one once special nights are entered (see CLAUDE.md).
 type SpecialNightKind = 'buyout' | 'closed' | 'offsite' | 'event' | 'catering'
-type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, bookedOn?: string | null }
+type SpecialNight = { date: string, kind: SpecialNightKind, expectedRevenue: number, eventRevenue: number, note: string | null, bookedOn?: string | null, ticketPrice?: number | null, bookings?: { covers: number, parties: number, asOf: string, suggestedRevenue: number | null } }
 const SPECIAL_KIND_LABEL: Record<SpecialNightKind, string> = {
   buyout: 'Buyout',
   closed: 'Closed',
@@ -815,6 +815,41 @@ async function addSpecialNight() {
     specialMessage.value = (err as { data?: { statusMessage?: string } })?.data?.statusMessage ?? 'Could not save that night.'
   }
 }
+// Saves the per-guest ticket price on an existing event night (the suggestion only displays; the
+// entered event revenue is sent back unchanged).
+async function saveTicketPrice(n: SpecialNight, raw: string) {
+  specialStatus.value = 'saving'
+  try {
+    await $fetch('/api/special-nights', {
+      method: 'POST',
+      body: { date: n.date, kind: n.kind, expectedRevenue: n.expectedRevenue, eventRevenue: n.eventRevenue, note: n.note, ticketPrice: Math.max(0, parseEditableAmount(raw)) }
+    })
+    specialStatus.value = 'idle'
+    specialMessage.value = ''
+    await loadSpecialNights()
+  } catch {
+    specialStatus.value = 'error'
+    specialMessage.value = 'Could not save the ticket price.'
+  }
+}
+// Replaces the night's event revenue with the suggestion (covers booked x ticket price). Everything
+// else on the night stays as saved; this is the only way the suggestion reaches the budget.
+async function adoptSuggestedRevenue(n: SpecialNight) {
+  if (n.bookings?.suggestedRevenue == null) return
+  specialStatus.value = 'saving'
+  try {
+    await $fetch('/api/special-nights', {
+      method: 'POST',
+      body: { date: n.date, kind: n.kind, expectedRevenue: n.expectedRevenue, eventRevenue: n.bookings.suggestedRevenue, note: n.note }
+    })
+    specialStatus.value = 'idle'
+    specialMessage.value = ''
+    await afterSpecialChange()
+  } catch {
+    specialStatus.value = 'error'
+    specialMessage.value = 'Could not adopt the suggestion.'
+  }
+}
 async function removeSpecialNight(date: string) {
   specialStatus.value = 'saving'
   try {
@@ -917,14 +952,29 @@ function formatNightDate(iso: string) {
           </div>
           <table v-if="specialNights.length" class="special-table">
             <thead>
-              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Event revenue</th><th scope="col" class="num">Regular dine-in revenue</th><th scope="col">Booked on</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
+              <tr><th scope="col">Night</th><th scope="col">Type</th><th scope="col" class="num">Event revenue</th><th scope="col" class="num">Dine-in revenue</th><th scope="col">Reservations (OpenTable)</th><th scope="col">Booked on</th><th scope="col">Note</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
             </thead>
             <tbody>
               <tr v-for="n in specialNights" :key="n.date">
                 <th scope="row">{{ formatNightDate(n.date) }}</th>
                 <td>{{ SPECIAL_KIND_LABEL[n.kind] }}</td>
                 <td class="num">{{ SPECIAL_USES_EVENT[n.kind] ? dollars(n.eventRevenue) : '—' }}</td>
-                <td class="num">{{ n.kind === 'catering' ? 'normal night' : dollars(n.expectedRevenue) }}</td>
+                <td class="num">{{ n.kind === 'catering' ? 'normal night' : dollars(n.expectedRevenue) }}<span v-if="n.kind === 'buyout'" class="quiet-note small"> buyout price</span></td>
+                <td class="note-cell">
+                  <template v-if="n.bookings">
+                    <strong>{{ n.bookings.covers }}</strong> guests in {{ n.bookings.parties }} bookings
+                    <div class="quiet-note small">as of the {{ formatNightDate(n.bookings.asOf.slice(0, 10)) }} upload</div>
+                    <label class="special-field">
+                      <span class="special-field-label">Ticket $/guest</span>
+                      <input type="text" inputmode="numeric" class="rate-input" :value="n.ticketPrice ?? ''" placeholder="price" aria-label="Ticket price per guest" @change="saveTicketPrice(n, ($event.target as HTMLInputElement).value)" />
+                    </label>
+                    <div v-if="n.bookings.suggestedRevenue != null" class="quiet-note small">
+                      Suggests {{ dollars(n.bookings.suggestedRevenue) }} event revenue<template v-if="n.bookings.suggestedRevenue !== n.eventRevenue"> (entered {{ dollars(n.eventRevenue) }}; {{ n.bookings.suggestedRevenue > n.eventRevenue ? '▲ under' : '▼ over' }} by {{ dollars(Math.abs(n.bookings.suggestedRevenue - n.eventRevenue)) }})</template><template v-else> ✓ matches</template>
+                      <button v-if="n.bookings.suggestedRevenue !== n.eventRevenue" class="mini-btn" :disabled="specialStatus === 'saving'" @click="adoptSuggestedRevenue(n)">Adopt this number</button>
+                    </div>
+                  </template>
+                  <template v-else>—</template>
+                </td>
                 <td class="note-cell">{{ n.kind === 'closed' ? '—' : n.bookedOn ? formatNightDate(n.bookedOn) : 'not recorded' }}</td>
                 <td class="note-cell">{{ n.note ?? '' }}</td>
                 <td><button class="mini-btn" :disabled="specialStatus === 'saving'" @click="removeSpecialNight(n.date)">Remove</button></td>
