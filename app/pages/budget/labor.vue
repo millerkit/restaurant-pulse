@@ -691,6 +691,43 @@ async function save() {
       <div v-if="saveStatus === 'done'" class="chip good">{{ saveMessage }}</div>
       <div v-if="saveStatus === 'error'" class="chip critical">{{ saveMessage }}</div>
 
+      <div v-if="visibleAccountsIn('management').length > 0" class="group-block">
+        <div class="group-header management">{{ GROUP_LABEL.management }}</div>
+          <table class="labor-table">
+            <thead>
+              <tr class="col-labels">
+                <td>role</td><td>class</td><td>first paycheck</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="acc in visibleAccountsIn('management')" :key="acc.accountId" class="person-row" :class="{ 'is-hidden-row': acc.isHidden }">
+                <td><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
+                <td>
+                  <select v-model="acc.roleClass" class="class-select" title="Role class — how this role's cost behaves">
+                    <option :value="null">Unclassified</option>
+                    <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
+                  </select>
+                </td>
+                <td>
+                  <input v-if="primarySlot(acc).firstPaycheckDate || showPaycheckDateFor.has(acc.accountId)" type="date" class="date-input" v-model="primarySlot(acc).firstPaycheckDate" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted." />
+                  <button v-else type="button" class="add-person" title="Only needed for a new hire whose first paycheck hasn't happened yet" @click="showPaycheckDateFor.add(acc.accountId)">+ new hire</button>
+                </td>
+                <td class="num">
+                  <NumberStepper
+                    :model-value="Math.round(annualSalary(acc))"
+                    @update:model-value="v => setAnnualSalary(acc, v)"
+                    :step="SALARY_STEP" :min="0" width="96px"
+                  />
+                </td>
+                <td class="num">
+                  <strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong>
+                </td>
+                <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
+              </tr>
+            </tbody>
+          </table>
+      </div>
+
       <!-- Payroll posts every Friday, so a month with five Fridays carries a fifth paycheck
            of every salary and hourly role. This is the Friday adjustment the monthly budget
            is built on — shown so a high month reads as calendar, not as a staffing change. -->
@@ -833,7 +870,7 @@ async function save() {
         </button>
       </div>
 
-      <template v-for="group in GROUP_ORDER" :key="group">
+      <template v-for="group in GROUP_ORDER.filter(g => g !== 'management')" :key="group">
         <div v-if="visibleAccountsIn(group).length > 0" class="group-block">
           <div class="group-header" :class="group">{{ GROUP_LABEL[group] }}</div>
 
@@ -970,40 +1007,6 @@ async function save() {
               </template>
             </tbody>
           </table>
-          <table v-else-if="group === 'management'" class="labor-table">
-            <thead>
-              <tr class="col-labels">
-                <td>role</td><td>class</td><td>first paycheck</td><td class="num">salary $/yr</td><td class="num">this month</td><td class="actions-col"></td>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="acc in visibleAccountsIn('management')" :key="acc.accountId" class="person-row" :class="{ 'is-hidden-row': acc.isHidden }">
-                <td><strong>{{ acc.name }}</strong><span v-if="acc.isHidden" class="hidden-tag">hidden</span></td>
-                <td>
-                  <select v-model="acc.roleClass" class="class-select" title="Role class — how this role's cost behaves">
-                    <option :value="null">Unclassified</option>
-                    <option v-for="rc in ROLE_CLASS_ORDER" :key="rc" :value="rc">{{ ROLE_CLASS_LABEL[rc] }}</option>
-                  </select>
-                </td>
-                <td>
-                  <input v-if="primarySlot(acc).firstPaycheckDate || showPaycheckDateFor.has(acc.accountId)" type="date" class="date-input" v-model="primarySlot(acc).firstPaycheckDate" title="Leave blank if paid every payroll. Set for a new hire: only Fridays on/after this date are budgeted." />
-                  <button v-else type="button" class="add-person" title="Only needed for a new hire whose first paycheck hasn't happened yet" @click="showPaycheckDateFor.add(acc.accountId)">+ new hire</button>
-                </td>
-                <td class="num">
-                  <NumberStepper
-                    :model-value="Math.round(annualSalary(acc))"
-                    @update:model-value="v => setAnnualSalary(acc, v)"
-                    :step="SALARY_STEP" :min="0" width="96px"
-                  />
-                </td>
-                <td class="num">
-                  <strong>{{ fmt(accountMonthlyDollars(acc, asOfMonth)) }}</strong>
-                </td>
-                <td class="actions-col"><button type="button" class="hide-toggle" @click="toggleHidden(acc)">{{ acc.isHidden ? 'Unhide' : 'Hide' }}</button></td>
-              </tr>
-            </tbody>
-          </table>
-
           <div v-else-if="group === 'other' || group === 'benefits'" class="simple-grid">
             <div v-for="acc in visibleAccountsIn(group)" :key="acc.accountId" class="simple-row-wrap" :class="{ 'is-hidden-row': acc.isHidden }">
               <div class="simple-row">
